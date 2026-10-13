@@ -35,7 +35,8 @@ components and say so in the pull request.
   pnpm tokens:check: fail if it is out of date
 - pnpm check:env: fail if a .env file is committed or an .env.example holds a value
 - supabase start: local stack; pnpm db:test: pgTAP tests; pnpm db:types: regenerate types
-- services/nova: uv run pytest
+- services/nova (Python 3.14, uv): uv sync; uv run pytest; uv run ruff check;
+  uv run ruff format. Settings come from services/nova/.env (see .env.example)
 
 Install app packages from apps/mobile with
 `node ../../node_modules/expo/bin/cli install <pkg>`, not `npx expo install`, then

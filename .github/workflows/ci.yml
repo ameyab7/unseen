@@ -36,3 +36,25 @@ jobs:
       - run: pnpm lint
       # Includes the tokens drift check: tokens.ts must match tokens.json.
       - run: pnpm test
+
+  # Nova, the AI host (Python). Tests never call LiveKit, Ollama or Claude.
+  nova:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: services/nova
+    steps:
+      - uses: actions/checkout@v7
+
+      # Installs uv; uv then installs the Python version in .python-version.
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: '0.13.0'
+          enable-cache: true
+          cache-dependency-glob: services/nova/uv.lock
+
+      - run: uv sync --locked
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+      - run: uv run pytest
