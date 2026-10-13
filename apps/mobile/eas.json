@@ -6,7 +6,7 @@
   "build": {
     "base": {
       "node": "24.21.0",
-      "corepack": true
+      "pnpm": "12.11.2"
     },
     "development": {
       "extends": "base",
