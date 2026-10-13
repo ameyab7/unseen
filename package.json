@@ -1,0 +1,16 @@
+{
+  "name": "unseen",
+  "private": true,
+  "packageManager": "pnpm@12.11.2",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @unseen/mobile dev",
+    "typecheck": "pnpm -r run typecheck",
+    "lint": "pnpm -r run lint",
+    "test": "pnpm -r run test",
+    "tokens": "pnpm --filter @unseen/tokens generate",
+    "tokens:check": "pnpm --filter @unseen/tokens check"
+  }
+}
