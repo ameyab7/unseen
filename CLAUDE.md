@@ -33,6 +33,7 @@ components and say so in the pull request.
 - pnpm typecheck, pnpm lint, pnpm test
 - pnpm tokens: regenerate apps/mobile/src/theme/tokens.ts from tokens.json;
   pnpm tokens:check: fail if it is out of date
+- pnpm check:env: fail if a .env file is committed or an .env.example holds a value
 - supabase start: local stack; pnpm db:test: pgTAP tests; pnpm db:types: regenerate types
 - services/nova: uv run pytest
 
@@ -74,6 +75,8 @@ the root scripts call pnpm themselves and fail when it is not on PATH.
 - No user can read another user's decision. Only resolve_date computes outcomes.
 - Reveal photos are served only through signed URLs after a mutual match.
 - No code, test or script calls production.
+- Keys live only in untracked .env files, next to the .env.example that names them.
+  Never put a secret in an EXPO_PUBLIC_ variable: those are built into the app.
 
 ## Workflow
 - For changes touching more than 3 files, propose a plan and wait for approval.

@@ -29,6 +29,8 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      # Fails if a .env file is committed or an .env.example holds a value.
+      - run: pnpm check:env
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm lint

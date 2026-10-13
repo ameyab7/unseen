@@ -9,8 +9,9 @@
     "dev": "pnpm --filter @unseen/mobile dev",
     "typecheck": "pnpm -r run typecheck",
     "lint": "pnpm -r run lint",
-    "test": "pnpm -r run test",
+    "test": "pnpm -r run test && node --test \"scripts/*.test.mjs\"",
     "tokens": "pnpm --filter @unseen/tokens generate",
-    "tokens:check": "pnpm --filter @unseen/tokens check"
+    "tokens:check": "pnpm --filter @unseen/tokens check",
+    "check:env": "node scripts/check-env-files.mjs"
   }
 }

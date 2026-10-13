@@ -1,6 +1,8 @@
 node_modules/
+# Real keys live only in .env files; .env.example lists the names and is committed.
 .env
 .env.*
+!.env.example
 CLAUDE.local.md
 .expo/
 dist/
