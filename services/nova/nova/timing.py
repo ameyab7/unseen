@@ -27,8 +27,9 @@ class Timing:
     decision_window: float = 60.0
     next_up_after_result: float = 30.0
 
-    # Need a moment: Nova covers for up to 30 seconds (prototype) while the clock holds.
-    moment_hold: float = 30.0
+    # Need a moment: the clock holds until the dater is back. After 30 seconds (prototype:
+    # "Nova is covering for 30 seconds") the moderator is alerted and decides what's next.
+    moment_alert_after: float = 30.0
 
     # Long silence in free talk. Assumptions: the brand book says "a long silence".
     silence_after: float = 8.0
