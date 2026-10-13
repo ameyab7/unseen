@@ -25,11 +25,14 @@ Date: 2026-10-13. Status: accepted.
   owner's sign-off.
 - **Nova reads only moderator-approved audience questions.** Passing the automatic screen
   for kindness and personal details is not enough; anything not approved is dropped.
-- **Need a moment holds the show clock** for up to 30 seconds, or until that dater is back,
-  so nobody loses their last word or decision time; dates run slightly long instead. There
-  is no limit on how often, but the moderator is alerted when a dater isn't back after 30
-  seconds and on the second pause in a date (counting both daters). Alerts go to the
-  moderator console only, never to the room.
+- **Need a moment holds the show clock** until that dater is back, so nobody loses their
+  last word or decision time; dates run slightly long instead. "And we're back." is said
+  only when the dater who paused actually returns. If they aren't back after 30 seconds,
+  Nova says "Bear with us a little longer, room." once, the show stays on hold, and the
+  moderator is alerted and chooses: keep waiting, resume without the dater (Nova says
+  nothing), or end the date. There is no limit on how often a dater can pause, but the
+  moderator is also alerted when the same dater pauses a second time (counted per dater).
+  Alerts go to the moderator console only, never to the room.
 - **The lightning unlock meter closes at 5:30**, or as soon as the round is unlocked, or
   when the date ends early (the runner's `LightningMeterClosed` cue). No listener can pay
   toward an unlock that will be ignored. The gesture work must follow this: once the meter
@@ -48,4 +51,7 @@ Date: 2026-10-13. Status: accepted.
 - The end reasons (`completed`, `dater_left`, `moderator_ended`) are the values for the
   `dates.end_reason` column when the schema is written.
 - The questions table needs a moderator-approved status distinct from the automatic screen.
-- The moderator console needs the two pause alerts and a control to stop the fallback.
+- The moderator console needs the two pause alerts ("not back after 30 seconds" and
+  "second pause by the same dater"), and for a dater who isn't back, three controls: keep
+  waiting, resume without them, and end the date (the runner's `moderator_keep_waiting`,
+  `moderator_resume` and `moderator_end`). It also needs a control to stop the fallback.

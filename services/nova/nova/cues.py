@@ -41,6 +41,7 @@ class Moment(StrEnum):
     INVITATION = "invitation"
     NEXT_UP = "next_up"
     NEED_A_MOMENT = "need_a_moment"
+    BEAR_WITH_US = "bear_with_us"
     WELCOME_BACK = "welcome_back"
     DATER_LEFT = "dater_left"
     MODERATOR_END = "moderator_end"

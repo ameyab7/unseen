@@ -19,7 +19,8 @@ POLL_QUESTION = "Second date?"
 
 # Not in the brand book; signed off by the product owner on 2026-10-13.
 NEED_A_MOMENT = "Let's take a short breather. Room, stay with us."
-WELCOME_BACK = "And we're back."
+WELCOME_BACK = "And we're back."  # only when the dater who paused actually returns
+BEAR_WITH_US = "Bear with us a little longer, room."  # once, if they're not back in time
 MODERATOR_END = "We're ending this date here. Thanks for listening, everyone."
 
 

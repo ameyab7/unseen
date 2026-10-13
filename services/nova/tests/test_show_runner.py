@@ -323,57 +323,100 @@ def test_with_only_unapproved_questions_nova_reads_none():
 
 COVER = [Say(Moment.NEED_A_MOMENT, text=script.NEED_A_MOMENT), Say(Moment.ROOM_TALK)]
 WELCOME_BACK = Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK)
+BEAR_WITH_US = Say(Moment.BEAR_WITH_US, text=script.BEAR_WITH_US)
+NOT_BACK = [AlertModerator(ModeratorAlert.PAUSE_NOT_BACK, LEFT), BEAR_WITH_US]
 
 
-def test_need_a_moment_nova_covers_and_the_clock_holds_for_thirty_seconds():
+def paused_and_not_back() -> Show:
+    """Maya asks for a moment at 100 s and isn't back by 130 s."""
+    show = Show()
+    show.at(100, "need_a_moment", LEFT)
+    show.until(130)
+    return show
+
+
+def test_need_a_moment_nova_covers_and_the_clock_holds_until_the_dater_is_back():
     show = Show()
     assert show.at(100, "need_a_moment", LEFT) == COVER
     assert "Maya" not in script.NEED_A_MOMENT and "Theo" not in script.NEED_A_MOMENT
 
-    show.until(129.5)
-    assert show.cues(since=100.5, before=130) == [], "nothing else happens while Nova covers"
+    show.until(119.5)
+    assert show.cues(since=100.5, before=120) == [], "nothing else happens while Nova covers"
+    assert show.at(120, "back", LEFT) == [WELCOME_BACK]
     show.until(300)
-    assert (130.0, WELCOME_BACK) in show.says(Moment.WELCOME_BACK)
-    assert (270.0, "from_the_room") in show.segments(), "the running order shifted by 30 s"
-
-
-def test_not_back_after_thirty_seconds_alerts_the_moderator():
-    show = Show()
-    show.at(100, "need_a_moment", LEFT)
-    show.until(130)
-    assert show.cues(since=130, before=130.5) == [
-        AlertModerator(ModeratorAlert.PAUSE_NOT_BACK, LEFT),
-        WELCOME_BACK,
-    ]
-
-
-def test_coming_back_early_ends_the_hold_early_with_no_alert():
-    show = Show()
-    show.at(100, "need_a_moment", LEFT)
-    assert show.at(105, "back", RIGHT) == [], "only the dater who asked can end it"
-    assert show.at(110, "back", LEFT) == [WELCOME_BACK]
-    show.until(300)
-    assert (250.0, "from_the_room") in show.segments()
+    assert (260.0, "from_the_room") in show.segments(), "the running order shifted by 20 s"
     assert show.cues(AlertModerator) == []
 
 
-def test_the_second_pause_in_a_date_alerts_the_moderator_and_there_is_no_limit():
+def test_only_the_dater_who_asked_can_end_the_pause():
+    show = Show()
+    show.at(100, "need_a_moment", LEFT)
+    assert show.at(105, "back", RIGHT) == []
+    assert show.at(110, "back", LEFT) == [WELCOME_BACK]
+
+
+def test_not_back_after_thirty_seconds_nova_asks_the_room_to_bear_with_us_once():
+    show = paused_and_not_back()
+    assert show.cues(since=130, before=130.5) == NOT_BACK
+    show.until(400)
+    assert show.says(Moment.BEAR_WITH_US) == [(130.0, BEAR_WITH_US)], "said once"
+    assert show.cues(AlertModerator) == [NOT_BACK[0]], "alerted once"
+    assert show.says(Moment.WELCOME_BACK) == [], "nobody came back"
+    assert show.segments()[-1] == (90.0, "free_talk"), "the show stays on hold"
+    assert show.cues(since=130.5) == []
+
+
+def test_the_moderator_can_keep_waiting_until_the_dater_is_back():
+    show = paused_and_not_back()
+    assert show.at(140, "moderator_keep_waiting") == []
+    show.until(200)
+    assert show.cues(since=130.5) == [], "still on hold, and Nova says nothing more"
+    assert show.at(210, "back", LEFT) == [WELCOME_BACK]
+    show.until(400)
+    assert (350.0, "from_the_room") in show.segments(), "the running order shifted by 110 s"
+
+
+def test_the_moderator_can_resume_without_the_dater():
+    show = paused_and_not_back()
+    assert show.at(140, "moderator_resume") == [], "no welcome back: nobody came back"
+    assert show.at(150, "back", LEFT) == [], "the pause is over"
+    show.until(400)
+    assert show.says(Moment.WELCOME_BACK) == []
+    assert (280.0, "from_the_room") in show.segments(), "the running order shifted by 40 s"
+
+
+def test_the_moderator_can_end_the_date_while_waiting():
+    show = paused_and_not_back()
+    ended = show.at(140, "moderator_end")
+    assert ended == [
+        StopSpeaking(),
+        Say(Moment.MODERATOR_END, text=script.MODERATOR_END),
+        LightningMeterClosed(),
+        DateEnded(EndReason.MODERATOR_ENDED, outcome=None),
+        PlayFallbackSegment(),
+        Finished(),
+    ]
+    assert show.says(Moment.WELCOME_BACK) == []
+
+
+def test_a_second_pause_by_the_same_dater_alerts_the_moderator_and_there_is_no_limit():
     show = Show()
     show.at(100, "need_a_moment", LEFT)
     show.at(105, "back", LEFT)
-    second = show.at(150, "need_a_moment", RIGHT)
-    assert second == [*COVER, AlertModerator(ModeratorAlert.REPEATED_PAUSE, RIGHT)]
+    assert show.at(150, "need_a_moment", RIGHT) == COVER, "Theo's first pause: no alert"
     show.at(155, "back", RIGHT)
-    third = show.at(200, "need_a_moment", LEFT)
-    assert third == [*COVER, AlertModerator(ModeratorAlert.REPEATED_PAUSE, LEFT)]
+    second = [*COVER, AlertModerator(ModeratorAlert.REPEATED_PAUSE, LEFT)]
+    assert show.at(200, "need_a_moment", LEFT) == second, "Maya's second pause"
+    show.at(205, "back", LEFT)
+    assert show.at(220, "need_a_moment", LEFT) == second, "and her third"
 
 
 def test_need_a_moment_only_on_air_and_one_at_a_time():
     show = Show()
     show.at(100, "need_a_moment", LEFT)
     assert show.at(101, "need_a_moment", RIGHT) == []
-    show.until(140)
-    # The 30 s hold moved Time from 480 to 510, so 520 is inside the decision window.
+    show.at(110, "back", LEFT)
+    # The 10 s hold moved Time from 480 to 490, so 520 is inside the decision window.
     assert show.at(520, "need_a_moment", LEFT) == [], "not while the daters decide"
 
 
