@@ -1,0 +1,7 @@
+# LF everywhere, so generated files (tokens.ts) are byte-identical on Windows,
+# macOS and CI.
+* text=auto eol=lf
+
+*.ttf binary
+*.png binary
+*.pdf binary

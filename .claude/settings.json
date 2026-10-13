@@ -6,6 +6,8 @@
       "Bash(pnpm lint)",
       "Bash(pnpm test)",
       "Bash(pnpm test:*)",
+      "Bash(pnpm tokens)",
+      "Bash(pnpm tokens:check)",
       "Bash(pnpm db:test)",
       "Bash(pnpm db:types)",
       "Bash(supabase start)",

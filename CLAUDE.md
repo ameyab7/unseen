@@ -31,8 +31,17 @@ components and say so in the pull request.
 ## Commands
 - pnpm dev: Expo dev client
 - pnpm typecheck, pnpm lint, pnpm test
+- pnpm tokens: regenerate apps/mobile/src/theme/tokens.ts from tokens.json;
+  pnpm tokens:check: fail if it is out of date
 - supabase start: local stack; pnpm db:test: pgTAP tests; pnpm db:types: regenerate types
 - services/nova: uv run pytest
+
+Install app packages from apps/mobile with
+`node ../../node_modules/expo/bin/cli install <pkg>`, not `npx expo install`, then
+check package.json put them in the right section (docs/decisions/0001-pnpm-monorepo.md).
+
+On Windows: if pnpm is not on PATH (corepack enable needs an admin shell), run
+corepack pnpm <script>.
 
 ## Architecture rules
 - A write that touches more than one row is a Postgres function in a migration,

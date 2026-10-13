@@ -1,0 +1,36 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Hoisted keeps one flat node_modules, the layout React Native tooling has
+# been tested against longest. See docs/decisions/0001-pnpm-monorepo.md.
+nodeLinker: hoisted
+
+# pnpm holds back releases younger than its minimum release age. These are Expo
+# SDK 57 releases that were newer than that when installed; pnpm added them itself.
+# Prune entries once they age past the limit.
+minimumReleaseAgeExclude:
+  - '@expo/cli@57.0.29'
+  - '@expo/fingerprint@0.20.14'
+  - '@expo/inline-modules@0.1.8'
+  - '@expo/local-build-cache-provider@57.0.9'
+  - '@expo/prebuild-config@57.0.18'
+  - babel-preset-expo@57.0.15
+  - expo-modules-autolinking@57.0.15
+  - expo-modules-core@57.0.22
+  - expo-modules-jsi@57.1.2
+  - expo@57.0.28
+  - '@expo/ui@57.0.23'
+  - expo-dev-client@57.0.20
+  - expo-dev-launcher@57.0.21
+  - expo-dev-menu@57.0.20
+  - expo-router@57.0.26
+  - jest-expo@57.0.6
+  - expo-splash-screen@57.0.10
+
+allowBuilds:
+  unrs-resolver: false
+
+# Refuse to install on a Node older than engines.node (24.2 adds import.meta.main,
+# which the token generator relies on) instead of only warning.
+engineStrict: true
