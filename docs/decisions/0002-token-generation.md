@@ -25,16 +25,21 @@ tokens test suite fail if the committed file is out of date.
 - Text styles carry no `fontFamily`: the platform font (SF Pro, Roboto) is what makes
   Dynamic Type and Android font scaling work. The CSS stacks in tokens.json are for
   the web console.
-- Display styles name a bundled Bodoni Moda face (`BodoniModa-Medium`,
-  `BodoniModa-MediumItalic`, from the upstream static cuts, SIL OFL). Each file is
-  named after its PostScript name, so one string works on iOS and Android. Display
-  styles carry no `fontWeight` or `fontStyle`, which would make Android synthesize
-  bold or italic on top of the face.
+- The brand book asks for Bodoni Moda with optical sizing on. React Native cannot
+  drive a variable font's `opsz` axis, so we bundle a static optical-size cut instead.
+- Google Fonts ships static cuts at 9, 18, 28, 48 and 72pt. We use **28pt** Medium and
+  Medium Italic (`BodoniModa28pt-Medium`, `BodoniModa28pt-MediumItalic`, SIL OFL)
+  for every display style. With automatic optical sizing a browser sets opsz to the
+  px size, so our styles would ask for 24, 32 and 44; 28pt is the nearest cut to that
+  range and fits the two most common styles (display-name at 24, display-l at 32)
+  closely. display-xl (44px, countdowns and the reveal headline) sits between 28 and
+  48; if it looks too heavy in its hairlines, add the 48pt cut for that one style.
+- Each file is named after its PostScript name, so one `fontFamily` string works on
+  iOS and Android. A test reads the name table of each bundled file to prove it.
+- Display styles carry no `fontWeight` or `fontStyle`, which would make Android
+  synthesize bold or italic on top of the face.
 - The generator refuses display type under 24px and display weights with no bundled
   file, so the brand rule fails at generation time, not in review.
-- React Native cannot drive the variable font's optical-size axis, so display type
-  uses the static cuts at their default optical size. If the large sizes look too
-  heavy, instance the variable font at about opsz 28 and swap the files.
 
 ## Enforcement
 

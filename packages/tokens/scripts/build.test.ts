@@ -3,9 +3,31 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, test } from 'node:test';
-import { pathToFileURL } from 'node:url';
-import { buildTokensModule, camelCase, parseTokens, TokenError } from './build.ts';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { buildTokensModule, camelCase, DISPLAY_FACES, parseTokens, TokenError } from './build.ts';
 import { SOURCE, TARGET } from './generate.ts';
+
+const FONTS_DIR = fileURLToPath(new URL('../../../apps/mobile/assets/fonts/', import.meta.url));
+
+// Reads the PostScript name (name ID 6, Windows platform) from a TrueType file.
+function postScriptName(file: Buffer): string | undefined {
+  const tables = file.readUInt16BE(4);
+  for (let i = 0; i < tables; i++) {
+    if (file.toString('ascii', 12 + i * 16, 16 + i * 16) !== 'name') continue;
+    const name = file.readUInt32BE(20 + i * 16);
+    const strings = name + file.readUInt16BE(name + 4);
+    for (let r = 0; r < file.readUInt16BE(name + 2); r++) {
+      const record = name + 6 + r * 12;
+      if (file.readUInt16BE(record) !== 3 || file.readUInt16BE(record + 6) !== 6) continue;
+      const start = strings + file.readUInt16BE(record + 10);
+      return file
+        .subarray(start, start + file.readUInt16BE(record + 8))
+        .swap16()
+        .toString('utf16le');
+    }
+  }
+  return undefined;
+}
 
 const tokensJson: Record<string, any> = JSON.parse(readFileSync(SOURCE, 'utf8'));
 
@@ -21,6 +43,15 @@ function style(json: Record<string, any>, name: string): Record<string, any> {
   }
   throw new Error(`no style ${name}`);
 }
+
+describe('display faces', () => {
+  for (const face of Object.values(DISPLAY_FACES)) {
+    test(`${face} is bundled under its PostScript name`, () => {
+      const file = readFileSync(join(FONTS_DIR, `${face}.ttf`));
+      assert.equal(postScriptName(file), face);
+    });
+  }
+});
 
 describe('parseTokens', () => {
   const model = parseTokens(tokensJson);
@@ -77,12 +108,12 @@ describe('parseTokens', () => {
     assert.deepEqual(displayName, {
       name: 'displayName',
       usage: style(tokensJson, 'display-name').usage,
-      fontFamily: 'BodoniModa-MediumItalic',
+      fontFamily: 'BodoniModa28pt-MediumItalic',
       fontSize: 24,
       lineHeight: 30,
     });
     const displayXl = model.typography.find((t) => t.name === 'displayXl');
-    assert.equal(displayXl?.fontFamily, 'BodoniModa-Medium');
+    assert.equal(displayXl?.fontFamily, 'BodoniModa28pt-Medium');
   });
 
   test('leaves text styles on the platform font', () => {
@@ -176,7 +207,7 @@ describe('buildTokensModule', () => {
     assert.equal(mod.radius.pill, 999);
     assert.equal(mod.size.touchTarget, 44);
     assert.deepEqual(mod.typography.displayL, {
-      fontFamily: 'BodoniModa-Medium',
+      fontFamily: 'BodoniModa28pt-Medium',
       fontSize: 32,
       lineHeight: 38,
     });

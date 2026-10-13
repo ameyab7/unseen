@@ -26,6 +26,7 @@ minimumReleaseAgeExclude:
   - expo-dev-menu@57.0.20
   - expo-router@57.0.26
   - jest-expo@57.0.6
+  - expo-splash-screen@57.0.10
 
 allowBuilds:
   unrs-resolver: false

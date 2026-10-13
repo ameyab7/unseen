@@ -37,11 +37,13 @@ export interface TokenModel {
   size: SizeToken[];
 }
 
-// Bodoni Moda faces bundled in apps/mobile/assets/fonts. Each file is named after its
-// PostScript name, which is the fontFamily React Native resolves on iOS and Android.
+// Bodoni Moda faces bundled in apps/mobile/assets/fonts: Google's static 28pt optical-size
+// cuts, the display cut for our 24-44px styles (see docs/decisions/0002). Each file is
+// named after its PostScript name, which is the fontFamily React Native resolves on iOS
+// and Android.
 export const DISPLAY_FACES: Record<string, string> = {
-  '500 normal': 'BodoniModa-Medium',
-  '500 italic': 'BodoniModa-MediumItalic',
+  '500 normal': 'BodoniModa28pt-Medium',
+  '500 italic': 'BodoniModa28pt-MediumItalic',
 };
 
 // Brand book: Bodoni Moda only at 24px and up.

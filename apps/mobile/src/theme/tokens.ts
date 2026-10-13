@@ -83,11 +83,11 @@ export type Palette = Record<ColorName, string>;
 /** Text styles. Display styles name a bundled Bodoni Moda face; the rest use the platform font. */
 export const typography = {
   /** Countdown numerals and the reveal headline. At most one per screen. */
-  displayXl: { fontFamily: 'BodoniModa-Medium', fontSize: 44, lineHeight: 48 },
+  displayXl: { fontFamily: 'BodoniModa28pt-Medium', fontSize: 44, lineHeight: 48 },
   /** Screen titles: Tonight, Dates, Backstage. */
-  displayL: { fontFamily: 'BodoniModa-Medium', fontSize: 32, lineHeight: 38 },
+  displayL: { fontFamily: 'BodoniModa28pt-Medium', fontSize: 32, lineHeight: 38 },
   /** A dater's first name and age, wherever it appears. The only italic display style. */
-  displayName: { fontFamily: 'BodoniModa-MediumItalic', fontSize: 24, lineHeight: 30 },
+  displayName: { fontFamily: 'BodoniModa28pt-MediumItalic', fontSize: 24, lineHeight: 30 },
   /** Section headings inside a screen. */
   title: { fontSize: 20, lineHeight: 26, fontWeight: '600' },
   /** Live captions in the room, read at arm's length or on mute. */
