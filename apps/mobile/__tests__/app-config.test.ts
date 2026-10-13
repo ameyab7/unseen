@@ -33,6 +33,13 @@ describe('app config', () => {
     expect(pluginOptions('expo-status-bar')).toEqual({ style: 'light' });
   });
 
+  // EAS links builds to the Expo project @ameyab7/unseen through owner, slug and ID.
+  it('is linked to the Expo project', () => {
+    expect(config.owner).toBe('ameyab7');
+    expect(config.slug).toBe('unseen');
+    expect(config.extra?.eas?.projectId).toBe('0894f1c2-1f30-49bd-8a98-c0e7dff1a9ef');
+  });
+
   // The app ID is permanent once a store build ships, so a missing or placeholder ID
   // must fail here, not after the first production build.
   it('has a real app ID, the same on both platforms', () => {
