@@ -1,0 +1,134 @@
+"""What the show runner asks for: lines for Nova, sounds, and room events.
+
+When these become room events (a later task), their shapes get zod schemas in
+packages/shared, and these classes follow them.
+"""
+
+from dataclasses import dataclass
+from enum import StrEnum
+
+from nova.cards import Seat
+from nova.decisions import Outcome
+
+
+class Segment(StrEnum):
+    """The brand book's running order."""
+
+    DOORS = "doors"
+    FIRST_QUESTION = "first_question"
+    FREE_TALK = "free_talk"
+    FROM_THE_ROOM = "from_the_room"
+    LIGHTNING_ROUND = "lightning_round"
+    LAST_WORD = "last_word"
+    TIME = "time"
+    RESULT = "result"
+    NEXT_UP = "next_up"
+
+
+class Moment(StrEnum):
+    """Why Nova speaks. Moments with an approved line carry it in Say.text."""
+
+    DOORS_INTRO = "doors_intro"
+    FIRST_QUESTION = "first_question"
+    SILENCE = "silence"
+    FROM_THE_ROOM = "from_the_room"
+    LIGHTNING_UNLOCKED = "lightning_unlocked"
+    LIGHTNING_QUESTION = "lightning_question"
+    LAST_WORD = "last_word"
+    TIME = "time"
+    ROOM_TALK = "room_talk"
+    RESULT = "result"
+    INVITATION = "invitation"
+    NEXT_UP = "next_up"
+    NEED_A_MOMENT = "need_a_moment"
+    WELCOME_BACK = "welcome_back"
+    DATER_LEFT = "dater_left"
+    MODERATOR_END = "moderator_end"
+
+
+class Sound(StrEnum):
+    ON_AIR = "on_air"  # three rising notes as a date starts
+    TIMES_UP = "times_up"  # two soft falling notes
+
+
+class EndReason(StrEnum):
+    COMPLETED = "completed"
+    DATER_LEFT = "dater_left"
+    MODERATOR_ENDED = "moderator_ended"
+
+
+@dataclass(frozen=True)
+class Say:
+    """A line for Nova. With text, Nova says exactly that (an approved line). Without,
+    the line writer (task 4) writes one for this moment, about this dater, from detail."""
+
+    moment: Moment
+    text: str | None = None
+    about: Seat | None = None
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
+class SegmentStarted:
+    segment: Segment
+
+
+@dataclass(frozen=True)
+class PlaySound:
+    sound: Sound
+
+
+@dataclass(frozen=True)
+class PlayVoiceIntro:
+    seat: Seat
+
+
+@dataclass(frozen=True)
+class StopSpeaking:
+    """Cut Nova off mid-line."""
+
+
+@dataclass(frozen=True)
+class DecisionWindowOpened:
+    seconds: float
+
+
+@dataclass(frozen=True)
+class PollOpened:
+    question: str
+
+
+@dataclass(frozen=True)
+class PollClosed:
+    pass
+
+
+@dataclass(frozen=True)
+class ShowVerdict:
+    yes_share: float
+
+
+@dataclass(frozen=True)
+class DateEnded:
+    reason: EndReason
+    outcome: Outcome | None
+
+
+@dataclass(frozen=True)
+class Finished:
+    """Nothing more to say for this date."""
+
+
+type Cue = (
+    Say
+    | SegmentStarted
+    | PlaySound
+    | PlayVoiceIntro
+    | StopSpeaking
+    | DecisionWindowOpened
+    | PollOpened
+    | PollClosed
+    | ShowVerdict
+    | DateEnded
+    | Finished
+)
