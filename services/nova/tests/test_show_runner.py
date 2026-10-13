@@ -193,6 +193,36 @@ def test_rehearsal_timing_runs_a_whole_date_in_about_three_minutes():
     assert [segment for _, segment in show.segments()][-2:] == ["result", "next_up"]
 
 
+def test_the_result_thanks_both_daters_with_an_outro_after_the_verdict():
+    show = full_date()
+    assert show.cues(since=540, before=540.5) == [
+        PollClosed(),
+        SegmentStarted("result"),
+        Say(Moment.RESULT, text=script.RESULT_NOT_MUTUAL),
+        ShowVerdict(yes_share=0.78),
+        Say(Moment.OUTRO),
+        Say(Moment.INVITATION, text=script.INVITATION),
+        DateEnded(EndReason.COMPLETED, Outcome.NOT_MUTUAL),
+    ]
+
+
+def test_a_dater_talking_to_nova_on_air_gets_a_reply():
+    show = Show()
+    asked = show.at(100, "dater_asked_nova", LEFT, "Nova, are you human?")
+    assert asked == [Say(Moment.REPLY, about=LEFT, detail="Nova, are you human?")]
+
+
+def test_no_reply_while_on_hold_while_deciding_or_after_the_date():
+    show = Show()
+    show.at(100, "need_a_moment", RIGHT)
+    assert show.at(105, "dater_asked_nova", LEFT, "Nova?") == []
+    show.at(110, "back", RIGHT)
+    # The 10 s hold moved Time from 480 to 490.
+    assert show.at(495, "dater_asked_nova", LEFT, "Nova?") == []
+    show.until(600)
+    assert show.at(650, "dater_asked_nova", LEFT, "Nova?") == []
+
+
 def test_invitation_to_take_a_seat_at_most_once_a_night():
     assert full_date().says(Moment.INVITATION) != []
     assert full_date(invitation_given_tonight=True).says(Moment.INVITATION) == []
@@ -442,6 +472,7 @@ def test_a_dater_leaving_is_closed_kindly_and_the_date_ends_as_dater_left():
     assert show.segments()[-1] == (230.0, "next_up"), "the show moves on to the next pair"
     assert show.cues(ShowVerdict) == []
     assert show.says(Moment.RESULT) == [] and show.says(Moment.INVITATION) == []
+    assert show.says(Moment.OUTRO) == []
     assert show.runner.end_reason is EndReason.DATER_LEFT
     assert show.runner.outcome is None
 

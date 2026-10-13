@@ -37,6 +37,9 @@ components and say so in the pull request.
 - supabase start: local stack; pnpm db:test: pgTAP tests; pnpm db:types: regenerate types
 - services/nova (Python 3.14, uv): uv sync; uv run pytest; uv run ruff check;
   uv run ruff format. Settings come from services/nova/.env (see .env.example)
+- services/nova: uv run python -m nova.evaluation [--repeat N] runs Nova's show moments
+  and attacks against the real model in NOVA_LLM. On demand only, never in CI; run it
+  before any model change (docs/decisions/0005-nova-lines-and-guardrails.md)
 
 Install app packages from apps/mobile with
 `node ../../node_modules/expo/bin/cli install <pkg>`, not `npx expo install`, then

@@ -78,6 +78,31 @@ class TestLoadSettings:
             load_settings(tmp_path / "absent.env")
 
 
+class TestTimeouts:
+    def test_defaults(self):
+        settings = Settings.from_env(GOOD)
+        assert settings.live_timeout == 2.0
+        assert settings.prep_timeout == 60.0
+        assert settings.ollama_base_url == "http://localhost:11434"
+
+    def test_can_be_set_in_the_env_file(self):
+        settings = Settings.from_env(
+            {
+                **GOOD,
+                "NOVA_LIVE_TIMEOUT_SECONDS": "1.5",
+                "NOVA_PREP_TIMEOUT_SECONDS": "90",
+                "OLLAMA_BASE_URL": "http://gpu-box:11434",
+            }
+        )
+        assert (settings.live_timeout, settings.prep_timeout) == (1.5, 90.0)
+        assert settings.ollama_base_url == "http://gpu-box:11434"
+
+    @pytest.mark.parametrize("value", ["0", "-1", "soon", "nan", "inf"])
+    def test_must_be_a_positive_number_of_seconds(self, value):
+        with pytest.raises(ConfigError, match="NOVA_LIVE_TIMEOUT_SECONDS must be a positive"):
+            Settings.from_env({**GOOD, "NOVA_LIVE_TIMEOUT_SECONDS": value})
+
+
 def test_env_example_lists_exactly_the_names_settings_reads():
     example = Path(__file__).parents[1] / ".env.example"
     names = set(re.findall(r"^([A-Z][A-Z0-9_]*)=", example.read_text(encoding="utf-8"), re.M))

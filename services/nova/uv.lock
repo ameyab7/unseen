@@ -768,7 +768,9 @@ name = "nova"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "anthropic" },
     { name = "livekit-agents", extra = ["anthropic", "openai", "silero"] },
+    { name = "openai" },
     { name = "python-dotenv" },
 ]
 
@@ -781,7 +783,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anthropic", specifier = "~=0.125" },
     { name = "livekit-agents", extras = ["anthropic", "openai", "silero"], specifier = "~=1.8.6" },
+    { name = "openai", specifier = "~=2.54" },
     { name = "python-dotenv", specifier = "~=1.2" },
 ]
 
