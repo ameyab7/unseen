@@ -1,15 +1,21 @@
 """Nova's show runner, driven on a fake clock. No network, no audio, no model."""
 
+import random
+
 import pytest
 
 from nova import script
 from nova.cards import Seat
 from nova.cues import (
+    AlertModerator,
     DateEnded,
     DecisionWindowOpened,
     EndReason,
     Finished,
+    LightningMeterClosed,
+    ModeratorAlert,
     Moment,
+    PlayFallbackSegment,
     PlaySound,
     PlayVoiceIntro,
     PollClosed,
@@ -22,18 +28,23 @@ from nova.cues import (
 )
 from nova.decisions import Choice, InMemoryDecisionDesk, Outcome
 from nova.fixtures import MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
-from nova.show_runner import ShowRunner
+from nova.questions import AudienceQuestion, QuestionStatus
+from nova.show_runner import PollTally, ShowRunner
 from nova.timing import FULL, REHEARSAL, Timing
 
 LEFT, RIGHT = Seat.LEFT, Seat.RIGHT
 
 
 class FakePoll:
-    def __init__(self, yes_share: float | None = 0.78):
-        self.share = yes_share
+    def __init__(self, yes: int = 78, no: int = 22):
+        self.yes, self.no = yes, no
 
-    def yes_share(self) -> float | None:
-        return self.share
+    def tally(self) -> PollTally:
+        return PollTally(yes=self.yes, no=self.no)
+
+
+def approved(text: str) -> AudienceQuestion:
+    return AudienceQuestion(text, QuestionStatus.APPROVED)
 
 
 class Show:
@@ -49,6 +60,7 @@ class Show:
             poll=self.poll,
             timing=timing,
             next_pair=options.pop("next_pair", NEXT_PAIR),
+            first_up=options.pop("first_up", LEFT),
             **options,
         )
         self.now = 0.0
@@ -143,6 +155,25 @@ def test_last_word_gives_each_dater_a_turn():
     assert [(t, c.about) for t, c in show.says(Moment.LAST_WORD)] == [(420.0, LEFT), (445.0, RIGHT)]
 
 
+def test_whoever_goes_first_leads_the_first_question_and_the_last_word():
+    show = full_date(first_up=RIGHT)
+    assert [(t, c.about) for t, c in show.says(Moment.FIRST_QUESTION)] == [
+        (45.0, RIGHT),
+        (67.5, LEFT),
+    ]
+    assert [(t, c.about) for t, c in show.says(Moment.LAST_WORD)] == [(420.0, RIGHT), (445.0, LEFT)]
+
+
+def test_who_goes_first_is_random_for_each_date():
+    firsts = {
+        ShowRunner(
+            REHEARSAL_PAIR, desk=InMemoryDecisionDesk(), poll=FakePoll(), rng=random.Random(seed)
+        ).first_up
+        for seed in range(20)
+    }
+    assert firsts == {LEFT, RIGHT}
+
+
 def test_time_opens_the_private_decision_and_the_room_poll():
     show = full_date()
     assert show.cues(since=480, before=480.5) == [
@@ -176,19 +207,19 @@ def test_without_a_next_pair_the_show_finishes_after_the_result():
 # --- Long silence during free talk --------------------------------------------------------
 
 
-def test_a_long_silence_in_free_talk_brings_one_prompt_then_waits():
+def test_a_long_silence_brings_an_open_prompt_to_both_daters_then_waits():
     show = Show()
     show.until(150)
     nudges = show.says(Moment.SILENCE)
     assert [t for t, _ in nudges][:3] == [98.0, 118.0, 138.0]
-    assert [c.about for _, c in nudges][:2] == [LEFT, RIGHT]
+    assert all(c == Say(Moment.SILENCE) for _, c in nudges), "no dater is singled out"
 
 
-def test_talking_resets_the_silence_clock_and_nova_prompts_the_quieter_dater():
+def test_talking_resets_the_silence_clock():
     show = Show()
     show.at(95, "speech", LEFT)
     show.until(110)
-    assert show.says(Moment.SILENCE) == [(103.0, Say(Moment.SILENCE, about=RIGHT))]
+    assert show.says(Moment.SILENCE) == [(103.0, Say(Moment.SILENCE))]
 
 
 def test_nova_stays_quiet_in_segments_without_the_silence_rule():
@@ -207,7 +238,10 @@ def test_nova_stays_quiet_in_segments_without_the_silence_rule():
 def test_lightning_round_runs_three_questions_only_when_unlocked():
     show = Show()
     unlocked = show.at(200, "unlock_lightning_round")
-    assert unlocked == [Say(Moment.LIGHTNING_UNLOCKED, text=script.LIGHTNING_UNLOCKED)]
+    assert unlocked == [
+        Say(Moment.LIGHTNING_UNLOCKED, text=script.LIGHTNING_UNLOCKED),
+        LightningMeterClosed(),
+    ]
     show.until(600)
     assert [(t, c.detail) for t, c in show.says(Moment.LIGHTNING_QUESTION)] == [
         (330.0, "1 of 3"),
@@ -229,14 +263,33 @@ def test_an_unlock_after_the_lightning_slot_changes_nothing():
     assert show.says(Moment.LIGHTNING_QUESTION) == []
 
 
+def test_the_unlock_meter_closes_when_the_lightning_slot_starts():
+    assert full_date().times(LightningMeterClosed) == [330.0]
+
+
+def test_the_unlock_meter_closes_once_the_round_is_unlocked():
+    show = Show()
+    show.at(200, "unlock_lightning_round")
+    show.until(600)
+    assert show.times(LightningMeterClosed) == [200.0]
+
+
+@pytest.mark.parametrize(("event", "args"), [("dater_left", (RIGHT,)), ("moderator_end", ())])
+def test_the_unlock_meter_closes_when_the_date_ends_early(event, args):
+    show = Show()
+    show.at(200, event, *args)
+    show.until(600)
+    assert show.times(LightningMeterClosed) == [200.0]
+
+
 # --- From the room ------------------------------------------------------------------------
 
 
-def test_asks_up_to_two_screened_audience_questions():
+def test_asks_up_to_two_moderator_approved_questions():
     show = Show()
-    show.at(100, "queue_question", "What's the best meal you've ever had?")
-    show.at(250, "queue_question", "Mountains or sea?")
-    show.at(260, "queue_question", "A third one that won't fit")
+    show.at(100, "queue_question", approved("What's the best meal you've ever had?"))
+    show.at(250, "queue_question", approved("Mountains or sea?"))
+    show.at(260, "queue_question", approved("A third one that won't fit"))
     show.until(600)
     assert [(t, c.detail) for t, c in show.says(Moment.FROM_THE_ROOM)] == [
         (240.0, "What's the best meal you've ever had?"),
@@ -244,30 +297,75 @@ def test_asks_up_to_two_screened_audience_questions():
     ]
 
 
+@pytest.mark.parametrize(
+    "status", [QuestionStatus.SUBMITTED, QuestionStatus.SCREENED, QuestionStatus.REJECTED]
+)
+def test_a_question_without_moderator_approval_is_never_read(status):
+    show = Show()
+    show.at(100, "queue_question", AudienceQuestion("Where does Maya work?", status))
+    show.at(110, "queue_question", approved("Mountains or sea?"))
+    show.until(600)
+    spoken = [c.detail or c.text or "" for _, c in show.says()]
+    assert not any("Where does Maya work?" in line for line in spoken)
+    assert [c.detail for _, c in show.says(Moment.FROM_THE_ROOM)] == ["Mountains or sea?"]
+
+
+def test_with_only_unapproved_questions_nova_reads_none():
+    show = Show()
+    show.at(100, "queue_question", AudienceQuestion("Pending", QuestionStatus.SUBMITTED))
+    show.at(101, "queue_question", AudienceQuestion("Screened", QuestionStatus.SCREENED))
+    show.until(600)
+    assert show.says(Moment.FROM_THE_ROOM) == []
+
+
 # --- Need a moment ------------------------------------------------------------------------
+
+
+COVER = [Say(Moment.NEED_A_MOMENT, text=script.NEED_A_MOMENT), Say(Moment.ROOM_TALK)]
+WELCOME_BACK = Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK)
 
 
 def test_need_a_moment_nova_covers_and_the_clock_holds_for_thirty_seconds():
     show = Show()
-    covered = show.at(100, "need_a_moment", LEFT)
-    assert covered == [Say(Moment.NEED_A_MOMENT, text=script.NEED_A_MOMENT), Say(Moment.ROOM_TALK)]
+    assert show.at(100, "need_a_moment", LEFT) == COVER
     assert "Maya" not in script.NEED_A_MOMENT and "Theo" not in script.NEED_A_MOMENT
 
     show.until(129.5)
     assert show.cues(since=100.5, before=130) == [], "nothing else happens while Nova covers"
     show.until(300)
-    welcome_back = Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK)
-    assert show.says(Moment.WELCOME_BACK) == [(130.0, welcome_back)]
+    assert (130.0, WELCOME_BACK) in show.says(Moment.WELCOME_BACK)
     assert (270.0, "from_the_room") in show.segments(), "the running order shifted by 30 s"
 
 
-def test_coming_back_early_ends_the_hold_early():
+def test_not_back_after_thirty_seconds_alerts_the_moderator():
+    show = Show()
+    show.at(100, "need_a_moment", LEFT)
+    show.until(130)
+    assert show.cues(since=130, before=130.5) == [
+        AlertModerator(ModeratorAlert.PAUSE_NOT_BACK, LEFT),
+        WELCOME_BACK,
+    ]
+
+
+def test_coming_back_early_ends_the_hold_early_with_no_alert():
     show = Show()
     show.at(100, "need_a_moment", LEFT)
     assert show.at(105, "back", RIGHT) == [], "only the dater who asked can end it"
-    assert show.at(110, "back", LEFT) == [Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK)]
+    assert show.at(110, "back", LEFT) == [WELCOME_BACK]
     show.until(300)
     assert (250.0, "from_the_room") in show.segments()
+    assert show.cues(AlertModerator) == []
+
+
+def test_the_second_pause_in_a_date_alerts_the_moderator_and_there_is_no_limit():
+    show = Show()
+    show.at(100, "need_a_moment", LEFT)
+    show.at(105, "back", LEFT)
+    second = show.at(150, "need_a_moment", RIGHT)
+    assert second == [*COVER, AlertModerator(ModeratorAlert.REPEATED_PAUSE, RIGHT)]
+    show.at(155, "back", RIGHT)
+    third = show.at(200, "need_a_moment", LEFT)
+    assert third == [*COVER, AlertModerator(ModeratorAlert.REPEATED_PAUSE, LEFT)]
 
 
 def test_need_a_moment_only_on_air_and_one_at_a_time():
@@ -292,6 +390,7 @@ def test_a_dater_leaving_is_closed_kindly_and_the_date_ends_as_dater_left():
     assert closed == [
         StopSpeaking(),
         Say(Moment.DATER_LEFT, text=line),
+        LightningMeterClosed(),
         DateEnded(EndReason.DATER_LEFT, outcome=None),
     ]
     assert not any(word in line.lower() for word in BLAME)
@@ -315,26 +414,30 @@ def test_leaving_while_deciding_closes_the_poll_without_a_verdict_or_outcome():
     assert show.desk.resolved is False
 
 
-def test_leaving_during_a_moment_releases_the_hold():
+def test_leaving_during_a_moment_releases_the_hold_with_no_alert():
     show = Show()
     show.at(100, "need_a_moment", LEFT)
     show.at(110, "dater_left", LEFT)
     show.until(200)
     assert show.says(Moment.WELCOME_BACK) == []
+    assert show.cues(AlertModerator) == []
     assert show.segments()[-1] == (140.0, "next_up")
 
 
 # --- The moderator ends the date ----------------------------------------------------------
 
 
-def test_moderator_end_stops_nova_at_once_with_only_the_approved_line():
+def test_moderator_end_stops_nova_at_once_with_only_the_approved_line_then_the_fallback():
+    assert script.MODERATOR_END == "We're ending this date here. Thanks for listening, everyone."
     show = Show()
-    show.at(100, "queue_question", "Saved for later")
+    show.at(100, "queue_question", approved("Saved for later"))
     ended = show.at(300, "moderator_end")
     assert ended == [
         StopSpeaking(),
         Say(Moment.MODERATOR_END, text=script.MODERATOR_END),
+        LightningMeterClosed(),
         DateEnded(EndReason.MODERATOR_ENDED, outcome=None),
+        PlayFallbackSegment(),
         Finished(),
     ]
     later = []
@@ -362,10 +465,19 @@ def test_moderator_end_while_deciding_closes_the_poll_and_never_resolves():
         "Say",
         "PollClosed",
         "DateEnded",
+        "PlayFallbackSegment",
         "Finished",
     ]
     assert show.desk.resolved is False
     assert show.cues(ShowVerdict) == []
+
+
+def test_moderator_end_after_the_result_stops_nova_and_plays_the_fallback():
+    show = Show()
+    show.until(550)
+    assert show.at(555, "moderator_end") == [StopSpeaking(), PlayFallbackSegment(), Finished()]
+    show.until(700)
+    assert show.says(Moment.NEXT_UP) == []
 
 
 # --- Decisions and the result -------------------------------------------------------------
@@ -438,8 +550,13 @@ def test_the_verdict_waits_until_both_decisions_are_locked():
     ]
 
 
-def test_no_votes_means_no_verdict():
-    assert full_date(poll=FakePoll(None)).cues(ShowVerdict) == []
+@pytest.mark.parametrize(
+    ("yes", "no", "verdict"),
+    [(0, 0, None), (3, 1, None), (4, 1, ShowVerdict(yes_share=0.8)), (0, 5, ShowVerdict(0.0))],
+)
+def test_the_verdict_is_hidden_when_fewer_than_five_people_voted(yes, no, verdict):
+    shown = full_date(poll=FakePoll(yes, no)).cues(ShowVerdict)
+    assert shown == ([verdict] if verdict else [])
 
 
 # --- Guards -------------------------------------------------------------------------------

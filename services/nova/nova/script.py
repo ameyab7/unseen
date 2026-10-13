@@ -1,8 +1,8 @@
 """Nova's approved lines: spoken exactly as written, never generated.
 
 Safety-critical moments (the result, a dater leaving, a moderator ending the date) use
-these, never the language model. Each line names its source. Lines marked ASSUMPTION are
-not in the brand book or the prototype and need sign-off before a real show.
+these, never the language model. Each line names its source; a new line needs the
+product owner's sign-off before it goes on air.
 """
 
 from nova.cards import BlindCard, Pair
@@ -17,10 +17,10 @@ INVITATION = "If that sounded like your kind of night, there are seats this week
 LIGHTNING_UNLOCKED = "The lightning round is unlocked. Three quick ones, coming up."
 POLL_QUESTION = "Second date?"
 
-# ASSUMPTION: the brand book has no line for these.
+# Not in the brand book; signed off by the product owner on 2026-10-13.
 NEED_A_MOMENT = "Let's take a short breather. Room, stay with us."
 WELCOME_BACK = "And we're back."
-MODERATOR_END = "We're ending this date here. Thank you both, and thank you, room."
+MODERATOR_END = "We're ending this date here. Thanks for listening, everyone."
 
 
 def time_line(pair: Pair) -> str:

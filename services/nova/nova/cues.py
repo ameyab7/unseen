@@ -57,6 +57,11 @@ class EndReason(StrEnum):
     MODERATOR_ENDED = "moderator_ended"
 
 
+class ModeratorAlert(StrEnum):
+    PAUSE_NOT_BACK = "pause_not_back"  # a dater asked for a moment and isn't back after 30 s
+    REPEATED_PAUSE = "repeated_pause"  # the second (or later) pause in this date
+
+
 @dataclass(frozen=True)
 class Say:
     """A line for Nova. With text, Nova says exactly that (an approved line). Without,
@@ -109,9 +114,29 @@ class ShowVerdict:
 
 
 @dataclass(frozen=True)
+class LightningMeterClosed:
+    """Gestures stop counting toward the lightning unlock: at 5:30, when it's unlocked, or
+    when the date ends early. No listener can pay toward an unlock that can't happen."""
+
+
+@dataclass(frozen=True)
+class AlertModerator:
+    """For the moderator console only. Never published to the room."""
+
+    alert: ModeratorAlert
+    seat: Seat
+
+
+@dataclass(frozen=True)
 class DateEnded:
     reason: EndReason
     outcome: Outcome | None
+
+
+@dataclass(frozen=True)
+class PlayFallbackSegment:
+    """The recorded fallback segment (technical plan). Plays until the moderator chooses
+    what happens next, so the room never sits in silence."""
 
 
 @dataclass(frozen=True)
@@ -129,6 +154,9 @@ type Cue = (
     | PollOpened
     | PollClosed
     | ShowVerdict
+    | LightningMeterClosed
+    | AlertModerator
     | DateEnded
+    | PlayFallbackSegment
     | Finished
 )
