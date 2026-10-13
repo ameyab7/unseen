@@ -38,7 +38,7 @@ describe('app config', () => {
   it('has a real app ID, the same on both platforms', () => {
     const id = config.ios?.bundleIdentifier;
     expect(id).toMatch(/^[a-zA-Z][a-zA-Z0-9]*(\.[a-zA-Z][a-zA-Z0-9]*)+$/);
-    expect(id).not.toMatch(/YOURDOMAIN|MYREALDOMAIN/);
+    expect(id).not.toMatch(/YOURDOMAIN|MYREALDOMAIN|YOURCHOICE/);
     expect(config.android?.package).toBe(id);
   });
 });
