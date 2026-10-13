@@ -40,8 +40,10 @@ Install app packages from apps/mobile with
 `node ../../node_modules/expo/bin/cli install <pkg>`, not `npx expo install`, then
 check package.json put them in the right section (docs/decisions/0001-pnpm-monorepo.md).
 
-On Windows: if pnpm is not on PATH (corepack enable needs an admin shell), run
-corepack pnpm <script>.
+On Windows: if `pnpm` is not recognized, run once
+`corepack enable --install-directory "$env:APPDATA\npm" pnpm` (no admin needed; that
+folder is on the user PATH), then open a new terminal. Don't use `corepack pnpm <script>`:
+the root scripts call pnpm themselves and fail when it is not on PATH.
 
 ## Architecture rules
 - A write that touches more than one row is a Postgres function in a migration,
