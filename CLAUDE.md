@@ -36,10 +36,12 @@ components and say so in the pull request.
 - supabase start: local stack; pnpm db:test: pgTAP tests; pnpm db:types: regenerate types
 - services/nova: uv run pytest
 
+Install app packages from apps/mobile with
+`node ../../node_modules/expo/bin/cli install <pkg>`, not `npx expo install`, then
+check package.json put them in the right section (docs/decisions/0001-pnpm-monorepo.md).
+
 On Windows: if pnpm is not on PATH (corepack enable needs an admin shell), run
-corepack pnpm <script>. Install app packages from apps/mobile with
-node ../../node_modules/expo/bin/cli install <pkg>, not npx expo install, then check
-package.json put them in the right section (docs/decisions/0001-pnpm-monorepo.md).
+corepack pnpm <script>.
 
 ## Architecture rules
 - A write that touches more than one row is a Postgres function in a migration,

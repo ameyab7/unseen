@@ -30,3 +30,7 @@ minimumReleaseAgeExclude:
 
 allowBuilds:
   unrs-resolver: false
+
+# Refuse to install on a Node older than engines.node (24.2 adds import.meta.main,
+# which the token generator relies on) instead of only warning.
+engineStrict: true

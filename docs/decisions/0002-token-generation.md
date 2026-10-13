@@ -5,7 +5,7 @@ Date: 2026-10-13. Status: accepted.
 ## Decision
 
 `packages/tokens/tokens.json` is the only source of colors, type, spacing and radii.
-`pnpm tokens` runs `packages/tokens/scripts/generate.ts` (plain Node 24, which runs
+`pnpm tokens` runs `packages/tokens/scripts/generate.ts` (plain Node 24.2+, which runs
 TypeScript directly) and writes `apps/mobile/src/theme/tokens.ts`. The output is
 committed, so Metro and EAS never run the generator. `pnpm tokens:check` and the
 tokens test suite fail if the committed file is out of date.
@@ -17,7 +17,9 @@ tokens test suite fail if the committed file is out of date.
 - Px values become plain numbers (points on iOS, dp on Android). `rgba()` stays a string.
 - Colors are keyed by theme (`colors.evening`, `colors.daylight`). Screens read them
   through `useTheme()`, never directly, so the reveal can switch to Daylight with a
-  nested `<ThemeProvider theme="daylight">`.
+  nested `<ThemeProvider theme="daylight">`. Each provider also sets the status bar
+  (light content on Evening, dark on Daylight) and the navigation theme, which colors
+  navigator backgrounds and borders, so the nearest provider wins.
 - Each token's usage note becomes a doc comment, so it shows on hover.
 
 ## Fonts
@@ -43,6 +45,12 @@ tokens test suite fail if the committed file is out of date.
 
 ## Enforcement
 
-ESLint's `no-restricted-syntax` rejects hex, rgb() and hsl() literals and literal
-`fontSize`, `lineHeight`, `letterSpacing` and `fontFamily` values in `app/` and `src/`,
-outside `src/theme`.
+ESLint's `no-restricted-syntax`, in `app/` and `src/` outside `src/theme`, rejects:
+
+- hex, rgb() and hsl() strings anywhere, including inside template literals;
+- any literal or template value for a color property or prop (`color`, `backgroundColor`,
+  `tintColor` …), so named colors such as 'white' fail too. Only 'transparent' is allowed;
+- literal `fontSize`, `lineHeight`, `letterSpacing` and `fontFamily` values.
+
+Quoted keys (`'fontSize': 17`) count the same as bare ones. A color held in a variable
+first (`const c = 'white'`) still gets through; review catches that.

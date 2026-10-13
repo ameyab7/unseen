@@ -53,6 +53,7 @@ const KEBAB = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 const HEX = /^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const RGBA = /^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(,\s*(0|1|0?\.\d+)\s*)?\)$/;
 const PX = /^(\d+(\.\d+)?)px$/;
+const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 export function camelCase(name: string): string {
   return name.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase());
@@ -87,10 +88,16 @@ function px(value: unknown, path: string): number {
   return Number(match[1]);
 }
 
+// Names become bare object keys in the generated module, so the final name (after the
+// prefix is dropped) must be a valid identifier: "space-2xl" would become "2xl".
 function tokenName(value: unknown, path: string, prefix = ''): string {
   const name = text(value, path);
   if (!KEBAB.test(name)) fail(path, `"${name}" is not kebab-case`);
-  return camelCase(prefix && name.startsWith(prefix) ? name.slice(prefix.length) : name);
+  const result = camelCase(prefix && name.startsWith(prefix) ? name.slice(prefix.length) : name);
+  if (!IDENTIFIER.test(result)) {
+    fail(path, `"${name}" becomes "${result}", which is not a valid identifier`);
+  }
+  return result;
 }
 
 function unique<T extends Token>(tokens: T[], path: string): T[] {
@@ -121,6 +128,9 @@ function parseColors(json: Record<string, unknown>): Pick<TokenModel, 'themes' |
     const id = text(record(raw, `color.themes[${i}]`).id, `color.themes[${i}].id`);
     if (!/^[a-z]+$/.test(id)) fail(`color.themes[${i}].id`, `"${id}" must be lowercase letters`);
     return id;
+  });
+  themes.forEach((id, i) => {
+    if (themes.indexOf(id) !== i) fail(`color.themes[${i}].id`, `theme "${id}" is listed twice`);
   });
   if (themes.length === 0) fail('color.themes', 'needs at least one theme');
 

@@ -178,6 +178,16 @@ describe('parseTokens', () => {
       (json) => (json.type.groups[0].family = 'mono'),
       /unknown family "mono"/,
     ],
+    [
+      'a name that is not an identifier once its prefix is dropped',
+      (json) => json.spacing.tokens.push({ name: 'space-2xl', value: '64px', usage: 'Huge.' }),
+      /spacing\.tokens\[8\]\.name: "space-2xl" becomes "2xl", which is not a valid identifier/,
+    ],
+    [
+      'a theme listed twice',
+      (json) => json.color.themes.push({ id: 'evening', name: 'Evening again' }),
+      /color\.themes\[2\]\.id: theme "evening" is listed twice/,
+    ],
   ];
 
   for (const [name, change, message] of invalid) {
@@ -228,5 +238,19 @@ describe('buildTokensModule', () => {
       buildTokensModule(tokensJson),
       'tokens.ts is out of date. Run pnpm tokens.',
     );
+  });
+});
+
+describe('generate.ts', () => {
+  // generate.ts only runs when import.meta.main is true, which Node added in 24.2.0.
+  // On older Node it would silently do nothing and exit 0, so the repo must refuse it.
+  test('the repo requires a Node version with import.meta.main', () => {
+    const root = JSON.parse(
+      readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'),
+    );
+    const match = /^>=(\d+)\.(\d+)(?:\.(\d+))?$/.exec(root.engines?.node ?? '');
+    assert.ok(match, `engines.node should look like ">=24.2", got ${root.engines?.node}`);
+    const [major, minor] = [Number(match[1]), Number(match[2])];
+    assert.ok(major > 24 || (major === 24 && minor >= 2), `engines.node is ${root.engines.node}`);
   });
 });

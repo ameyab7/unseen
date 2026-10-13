@@ -33,7 +33,12 @@ describe('app config', () => {
     expect(pluginOptions('expo-status-bar')).toEqual({ style: 'light' });
   });
 
-  it('uses one app ID on both platforms', () => {
-    expect(config.ios?.bundleIdentifier).toBe(config.android?.package);
+  // The app ID is permanent once a store build ships, so a missing or placeholder ID
+  // must fail here, not after the first production build.
+  it('has a real app ID, the same on both platforms', () => {
+    const id = config.ios?.bundleIdentifier;
+    expect(id).toMatch(/^[a-zA-Z][a-zA-Z0-9]*(\.[a-zA-Z][a-zA-Z0-9]*)+$/);
+    expect(id).not.toMatch(/YOURDOMAIN|MYREALDOMAIN/);
+    expect(config.android?.package).toBe(id);
   });
 });

@@ -3,7 +3,7 @@ import { colors } from './src/theme/tokens.ts';
 
 // Placeholder until the domain is chosen. Used as both the iOS bundle identifier and
 // the Android package; changing it after a store release creates a different app.
-const APP_ID = 'com.MYREALDOMAIN.unseen';
+const APP_ID = 'com.YOURCHOICE.unseen';
 
 const config: ExpoConfig = {
   name: 'Unseen',

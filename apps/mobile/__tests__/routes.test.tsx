@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { Platform, Text } from 'react-native';
 import { renderRouter, screen } from 'expo-router/testing-library';
 
 // React Navigation gives tab buttons the "button" role on iOS and "tab" elsewhere, and
@@ -40,5 +40,27 @@ describe('routes', () => {
 
     expect(await screen.findByRole('header', { name: "This page isn't here." })).toBeOnTheScreen();
     expect(screen.getByRole('link', { name: 'Go to Tonight' })).toBeOnTheScreen();
+  });
+  // A screen added inside dates/ (a chat, say) must open within the Dates tab, not
+  // become a tab of its own.
+  const withChat = {
+    appDir: './app',
+    overrides: { '(tabs)/dates/[matchId]': () => <Text>Chat</Text> },
+  };
+
+  it('keeps screens inside Dates out of the tab bar', async () => {
+    await renderRouter(withChat, { initialUrl: '/dates' });
+
+    await screen.findByRole('header', { name: 'Dates' });
+    expect(screen.getAllByRole(tabRole)).toHaveLength(3);
+  });
+
+  it('opens a screen inside Dates with the Dates tab selected', async () => {
+    const router = renderRouter(withChat, { initialUrl: '/dates/123' });
+    await router;
+
+    expect(await screen.findByText('Chat')).toBeOnTheScreen();
+    expect(router.getPathname()).toBe('/dates/123');
+    expect(screen.getByRole(tabRole, tab('Dates'))).toBeSelected();
   });
 });

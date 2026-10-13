@@ -18,10 +18,14 @@ enough for two packages. services/nova is Python and stays outside the workspace
 
 ## Things to know
 
-- Install app packages with `npx expo install` from apps/mobile, so versions match
-  the SDK. If the CLI's `.bin` shim fails on Windows ("The batch file cannot be
-  found"), run it as `node ../../node_modules/expo/bin/cli install …`. A hoisted
-  relink deletes the shim while it runs.
+- Install app packages from apps/mobile with
+  `node ../../node_modules/expo/bin/cli install <pkg>`, not `npx expo install`, then
+  check package.json put them in the right section. It is the same Expo CLI command,
+  so versions still match the SDK, but it skips the `.bin` shim: a hoisted relink
+  deletes that shim while it runs, which fails on Windows ("The batch file cannot be
+  found"). It has also put dev tools under `dependencies`; move them if so.
+- Node 24.2 or newer, enforced with `engineStrict`: the token generator relies on
+  `import.meta.main`, and on older Node it would silently do nothing.
 - pnpm auto-installs peer dependencies at their latest versions. expo-router and
   @expo/ui declare reanimated, worklets, gesture-handler and react-dom as `*` peers,
   which pulled in versions SDK 57 was not built against. All four are direct

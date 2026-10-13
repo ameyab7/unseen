@@ -1,25 +1,12 @@
-import { ThemeProvider as NavigationThemeProvider, Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
-import { ThemeProvider, useTheme } from '@/theme';
-import { useNavigationTheme } from '@/theme/navigation';
+import { Stack } from 'expo-router';
+import { ThemeProvider } from '@/theme';
 
-function RootNavigator() {
-  const { name, colors } = useTheme();
-  const navigationTheme = useNavigationTheme();
-  return (
-    <NavigationThemeProvider value={navigationTheme}>
-      <StatusBar style={name === 'evening' ? 'light' : 'dark'} />
-      <Stack
-        screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.velvet } }}
-      />
-    </NavigationThemeProvider>
-  );
-}
-
+// ThemeProvider also sets the status bar and the navigation theme, which colors every
+// navigator's backgrounds and borders.
 export default function RootLayout() {
   return (
     <ThemeProvider>
-      <RootNavigator />
+      <Stack screenOptions={{ headerShown: false }} />
     </ThemeProvider>
   );
 }
