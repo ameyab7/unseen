@@ -1,9 +1,9 @@
 import type { ExpoConfig } from 'expo/config';
 import { colors } from './src/theme/tokens.ts';
 
-// Placeholder until the domain is chosen. Used as both the iOS bundle identifier and
-// the Android package; changing it after a store release creates a different app.
-const APP_ID = 'com.YOURCHOICE.unseen';
+// Used as both the iOS bundle identifier and the Android package. Changing it after a
+// store release creates a different app.
+const APP_ID = 'com.ameyab7.unseen';
 
 const config: ExpoConfig = {
   name: 'Unseen',
