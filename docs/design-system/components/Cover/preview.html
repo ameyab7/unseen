@@ -1,0 +1,32 @@
+<!-- @dsCard height=288 -->
+<div class="cv">
+<style>
+.cv{position:relative;width:960px;height:288px;background:var(--velvet);overflow:hidden;font-family:var(--font-text)}
+.cv svg{position:absolute;left:480px;top:0}
+.cv .lamp{fill:var(--lamplight)}
+.cv .ink{fill:var(--pearl)}
+.cv .nova{fill:var(--nova)}
+.cv .air{fill:var(--on-air)}
+.cv .r{rx:var(--radius-l)}
+.cv .arc{fill:none;stroke:var(--lamplight);stroke-width:var(--space-xs);stroke-linecap:round}
+.cv .tx{position:absolute;left:40px;bottom:32px;max-width:440px}
+.cv .nm{margin:0;font-family:var(--font-display);font-weight:500;font-size:120px;line-height:.95;color:var(--pearl);letter-spacing:-0.01em}
+.cv .tg{margin:var(--space-xs) 0 0;font-size:14px;line-height:20px;color:var(--mist)}
+</style>
+<svg width="480" height="288" viewBox="0 0 480 288" aria-hidden="true">
+<!-- blocks: lamplight slab 144x304 and pearl block 120x200, both at radius-l; nova disc r52; on-air lamp r12 -->
+<!-- arrangement: one tall slab with satellites; the slab bleeds off the bottom, the pearl block off the top right -->
+<!-- pattern: four quarter arcs carrying out from the on-air lamp, a voice travelling, because the README puts voices first -->
+<!-- scales: arc pitch space-l (24px), arc stroke space-xs (8px), block corners radius-l, slab-to-block gap space-l -->
+<rect class="lamp r" x="216" y="16" width="144" height="304"/>
+<rect class="ink r" x="384" y="-24" width="120" height="200"/>
+<circle class="nova" cx="140" cy="76" r="52"/>
+<path class="arc" d="M52 212 A28 28 0 0 1 80 240"/>
+<path class="arc" d="M52 188 A52 52 0 0 1 104 240"/>
+<path class="arc" d="M52 164 A76 76 0 0 1 128 240"/>
+<path class="arc" d="M52 140 A100 100 0 0 1 152 240"/>
+<circle class="air" cx="52" cy="240" r="12"/>
+</svg>
+<div class="tx"><p class="nm">Unseen</p><p class="tg">Voices first. Faces only when you both say yes.</p></div>
+</div>
+<script>(function(){var l=document.createElement('link');l.rel='stylesheet';l.href='https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..700;1,6..96,400..700&display=swap';document.head.appendChild(l);})();</script>

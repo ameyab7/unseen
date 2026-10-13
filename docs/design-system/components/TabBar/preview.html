@@ -1,0 +1,18 @@
+<!-- @dsCard group="Navigation" height=140 subtitle="Three tabs, Tonight selected" -->
+<div class="ut">
+<style>
+.ut{background:var(--velvet);padding-top:var(--space-l);font-family:var(--font-text);max-width:390px}
+.ut nav{display:flex;justify-content:space-around;padding:var(--space-xs) 0 var(--space-l);border-top:1px solid var(--seam)}
+.ut button{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:72px;min-height:48px;border:0;background:none;color:var(--mist);font:500 12px/16px var(--font-text);cursor:pointer}
+.ut button[aria-current="page"]{color:var(--pearl);font-weight:600}
+.ut svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.ut [aria-current="page"] .f{fill:currentColor}
+.ut button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+</style>
+<nav aria-label="Main">
+<button aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="f" cx="12" cy="12" r="2.5"/><path d="M8.5 15.5a5 5 0 0 1 0-7M15.5 8.5a5 5 0 0 1 0 7M5.6 18.4a9 9 0 0 1 0-12.8M18.4 5.6a9 9 0 0 1 0 12.8"/></svg>Tonight</button>
+<button><svg viewBox="0 0 24 24" aria-hidden="true"><path class="f" d="M4 6h16v3a3 3 0 0 0 0 6v3H4v-3a3 3 0 0 0 0-6z"/></svg>Dates</button>
+<button><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="f" cx="12" cy="8" r="4"/><path d="M4 20c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>You</button>
+</nav>
+</div>
+<script>document.querySelectorAll('.ut button').forEach(function(b){b.addEventListener('click',function(){document.querySelectorAll('.ut button').forEach(function(x){x.removeAttribute('aria-current')});b.setAttribute('aria-current','page')})});</script>

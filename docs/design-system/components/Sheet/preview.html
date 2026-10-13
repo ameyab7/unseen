@@ -1,0 +1,20 @@
+<!-- @dsCard group="Overlays" height=380 subtitle="A decision sheet over the scrim" -->
+<div class="uo">
+<style>
+.uo{position:relative;height:360px;max-width:390px;background:var(--velvet);overflow:hidden;font-family:var(--font-text)}
+.uo .bg{margin:0;padding:var(--space-l) var(--screen-margin);color:var(--pearl);font:italic 500 24px/30px var(--font-display)}
+.uo .sc{position:absolute;inset:0;background:var(--scrim)}
+.uo .sh{position:absolute;left:0;right:0;bottom:0;background:var(--plush-raised);border-radius:var(--radius-l) var(--radius-l) 0 0;padding:10px var(--screen-margin) var(--space-l);display:flex;flex-direction:column;gap:var(--space-s);color:var(--pearl)}
+.uo .gr{width:36px;height:5px;border-radius:3px;background:var(--seam-strong);align-self:center}
+.uo h2{margin:0;font:600 20px/26px var(--font-text)}
+.uo p{margin:0;font:400 15px/21px var(--font-text);color:var(--mist)}
+.uo button{min-height:52px;border-radius:var(--radius-pill);font:600 17px var(--font-text);border:1.5px solid transparent;background:none;cursor:pointer}
+.uo .s{border-color:var(--seam-strong);color:var(--pearl)}
+.uo .q{color:var(--lamplight-text);min-height:44px}
+.uo button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+</style>
+<p class="bg" aria-hidden="true">Daniel, 35</p>
+<div class="sc" aria-hidden="true"></div>
+<div class="sh" role="dialog" aria-modal="true" aria-labelledby="uo-t"><div class="gr" aria-hidden="true"></div><h2 id="uo-t">Leave this date?</h2><p>Nova closes the date kindly. Nobody hears a reason unless you choose to report.</p><button class="s">Leave date</button><button class="q">Stay</button></div>
+</div>
+<script>(function(){var l=document.createElement('link');l.rel='stylesheet';l.href='https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..700;1,6..96,400..700&display=swap';document.head.appendChild(l);})();</script>

@@ -1,0 +1,18 @@
+<!-- @dsCard group="Forms" height=330 subtitle="Default, focused and error" -->
+<div class="uf">
+<style>
+.uf{background:var(--velvet);padding:var(--space-l);display:grid;gap:var(--space-l);font-family:var(--font-text);max-width:420px}
+.uf .f{display:flex;flex-direction:column;gap:var(--space-xs)}
+.uf label{font:600 15px/20px var(--font-text);color:var(--pearl)}
+.uf input{height:52px;box-sizing:border-box;border-radius:var(--radius-m);border:1.5px solid var(--seam-strong);background:var(--plush);color:var(--pearl);padding:0 var(--space-m);font:400 17px var(--font-text)}
+.uf input::placeholder{color:var(--mist)}
+.uf input:focus,.uf input.fx{outline:2px solid var(--focus);outline-offset:2px}
+.uf .h{margin:0;font:400 13px/18px var(--font-text);color:var(--mist);display:flex;gap:6px;align-items:flex-start}
+.uf .e input{border-color:var(--danger)}
+.uf .e .h{color:var(--danger)}
+</style>
+<div class="f"><label for="u1">First name</label><input id="u1" placeholder="Alicia"><p class="h">This is how Nova introduces you. It can differ from your ID.</p></div>
+<div class="f"><label for="u2">Pronouns, optional</label><input id="u2" class="fx" value="she/her"><p class="h">Nova reads these exactly as written.</p></div>
+<div class="f e"><label for="u3">Ask me about</label><input id="u3" value="My shifts at Hartwell General" aria-invalid="true" aria-describedby="u3h"><p class="h" id="u3h"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></svg>Leave out your workplace. Anyone in your city can listen.</p></div>
+</div>
+<script>void 0;</script>

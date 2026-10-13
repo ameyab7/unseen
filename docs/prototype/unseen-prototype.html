@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Unseen prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..700;1,6..96,400..700&display=swap">
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--page:#ecebf0;--page-ink:#1f1d24;--page-muted:#57525f;--page-line:#d4d0da;
+--velvet:#1e1527;--plush:#2a1f36;--raised:#362a45;--seam:#4a3b5a;--seam-strong:#8a7a9c;--pearl:#f4eee6;--mist:#c3b7cd;
+--lamp:#f2b27c;--lamp-ink:#1e1527;--focus:#f2b27c;--onair:#ff6f61;--nova:#b7beff;--danger:#ff9d92;--success:#8fd9b6;
+--day:#f7f1f4;--day-ink:#24182c;--day-mist:#5d4f66;--day-lamp:#efa567;--day-link:#9a4e1a;
+--display:"Bodoni Moda",Didot,"Bodoni 72",Georgia,serif;--text:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--page:#121015;--page-ink:#ebe7ef;--page-muted:#a7a1ad;--page-line:#2c2833}}
+:root[data-theme="dark"]{--page:#121015;--page-ink:#ebe7ef;--page-muted:#a7a1ad;--page-line:#2c2833}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--page);color:var(--page-ink);font-family:var(--text);-webkit-font-smoothing:antialiased}
+button,input,textarea,output{font:inherit;color:inherit}
+.sr{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.stage{display:flex;flex-wrap:wrap;gap:40px;justify-content:center;align-items:flex-start;padding:32px 20px 56px;max-width:1100px;margin:0 auto}
+.panel{flex:1 1 280px;max-width:340px;display:flex;flex-direction:column;gap:8px;padding-top:12px}
+.panel h1{font:500 36px/40px var(--display);margin:0}
+.panel h2{font-size:13px;line-height:18px;font-weight:600;margin:12px 0 2px;color:var(--page-muted)}
+.panel p{margin:0;color:var(--page-muted);font-size:15px;line-height:22px}
+.jump{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.jump button,.reset{width:100%;display:flex;gap:12px;align-items:center;min-height:44px;padding:8px 14px;border-radius:12px;border:1px solid var(--page-line);background:transparent;text-align:left;font-size:15px;cursor:pointer}
+.reset{margin-top:10px}
+.jump button span{color:var(--page-muted);min-width:18px;font-variant-numeric:tabular-nums}
+.jump button[aria-current="true"]{border-color:var(--page-ink);box-shadow:inset 0 0 0 1px var(--page-ink)}
+.seg{display:flex;gap:4px;padding:4px;border:1px solid var(--page-line);border-radius:999px}
+.seg button{flex:1;min-height:40px;border:0;border-radius:999px;background:transparent;font-size:14px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--page-ink);color:var(--page)}
+.panel button:focus-visible{outline:2px solid var(--page-ink);outline-offset:2px}
+.device{position:relative;flex:none;width:410px;height:864px;border:10px solid #0b080d;border-radius:56px;overflow:hidden;background:var(--velvet);color:var(--pearl);font-family:var(--text)}
+@media (max-width:480px){.stage{padding:12px 8px 40px;gap:24px}.device{width:100%;height:800px;border-width:6px;border-radius:40px}}
+.scr{position:absolute;inset:0;isolation:isolate;overflow-y:auto;overscroll-behavior:contain;padding:56px 20px 112px;display:flex;flex-direction:column;gap:16px;background:var(--velvet);scrollbar-width:none}
+.scr::-webkit-scrollbar{display:none}
+.scr.full{padding-bottom:32px}
+#live{padding-bottom:128px}
+.has-mini .scr:not(.full){padding-bottom:180px}
+.chat-open #dates{padding-bottom:20px}
+.spot{position:absolute;left:0;right:0;top:0;height:560px;z-index:-1;pointer-events:none;background:radial-gradient(60% 46% at 50% 30%,rgba(242,178,124,.18),rgba(242,178,124,0) 72%)}
+.col{display:flex;flex-direction:column;gap:16px;flex:1}
+.wm{font:500 64px/64px var(--display);letter-spacing:-.01em;margin:0}
+.dxl{font:500 44px/48px var(--display);margin:0;letter-spacing:-.01em}
+.dl{font:500 32px/38px var(--display);margin:0}
+.dn{font:italic 500 24px/30px var(--display);margin:0}
+.ttl{font:600 20px/26px var(--text);margin:0}
+.hl{font:600 17px/22px var(--text);margin:0}
+.bd{font:400 17px/24px var(--text);margin:0}
+.co{font:400 15px/21px var(--text);margin:0}
+.mt{font:400 13px/18px var(--text);color:var(--mist);margin:0}
+.dim{color:var(--mist)}
+.c{text-align:center}
+.row{display:flex;align-items:center;gap:8px}
+.sp{flex:1}
+.card{background:var(--plush);border-radius:24px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.lamp{display:inline-flex;align-items:center;gap:6px;color:var(--onair);font:600 13px/18px var(--text)}
+.lamp i{width:8px;height:8px;border-radius:50%;background:var(--onair);animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.4}}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:52px;padding:0 24px;border-radius:999px;border:1.5px solid transparent;background:none;font:600 17px/22px var(--text);cursor:pointer;text-align:center}
+.btn.p{background:var(--lamp);color:var(--lamp-ink)}
+.btn.s{border-color:var(--seam-strong);color:var(--pearl)}
+.btn.s[aria-pressed="true"]{border-color:var(--lamp);box-shadow:inset 0 0 0 1px var(--lamp)}
+.btn.q{color:var(--lamp);min-height:44px}
+.btn.d{border-color:var(--danger);color:var(--danger)}
+.btn.w{background:#ffffff;color:#000000}
+.btn.sm{min-height:44px;font-size:15px;padding:0 14px}
+.btn svg,.icon svg,.tab svg,.dk svg,.playb svg{fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.device :focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.icon{width:44px;height:44px;border-radius:50%;border:0;background:var(--plush);color:var(--pearl);display:grid;place-items:center;cursor:pointer;flex:none}
+.icon svg{width:22px;height:22px}
+.bar{display:flex;align-items:center;gap:10px;min-height:44px}
+.steps{display:flex;gap:6px;flex:1;justify-content:center;padding-right:54px}
+.steps i{width:28px;height:4px;border-radius:2px;background:var(--raised)}
+.steps i.on{background:var(--lamp)}
+.pair{display:flex;justify-content:center;gap:18px;padding:6px 0}
+.av{width:56px;height:56px;border-radius:50%;background:var(--raised);display:grid;place-items:center;font:italic 500 22px var(--display);color:var(--mist);flex:none;outline:2px solid transparent;outline-offset:4px}
+.av.on{outline-color:var(--lamp)}
+.orb{position:relative;width:112px;height:112px;border-radius:50%;display:grid;place-items:center;background:var(--raised);font:italic 500 44px/1 var(--display);color:var(--pearl);margin:0 auto 12px;transition:opacity .4s,box-shadow .3s}
+.orb::before,.orb::after{content:"";position:absolute;inset:0;border-radius:50%;border:2px solid var(--lamp);opacity:0;pointer-events:none}
+.orb.talk{box-shadow:0 0 0 2px var(--lamp)}
+.orb.talk::before{animation:ripple 1.8s ease-out infinite}
+.orb.talk::after{animation:ripple 1.8s ease-out .9s infinite}
+.orb.hush{opacity:.45}
+.orb.xl{width:148px;height:148px;font-size:56px}
+@keyframes ripple{0%{opacity:.75;transform:scale(1)}100%{opacity:0;transform:scale(1.55)}}
+.host{display:flex;flex-direction:column;align-items:center;gap:8px}
+.nring{position:relative;width:36px;height:36px;border-radius:50%;border:2px solid var(--nova)}
+.nring::after{content:"";position:absolute;inset:-2px;border-radius:50%;border:2px solid var(--nova);opacity:0}
+.nring.talk::after{animation:ripple 1.6s ease-out infinite}
+.nlab{font:500 13px/18px var(--text);color:var(--nova);margin:0}
+.seats{display:flex;justify-content:center;gap:36px}
+.seat{text-align:center;min-width:120px}
+.surt{text-align:center;min-height:116px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:0 6px}
+.surt .who{font:600 13px/18px var(--text);color:var(--mist);margin:0}
+.surt .who.n{color:var(--nova)}
+.surt .now{font:400 20px/28px var(--text);margin:0;max-width:330px}
+.wave{display:flex;align-items:center;justify-content:center;gap:3px;height:28px}
+.wave.sm{height:22px;justify-content:flex-start}
+.wave span{width:3px;border-radius:2px;background:var(--lamp);animation:wv .9s ease-in-out infinite alternate}
+@keyframes wv{from{transform:scaleY(.3)}to{transform:scaleY(1)}}
+.prog{height:6px;border-radius:3px;background:var(--raised);overflow:hidden}
+.prog.fil{height:4px}
+.prog i{display:block;height:100%;background:var(--lamp);transition:width .4s ease-out}
+.poll{background:var(--plush);border-radius:20px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;animation:up .35s ease-out}
+.result{background:var(--plush);border-radius:24px;padding:18px;display:flex;flex-direction:column;gap:10px;text-align:center;animation:up .4s ease-out}
+.nudge{position:absolute;left:12px;right:12px;bottom:104px;z-index:5;background:var(--raised);border:1px solid var(--seam);border-radius:24px;padding:18px;display:flex;flex-direction:column;gap:10px;animation:up .35s ease-out}
+@keyframes up{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+.dock{position:absolute;left:0;right:0;bottom:0;z-index:4;display:grid;grid-template-columns:repeat(4,1fr);padding:10px 8px 24px;background:var(--velvet);border-top:1px solid var(--seam)}
+.dk{display:flex;flex-direction:column;align-items:center;gap:4px;min-height:60px;border:0;background:none;color:var(--pearl);font:500 12px/16px var(--text);cursor:pointer}
+.dk .ic{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:var(--plush)}
+.dk svg{width:22px;height:22px}
+.spark{position:absolute;bottom:96px;width:7px;height:7px;border-radius:50%;background:var(--lamp);pointer-events:none;z-index:6;animation:rise 1.7s ease-out forwards}
+@keyframes rise{to{transform:translateY(-260px) scale(.6);opacity:0}}
+.tabs{position:absolute;left:0;right:0;bottom:0;height:84px;display:flex;justify-content:space-around;padding-top:8px;background:var(--velvet);border-top:1px solid var(--seam);z-index:3}
+.tab{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:72px;min-height:48px;border:0;background:none;color:var(--mist);font:500 12px/16px var(--text);cursor:pointer}
+.tab svg{width:24px;height:24px}
+.tab[aria-current="page"]{color:var(--pearl)}
+.mini{position:absolute;left:12px;right:12px;bottom:92px;z-index:3;display:flex;align-items:center;gap:12px;background:var(--raised);border-radius:18px;padding:8px 8px 8px 16px}
+.ticket{background:var(--plush);border-radius:24px;padding:18px 26px;display:flex;flex-direction:column;gap:6px;-webkit-mask:radial-gradient(circle at 0 50%,transparent 12px,#000 12.5px) left/51% 100% no-repeat,radial-gradient(circle at 100% 50%,transparent 12px,#000 12.5px) right/51% 100% no-repeat;mask:radial-gradient(circle at 0 50%,transparent 12px,#000 12.5px) left/51% 100% no-repeat,radial-gradient(circle at 100% 50%,transparent 12px,#000 12.5px) right/51% 100% no-repeat}
+.inv{text-align:center;align-items:center}
+.li{display:flex;align-items:center;gap:14px;padding:12px 0;border-bottom:1px solid var(--seam)}
+.li:last-child{border-bottom:0}
+.tm{font:500 15px/20px var(--text);color:var(--mist);min-width:40px;font-variant-numeric:tabular-nums}
+.tastebox{background:var(--plush);border-radius:20px;padding:14px;display:flex;flex-direction:column;gap:6px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{min-height:44px;padding:0 16px;border-radius:999px;border:1.5px solid var(--seam-strong);background:transparent;color:var(--pearl);font:500 15px var(--text);cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--lamp);border-color:var(--lamp);color:var(--lamp-ink)}
+.field{width:100%;min-height:52px;border-radius:16px;border:1.5px solid var(--seam-strong);background:var(--plush);color:var(--pearl);padding:13px 16px;font:400 17px/24px var(--text);resize:none}
+.field::placeholder{color:var(--mist)}
+.inp{height:56px;width:100%;border-radius:16px;border:1.5px solid var(--seam-strong);background:var(--plush);color:var(--pearl);padding:0 14px;font:500 20px var(--text)}
+.dobf{display:grid;grid-template-columns:1fr 1fr 1.4fr;gap:10px}
+.dobf label{display:flex;flex-direction:column;gap:6px;font:600 13px/18px var(--text);color:var(--mist)}
+.opt{display:flex;align-items:center;gap:12px;width:100%;min-height:72px;padding:12px 16px;border-radius:20px;border:1.5px solid var(--seam-strong);background:var(--plush);cursor:pointer;text-align:left}
+.opt[aria-pressed="true"]{border-color:var(--lamp);box-shadow:inset 0 0 0 1px var(--lamp)}
+.opt b{display:block;font:600 17px/22px var(--text)}
+.opt .mt{display:block}
+.bell{display:block;width:120px;height:120px;margin:32px auto 8px}
+.check{list-style:none;margin:0;background:var(--plush);border-radius:20px;padding:4px 16px}
+.check li{display:flex;gap:14px;align-items:center;padding:14px 0;border-bottom:1px solid var(--seam)}
+.check li:last-child{border-bottom:0}
+.num{width:30px;height:30px;border-radius:50%;border:1.5px solid var(--seam-strong);display:grid;place-items:center;font:600 14px var(--text);flex:none}
+.num.done{background:var(--success);border-color:var(--success);color:var(--velvet)}
+.facts{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:14px}
+.facts li{display:flex;gap:12px;font:400 17px/24px var(--text)}
+.facts li::before{content:"";flex:none;width:8px;height:8px;margin-top:8px;border-radius:50%;background:var(--lamp)}
+.cam{position:relative;height:280px;border-radius:24px;background:#0f0a14;display:grid;place-items:center;overflow:hidden}
+.frame{position:absolute;width:82%;height:58%;border:2px dashed rgba(244,238,230,.55);border-radius:16px}
+.idcard{position:relative;width:66%;height:44%;border-radius:12px;background:var(--raised)}
+.idcard::before{content:"";position:absolute;left:9%;top:20%;width:26%;height:60%;border-radius:6px;background:var(--seam)}
+.idcard::after{content:"";position:absolute;left:44%;right:9%;top:28%;height:6px;border-radius:3px;background:var(--seam);box-shadow:0 16px 0 var(--seam),0 32px 0 var(--seam)}
+.scan{position:absolute;left:12%;right:12%;top:24%;height:2px;background:var(--lamp);animation:scan 1.6s ease-in-out infinite alternate}
+@keyframes scan{to{top:76%}}
+.oval{width:160px;height:210px;border-radius:50%;border:2px dashed rgba(244,238,230,.6)}
+.spin{width:64px;height:64px;border-radius:50%;border:3px solid var(--raised);border-top-color:var(--lamp);animation:spin 1s linear infinite;margin:72px auto 8px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.okb{width:96px;height:96px;border-radius:50%;background:var(--plush);display:grid;place-items:center;color:var(--success);margin:56px auto 8px}
+.okb svg,.okl svg{fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.okb svg{width:44px;height:44px}
+.stepper{display:flex;align-items:center;gap:10px}
+.stepper button{width:44px;height:44px;border-radius:50%;border:1.5px solid var(--seam-strong);background:none;color:var(--pearl);font:600 20px var(--text);cursor:pointer}
+.stepper output{min-width:36px;text-align:center;font:600 20px var(--text)}
+.lint{display:flex;gap:8px;align-items:flex-start;color:var(--danger);font:400 13px/18px var(--text);margin:0}
+.lint svg{flex:none;width:16px;height:16px;margin-top:1px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round}
+.rec{position:relative;width:116px;height:116px;border-radius:50%;border:0;background:var(--lamp);color:var(--lamp-ink);font:600 17px var(--text);cursor:pointer;align-self:center}
+.rec.on{box-shadow:0 0 0 4px var(--velvet),0 0 0 6px var(--lamp)}
+.rec.on::after{content:"";position:absolute;inset:0;border-radius:50%;border:2px solid var(--lamp);animation:ripple 1.4s ease-out infinite}
+.recwave{display:flex;align-items:center;justify-content:center;gap:2px;height:48px}
+.recwave span{width:3px;border-radius:2px;background:var(--lamp)}
+.photos3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.slot{position:relative;aspect-ratio:2/3;border-radius:16px;border:1.5px dashed var(--seam-strong);background:transparent;display:grid;place-items:center;color:var(--mist);font:500 13px/18px var(--text);cursor:pointer;overflow:hidden;padding:0}
+.slot.has{border:1px solid var(--seam)}
+.slot svg{position:absolute;inset:0;width:100%;height:100%}
+.tick{position:absolute;left:6px;right:6px;bottom:6px;background:var(--velvet);border-radius:10px;padding:4px;font:500 13px/16px var(--text);color:var(--success);text-align:center}
+.tog{display:flex;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid var(--seam)}
+.switch{position:relative;width:52px;height:32px;border-radius:16px;border:1.5px solid var(--seam-strong);background:var(--plush);flex:none;cursor:pointer;padding:0}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:23px;height:23px;border-radius:50%;background:var(--mist);transition:transform .2s}
+.switch[aria-checked="true"]{background:var(--lamp);border-color:var(--lamp)}
+.switch[aria-checked="true"]::after{transform:translateX(20px);background:var(--lamp-ink)}
+.cb{display:flex;gap:12px;align-items:flex-start;padding:6px 0;cursor:pointer}
+.cb input{width:24px;height:24px;margin:0;accent-color:var(--lamp);flex:none}
+.bcard{background:var(--plush);border-radius:24px;padding:16px;display:flex;flex-direction:column;gap:14px}
+.vrow{display:flex;align-items:center;gap:12px;background:var(--raised);border-radius:999px;padding:6px 16px 6px 6px}
+.playb{width:44px;height:44px;border-radius:50%;border:0;background:var(--lamp);color:var(--lamp-ink);display:grid;place-items:center;cursor:pointer;flex:none}
+.okl{display:flex;align-items:center;gap:6px}
+.okl svg{width:16px;height:16px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.stat{background:var(--plush);border-radius:18px;padding:12px;display:flex;flex-direction:column;gap:4px}
+.stat b{font:500 28px/32px var(--display)}
+.clip{width:208px;height:370px;margin:0 auto;border-radius:22px;background:var(--velvet);border:1px solid var(--seam-strong);display:flex;flex-direction:column;justify-content:space-between;padding:18px 16px}
+.clipwm{font:500 17px/20px var(--display);margin:0}
+.cliptx{font:500 24px/32px var(--display);margin:0}
+.clipnm{font:italic 500 24px/30px var(--display);margin:8px 0 0}
+.rc{display:flex;flex-direction:column;gap:10px;max-height:220px;overflow-y:auto}
+.rc p{margin:0;font:400 15px/21px var(--text)}
+.rc b{color:var(--mist);font-weight:600;margin-right:6px}
+.rc .mod{color:var(--mist);font-style:italic}
+.scrim{position:absolute;inset:0;background:rgba(12,8,16,.62);opacity:0;pointer-events:none;transition:opacity .2s;z-index:8}
+.scrim.on{opacity:1;pointer-events:auto}
+.sheet{position:absolute;left:0;right:0;bottom:0;z-index:9;background:var(--raised);border-radius:24px 24px 0 0;padding:10px 20px 32px;display:flex;flex-direction:column;gap:14px;max-height:88%;overflow-y:auto;transform:translateY(105%);visibility:hidden;transition:transform .25s ease-out,visibility .25s}
+.sheet.open{transform:none;visibility:visible}
+.sheet .card,.sheet .field{background:var(--plush)}
+.grab{width:36px;height:5px;border-radius:3px;background:var(--seam-strong);align-self:center;margin-bottom:4px}
+.gift{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:60px;padding:0 16px;border-radius:16px;border:1.5px solid var(--seam-strong);background:transparent;cursor:pointer;text-align:left}
+.gift b{font:600 17px/22px var(--text)}
+.toast{position:absolute;left:16px;right:16px;top:52px;z-index:10;background:var(--pearl);color:var(--velvet);border-radius:14px;padding:12px 16px;font:500 15px/20px var(--text);opacity:0;transform:translateY(-8px);transition:opacity .2s,transform .2s;pointer-events:none}
+.toast.on{opacity:1;transform:none}
+.banner{background:var(--nova);color:var(--velvet);border-radius:14px;padding:10px 14px;font:500 15px/20px var(--text)}
+.meter{height:10px;border-radius:5px;background:var(--raised);overflow:hidden}
+.meter i{display:block;height:100%;width:40%;background:var(--success);transition:width .12s linear}
+.rules{margin:0;padding:0 0 0 18px;display:flex;flex-direction:column;gap:6px;font:400 15px/21px var(--text)}
+.choice{min-height:72px;border-radius:999px;border:1.5px solid var(--seam-strong);background:var(--plush);color:var(--pearl);font:600 19px/24px var(--text);width:100%;cursor:pointer}
+.choice[aria-pressed="true"]{border-color:var(--lamp);box-shadow:inset 0 0 0 1.5px var(--lamp)}
+#reveal{padding:0;overflow:hidden}
+.rv{position:absolute;inset:0;padding:56px 20px 32px;display:flex;flex-direction:column;gap:16px;overflow-y:auto}
+.rv.dark{background:var(--velvet);align-items:center;justify-content:center;text-align:center}
+.rv.day{background:var(--day);color:var(--day-ink);clip-path:circle(0% at 50% 40%);transition:clip-path 1.5s cubic-bezier(.22,.8,.2,1)}
+#reveal.lit .rv.day{clip-path:circle(150% at 50% 40%)}
+.rv.day .mt{color:var(--day-mist)}
+.rv.day .btn.p{background:var(--day-lamp);color:var(--day-ink)}
+.rv.day .btn.q{color:var(--day-link)}
+.rv.day :focus-visible{outline-color:var(--day-link)}
+.prints{position:relative;height:324px;margin:4px 0}
+.print{position:absolute;top:0;width:52%;margin:0;background:#ffffff;padding:8px 8px 6px;border-radius:6px;box-shadow:0 1px 2px rgba(36,24,44,.12),0 14px 32px rgba(36,24,44,.18);opacity:0;transform:translateY(18px);transition:opacity .9s .8s,transform .9s .8s}
+.print:first-child{left:2%}
+.print:last-child{right:2%;top:28px}
+#reveal.lit .print:first-child{opacity:1;transform:rotate(-4deg)}
+#reveal.lit .print:last-child{opacity:1;transform:rotate(3deg)}
+.print svg{display:block;width:100%;height:auto;border-radius:3px}
+.print figcaption{font:italic 500 24px/30px var(--display);color:var(--day-ink);text-align:center;margin-top:6px}
+.thread{display:flex;flex-direction:column;gap:8px;flex:1;padding-top:8px}
+.note{align-self:center;max-width:290px;text-align:center;border:1.5px solid var(--seam);border-radius:16px;padding:12px 16px;font:400 15px/21px var(--text);margin:0 0 8px}
+.note b{display:block;color:var(--nova);font:600 13px/18px var(--text);margin-bottom:2px}
+.in,.out{max-width:80%;padding:10px 14px;border-radius:20px;font:400 17px/24px var(--text);margin:0}
+.in{align-self:flex-start;background:var(--plush);border-bottom-left-radius:6px}
+.out{align-self:flex-end;background:var(--lamp);color:var(--lamp-ink);border-bottom-right-radius:6px}
+.typing{align-self:flex-start;margin:0;font:400 13px/18px var(--text);color:var(--mist)}
+.composer{display:flex;gap:8px;align-items:center;position:sticky;bottom:0;background:var(--velvet);padding:10px 0 4px;margin:0}
+.sheet .composer{position:static;background:none;padding:0}
+.composer input{flex:1;min-width:0;height:48px;border-radius:24px;border:1.5px solid var(--seam-strong);background:var(--plush);color:var(--pearl);padding:0 16px;font:400 17px var(--text)}
+.composer input::placeholder{color:var(--mist)}
+.match{display:flex;align-items:center;gap:12px;width:100%;padding:12px;border-radius:20px;border:0;background:var(--plush);cursor:pointer;text-align:left}
+.badge{font:600 12px/16px var(--text);padding:3px 9px;border-radius:999px;background:var(--lamp);color:var(--lamp-ink)}
+.ph-sm{width:48px;height:48px;border-radius:50%;overflow:hidden;flex:none}
+.ph-sm svg{display:block;width:100%;height:100%}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<main class="stage">
+<div class="device" id="device" role="region" aria-label="Unseen app prototype">
+
+<section class="scr full" id="welcome" aria-labelledby="h-welcome">
+<div class="spot"></div>
+<div class="c" style="margin-top:36px"><h1 class="wm" id="h-welcome" tabindex="-1">Unseen</h1><p class="co dim" style="margin-top:10px">Voices first. Faces only when you both say yes.</p></div>
+<article class="ticket inv"><p class="mt">You're invited</p><p class="dn">Tonight at 8</p><p class="co">A live dating show in your city. Listen in, vote, and when you're ready, take a seat.</p></article>
+<button class="btn s sm" id="taste">Hear a moment from last night</button>
+<div class="tastebox" id="tastebox" hidden><div class="wave" aria-hidden="true"></div><p class="mt c" id="tasteWho">Maya</p><p class="co c" id="tasteSay" aria-live="polite">It is a story. It has a sequel.</p></div>
+<div style="display:flex;flex-direction:column;gap:10px;margin-top:auto">
+<button class="btn w" data-go="dob">Continue with Apple</button>
+<button class="btn w" data-go="dob">Continue with Google</button>
+<button class="btn q" data-go="dob">Use my phone number</button>
+<p class="mt c">18+ only. By continuing you agree to the Terms and Privacy Policy.</p>
+</div>
+</section>
+
+<section class="scr full" id="dob" aria-labelledby="h-dob" hidden>
+<div class="bar"><button class="icon" data-go="welcome" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button><div class="steps" aria-hidden="true"><i class="on"></i><i></i><i></i></div></div>
+<h1 class="dl" id="h-dob" tabindex="-1">When's your birthday?</h1>
+<p class="co dim">Unseen is for adults. We only check ID if you go on air.</p>
+<div class="dobf"><label>Month<input class="inp" id="dM" inputmode="numeric" maxlength="2" value="04"></label><label>Day<input class="inp" id="dD" inputmode="numeric" maxlength="2" value="17"></label><label>Year<input class="inp" id="dY" inputmode="numeric" maxlength="4" value="1993"></label></div>
+<p class="mt" id="dobMsg" role="status">You're 33.</p>
+<button class="btn p" id="dobGo" style="margin-top:auto">Continue</button>
+</section>
+
+<section class="scr full" id="city" aria-labelledby="h-city" hidden>
+<div class="bar"><button class="icon" data-go="dob" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button><div class="steps" aria-hidden="true"><i class="on"></i><i class="on"></i><i></i></div></div>
+<h1 class="dl" id="h-city" tabindex="-1">Where are you listening from?</h1>
+<p class="co dim">The show is local. Everyone on air lives near you.</p>
+<div style="display:flex;flex-direction:column;gap:10px" role="group" aria-label="City">
+<button class="opt" data-opt="city" aria-pressed="true"><span style="flex:1"><b>[Launch city]</b><span class="mt">Live tonight at 8</span></span><span class="lamp"><i></i>Live</span></button>
+<button class="opt" data-opt="city" aria-pressed="false"><span style="flex:1"><b>Somewhere else</b><span class="mt">Join the waitlist and hear highlights</span></span></button>
+</div>
+<button class="btn p" id="cityGo" style="margin-top:auto">Continue</button>
+</section>
+
+<section class="scr full" id="remind" aria-labelledby="h-rem" hidden>
+<div class="bar"><button class="icon" data-go="city" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button><div class="steps" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i></div></div>
+<svg class="bell" viewBox="0 0 120 120" aria-hidden="true"><circle cx="36" cy="84" r="9" style="fill:var(--onair)"/><path d="M36 60a24 24 0 0 1 24 24M36 42a42 42 0 0 1 42 42M36 24a60 60 0 0 1 60 60" style="fill:none;stroke:var(--lamp);stroke-width:6;stroke-linecap:round"/></svg>
+<h1 class="dl c" id="h-rem" tabindex="-1">Never miss doors</h1>
+<p class="co dim c">One reminder at 7:55 pm on show nights, and a heads-up when you're cast. Nothing else.</p>
+<div style="display:flex;flex-direction:column;gap:10px;margin-top:auto">
+<button class="btn p" id="remOn">Turn on reminders</button>
+<button class="btn q" data-go="tonight">Not now</button>
+</div>
+</section>
+
+<section class="scr" id="tonight" aria-labelledby="h-tonight" hidden>
+<div class="row"><h1 class="dl" id="h-tonight" tabindex="-1">Tonight</h1><span class="sp"></span><span class="mt" id="remChip">Show 8 to 11 pm</span></div>
+<article class="card" aria-label="On air now">
+<div class="row"><span class="lamp"><i></i>On air</span><span class="mt">Date 4 of 12</span><span class="sp"></span><span class="mt"><span data-count>142</span> in the room</span></div>
+<div class="pair"><div class="av on" aria-hidden="true">M</div><div class="av" aria-hidden="true">T</div></div>
+<p class="dn c">Maya, 29 and Theo, 31</p>
+<div class="wave" aria-hidden="true"></div>
+<p class="mt c">6 minutes left, hosted by Nova (AI)</p>
+<button class="btn p" data-go="live">Listen in</button>
+</article>
+<div class="card" id="newHere"><div class="row"><h2 class="hl">New here?</h2><span class="sp"></span><button class="icon" id="nhX" aria-label="Dismiss" style="width:36px;height:36px"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg></button></div><p class="co dim">Two strangers talk for 8 minutes. You listen, vote and send questions. If they both choose to, they see each other.</p></div>
+<article class="ticket" aria-label="Your seat">
+<div id="seatNone"><h2 class="hl">Want a seat on the show?</h2><p class="co dim" style="margin-top:6px">Pick the nights you're free. We'll cast you with someone compatible, and you confirm on the day.</p><button class="btn s sm" style="margin-top:14px" data-seat>Request a seat</button></div>
+<div id="seatReq" hidden><p class="mt">Seat requested</p><p class="hl" style="margin:4px 0">Thursday or Friday</p><p class="mt">We'll cast by Wednesday and ask you to confirm on the day.</p></div>
+</article>
+<h2 class="ttl">Up next</h2>
+<div>
+<div class="li"><span class="tm">9:26</span><span class="dn">Sam, 29</span><span class="mt">and someone new</span></div>
+<div class="li"><span class="tm">9:38</span><span class="dn">Nadia, 27</span><span class="mt">and someone new</span></div>
+<div class="li"><span class="tm">9:50</span><span class="dn">Dev, 30</span><span class="mt">and someone new</span></div>
+</div>
+</section>
+
+<section class="scr full" id="live" aria-labelledby="h-live" hidden>
+<div class="spot"></div>
+<div class="bar"><button class="icon" data-go="tonight" data-mini aria-label="Minimize and keep listening"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><span class="lamp"><i></i>On air</span><span class="mt">Date 4 of 12</span><span class="sp"></span><span class="mt"><span data-count>142</span> in the room</span></div>
+<h1 class="sr" id="h-live" tabindex="-1">Live room: Maya and Theo</h1>
+<div class="host"><div class="nring" id="nRing" aria-hidden="true"></div><p class="nlab">Nova (AI), your host</p></div>
+<div class="seats"><div class="seat"><div class="orb" id="orbM" aria-hidden="true">M</div><p class="dn">Maya, 29</p><p class="mt">she/her</p></div><div class="seat"><div class="orb" id="orbT" aria-hidden="true">T</div><p class="dn">Theo, 31</p><p class="mt">he/him</p></div></div>
+<div class="surt" aria-label="Live captions"><p class="who" id="sWho">Nova (AI)</p><p class="now" id="sNow">Good evening, room.</p></div>
+<div class="row"><span class="mt" id="liveTime">5:40 left</span><span class="sp"></span><span class="mt">Lightning round <span id="goalPct">64%</span></span></div>
+<div class="prog fil"><i id="goalBar" style="width:64%"></i></div>
+<div class="poll" id="poll" hidden><p class="mt" style="color:var(--nova)">Nova asks the room</p><h2 class="hl">Second date?</h2><div class="row"><button class="btn s sm" data-vote aria-pressed="false">Yes</button><button class="btn s sm" data-vote aria-pressed="false">Not yet</button></div><p class="mt" id="pollNote">Results show after they decide.</p></div>
+<div class="result" id="result" hidden><p class="dl">It's mutual.</p><p class="co dim">Maya and Theo chose to keep their photos between them.</p><div class="row"><span class="mt">The room's verdict</span><span class="sp"></span><span class="hl">78% yes</span></div><div class="prog"><i style="width:78%"></i></div></div>
+<div class="row" id="upnext" hidden><span class="mt">Up next: Sam, 29 and someone new</span><span class="sp"></span><span class="mt" id="nextIn">0:45</span></div>
+</section>
+
+<section class="scr full" id="getseat" aria-labelledby="h-gs" hidden>
+<div class="bar"><button class="icon" data-go="tonight" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+<h1 class="dl" id="h-gs" tabindex="-1">Get on the show</h1>
+<p class="co dim">Listening stays free. To go on air, we check that everyone you'll meet is a real adult.</p>
+<ol class="check"><li><span class="num" id="ck1">1</span><span style="flex:1"><span class="hl" style="display:block">Verify your ID</span><span class="mt">About 2 minutes</span></span></li><li><span class="num" id="ck2">2</span><span style="flex:1"><span class="hl" style="display:block">Make your blind card</span><span class="mt">About 5 minutes</span></span></li><li><span class="num">3</span><span style="flex:1"><span class="hl" style="display:block">Pick your nights</span><span class="mt">Any you're free</span></span></li></ol>
+<button class="btn p" id="gsGo" style="margin-top:auto">Verify my ID</button>
+<button class="btn q" data-toast="We keep the result of your check, not your ID photos, for [retention period].">What we keep, and for how long</button>
+</section>
+
+<section class="scr full" id="verify" aria-label="ID check" hidden>
+<div class="bar"><button class="icon" data-go="getseat" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button><span class="sp"></span><span class="mt">ID check</span></div>
+<div class="col" data-step="0"><h1 class="dl" id="h-v0" tabindex="-1">Why we verify</h1>
+<ul class="facts"><li>Everyone on air is a real person, 18 or over.</li><li>Your ID is checked by our verification partner and never shown to listeners or dates.</li><li>We keep the result, not the photos.</li><li>Verified means we checked identity and age. It isn't a background check.</li></ul>
+<button class="btn p" data-vstep="1" style="margin-top:auto">Start</button><button class="btn q" data-go="tonight">Not now</button></div>
+<div class="col" data-step="1" hidden><h1 class="dl" id="h-v1" tabindex="-1">Your ID</h1><p class="co dim">Lay it flat in good light, with all four corners inside the frame.</p>
+<div class="cam" aria-hidden="true"><div class="frame"></div><div class="idcard"></div><div class="scan"></div></div>
+<button class="btn p" data-vstep="2" style="margin-top:auto">Capture</button></div>
+<div class="col" data-step="2" hidden><h1 class="dl" id="h-v2" tabindex="-1">A quick selfie</h1><p class="co dim">Look at the camera, then turn your head slowly to the left.</p>
+<div class="cam" aria-hidden="true"><div class="oval"></div></div>
+<button class="btn p" data-vstep="3" style="margin-top:auto">Capture</button></div>
+<div class="col c" data-step="3" hidden><div class="spin" aria-hidden="true"></div><h1 class="dl" id="h-v3" tabindex="-1">Checking</h1><p class="co dim">Usually under a minute. You can keep listening, and we'll let you know.</p></div>
+<div class="col c" data-step="4" hidden><div class="okb" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4-3 7.5-7 9-4-1.5-7-5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg></div><h1 class="dl" id="h-v4" tabindex="-1">You're verified</h1><p class="co dim">Real person, 18+, face matches ID. Listeners never see your ID.</p>
+<button class="btn p" data-go="card" style="margin-top:auto">Make my blind card</button></div>
+</section>
+
+<section class="scr full" id="card" aria-label="Blind card" hidden>
+<div class="bar"><button class="icon" id="cardBack" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button><div style="flex:1"><p class="mt" id="cardStep">Step 1 of 6</p><div class="prog" style="margin-top:6px"><i id="cardBar" style="width:17%"></i></div></div></div>
+<div class="col" data-step="1"><h1 class="dl" id="h-c1" tabindex="-1">What should Nova call you?</h1>
+<label class="mt" for="cName">First name</label><input class="field" id="cName" value="Alicia" style="margin-top:-8px">
+<p class="mt" style="margin-top:-8px">This is how Nova introduces you. It can differ from your ID.</p>
+<p class="hl" id="lp">Pronouns, optional</p>
+<div class="chips" id="c1pro" role="group" aria-labelledby="lp" data-single><button class="chip" aria-pressed="true">she/her</button><button class="chip" aria-pressed="false">he/him</button><button class="chip" aria-pressed="false">they/them</button><button class="chip" aria-pressed="false">Add your own</button></div>
+<p class="hl" id="lg">How do you identify?</p>
+<div class="chips" role="group" aria-labelledby="lg" data-single><button class="chip" aria-pressed="true">Woman</button><button class="chip" aria-pressed="false">Man</button><button class="chip" aria-pressed="false">Non-binary</button><button class="chip" aria-pressed="false">Self-describe</button></div>
+<p class="mt">Used for casting. Listeners only see your pronouns.</p>
+<button class="btn p" data-cstep="2" style="margin-top:auto">Next</button></div>
+<div class="col" data-step="2" hidden><h1 class="dl" id="h-c2" tabindex="-1">Who would you like to meet?</h1>
+<div class="chips" role="group" aria-label="Who you'd like to meet"><button class="chip" aria-pressed="true">Men</button><button class="chip" aria-pressed="false">Women</button><button class="chip" aria-pressed="false">Non-binary people</button></div>
+<p class="hl">Ages</p>
+<div class="row" style="gap:14px"><div class="stepper"><button data-age="lo" data-d="-1" aria-label="Youngest age, lower">−</button><output id="ageLo" aria-live="polite">30</output><button data-age="lo" data-d="1" aria-label="Youngest age, higher">+</button></div><span class="mt">to</span><div class="stepper"><button data-age="hi" data-d="-1" aria-label="Oldest age, lower">−</button><output id="ageHi" aria-live="polite">38</output><button data-age="hi" data-d="1" aria-label="Oldest age, higher">+</button></div></div>
+<p class="mt">Only used to cast your dates. What you listen to isn't filtered.</p>
+<button class="btn p" data-cstep="3" style="margin-top:auto">Next</button></div>
+<div class="col" data-step="3" hidden><h1 class="dl" id="h-c3" tabindex="-1">Two things to talk about</h1>
+<label class="hl" for="p1">Ask me about</label><textarea class="field" id="p1" rows="2" data-lint style="margin-top:-8px">the most chaotic road trip I've ever taken</textarea>
+<label class="hl" for="p2">I'm weirdly good at</label><textarea class="field" id="p2" rows="2" data-lint placeholder="Try: naming a song from the first second" style="margin-top:-8px"></textarea>
+<p class="lint" id="lint" role="status" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></svg>Leave out workplaces, streets, schools and numbers. Anyone in your city can listen.</p>
+<button class="btn p" data-cstep="4" style="margin-top:auto">Next</button></div>
+<div class="col" data-step="4" hidden><h1 class="dl" id="h-c4" tabindex="-1">Say hello in 15 seconds</h1>
+<div class="card"><p class="mt" style="color:var(--nova)">Nova's prompt</p><p class="co">Tell us the last thing that made you laugh out loud.</p></div>
+<button class="rec" id="recBtn" data-state="idle">Record</button>
+<p class="mt c" id="recTime" aria-live="polite">0:00 of 0:15</p>
+<div class="recwave" id="recWave" aria-hidden="true"></div>
+<div class="row" id="recDone" hidden><button class="btn s sm" id="recRe">Retake</button><button class="btn p sm" data-cstep="5">Use this</button></div>
+<p class="mt c">Listeners hear this before your date. Re-record anytime.</p></div>
+<div class="col" data-step="5" hidden><h1 class="dl" id="h-c5" tabindex="-1">Photos for the reveal</h1>
+<p class="co dim">Only your date sees these, and only if you both choose reveal. We check that they match your verified selfie.</p>
+<div class="photos3" id="photos3"><div class="slot has"><svg viewBox="0 0 120 180" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><rect width="120" height="180" fill="#f2b27c"/><path d="M33 112c-2-34 8-70 27-70s29 36 27 70z" fill="#4a3358"/><circle cx="60" cy="72" r="22" fill="#2a1f36"/><path d="M12 180c3-36 22-56 48-56s45 20 48 56z" fill="#2a1f36"/></svg><span class="tick">Matches your selfie</span></div><button class="slot" data-slot>Add photo</button><button class="slot" data-slot>Add photo</button></div>
+<button class="btn p" data-cstep="6" style="margin-top:auto">Next</button></div>
+<div class="col" data-step="6" hidden><h1 class="dl" id="h-c6" tabindex="-1">Your call, always</h1>
+<div class="tog"><span style="flex:1"><span class="hl" style="display:block" id="tg1">Show the room my photo after a mutual reveal</span><span class="mt">Off by default. You can change it before any date.</span></span><button class="switch" role="switch" aria-checked="false" aria-labelledby="tg1"></button></div>
+<div class="tog"><span style="flex:1"><span class="hl" style="display:block">Clips</span><span class="mt">We ask you about every clip before anything is posted, and your date has to say yes too.</span></span></div>
+<label class="cb"><input type="checkbox" id="release"><span class="co">I agree to be recorded on air for safety review and for clips we both approve. <span class="mt">Read the on-air release</span></span></label>
+<p class="lint" id="relMsg" role="status" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></svg>Tick the on-air release to go on the show.</p>
+<button class="btn p" id="cardFinish" style="margin-top:auto">Finish my card</button></div>
+<div class="col" data-step="7" hidden><h1 class="dl" id="h-c7" tabindex="-1">This is what the room sees</h1>
+<article class="bcard" aria-label="Your blind card"><div class="row" style="gap:12px"><div class="av" aria-hidden="true">A</div><div><p class="dn" id="pvName">Alicia, 33</p><p class="mt" id="pvPro">she/her</p></div></div>
+<div class="vrow"><button class="playb" aria-label="Play your voice intro" data-toast="Playing your intro."><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" style="fill:currentColor;stroke:none"><path d="M8 5v14l11-7z"/></svg></button><div class="wave sm" aria-hidden="true"></div><span class="mt">0:15</span></div>
+<div><p class="mt">Ask me about</p><p class="bd" id="pvP1"></p></div>
+<div><p class="mt">I'm weirdly good at</p><p class="bd" id="pvP2"></p></div>
+<p class="mt okl"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4-3 7.5-7 9-4-1.5-7-5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>Verified: real person, 18+, face matches ID</p></article>
+<button class="btn p" id="pickNights" style="margin-top:auto">Pick my nights</button></div>
+</section>
+
+<section class="scr full" id="backstage" aria-labelledby="h-back" hidden>
+<div class="bar"><button class="icon" data-go="tonight" aria-label="Close backstage"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button><span class="sp"></span><span class="mt">Backstage</span></div>
+<h1 class="dl" id="h-back" tabindex="-1">You're on at 9:26</h1>
+<p class="mt" style="margin-top:-8px">In <span id="bsCount">3:59</span></p>
+<div class="card"><h2 class="hl">Mic check</h2><div class="meter" aria-hidden="true"><i id="meter"></i></div><p class="co"><span style="color:var(--nova);font-weight:600">Nova</span> Sounds great. Say anything to test.</p></div>
+<div class="card"><p class="mt">You'll be introduced as</p><p class="dn">Alicia, 33</p><p class="mt" style="margin-top:-8px">she/her</p><p class="co">Ask me about the most chaotic road trip I've ever taken.</p></div>
+<div class="card"><h2 class="hl">House rules</h2><ul class="rules"><li>No last names, workplaces or addresses.</li><li>You can leave at any time.</li><li>Your answer at the end is private.</li></ul></div>
+<button class="btn p" data-go="onair">I'm ready</button>
+<button class="btn s" data-sheet="nottonight">Not tonight</button>
+</section>
+
+<section class="scr full" id="onair" aria-labelledby="h-onair" hidden>
+<div class="spot"></div>
+<div class="bar"><span class="lamp"><i></i>You're on air</span><span class="sp"></span><span class="mt" id="oaTime">0:30 left</span></div>
+<div class="banner" id="moment" role="status" hidden></div>
+<div class="c" style="padding:16px 0 0"><div class="orb xl talk" aria-hidden="true">D</div><h1 class="dn" id="h-onair" tabindex="-1" style="margin-top:8px">Daniel, 35</h1><p class="mt">he/him</p><p class="co" style="margin-top:8px">I'm weirdly good at naming a song from the first second.</p></div>
+<div class="card"><p class="mt" style="color:var(--nova)">Nova asks, from the audience</p><p class="bd">What's a small thing that reliably makes your day?</p></div>
+<div class="row"><span class="mt">Applause from the room</span><span class="sp"></span><span class="hl" id="applause">24</span></div>
+<p class="mt">Only questions Nova picks reach you. The chat stays off your screen.</p>
+<div class="row"><button class="btn s sm" id="muteBtn" aria-pressed="false">Mute</button><button class="btn s sm" id="momentBtn">Need a moment</button></div>
+<button class="btn s" data-sheet="leave">Leave date</button>
+<button class="btn d sm" data-sheet="report"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4h11l-2 4 2 4H5"/></svg>Report Daniel</button>
+</section>
+
+<section class="scr full" id="decide" aria-labelledby="h-dec" hidden>
+<p class="mt" style="margin-top:24px">Time's up</p>
+<h1 class="dl" id="h-dec" tabindex="-1">Would you like to see Daniel?</h1>
+<p class="co">Only you can see this screen.</p>
+<div style="display:flex;flex-direction:column;gap:12px;margin:12px 0">
+<button class="choice" data-choose="reveal" aria-pressed="false">Reveal</button>
+<button class="choice" data-choose="unseen" aria-pressed="false">Keep it unseen</button>
+</div>
+<div class="card"><p class="co">If you both choose reveal, your photos unlock for each other at the same moment. If not, nobody learns who chose what.</p></div>
+<p class="mt" id="decNote" role="status"></p>
+</section>
+
+<section class="scr full" id="reveal" aria-labelledby="h-rev" hidden>
+<div class="rv dark" aria-hidden="true"><div class="seats" style="gap:24px"><div class="orb hush">A</div><div class="orb hush">D</div></div><p class="co dim">Both answers are in</p></div>
+<div class="rv day">
+<p class="mt" style="margin-top:8px">Thursday's show, date 7</p>
+<h1 class="dxl" id="h-rev" tabindex="-1">It's mutual.</h1>
+<p class="co">You both chose to see each other.</p>
+<div class="prints">
+<figure class="print"><svg viewBox="0 0 120 150" role="img" aria-label="Alicia's photo, placeholder"><rect width="120" height="150" fill="#f2b27c"/><path d="M33 98c-2-30 8-62 27-62s29 32 27 62z" fill="#4a3358"/><circle cx="60" cy="62" r="21" fill="#2a1f36"/><path d="M14 150c3-30 22-48 46-48s43 18 46 48z" fill="#2a1f36"/></svg><figcaption>Alicia, 33</figcaption></figure>
+<figure class="print"><svg viewBox="0 0 120 150" role="img" aria-label="Daniel's photo, placeholder"><rect width="120" height="150" fill="#b7beff"/><path d="M38 56c0-15 10-24 22-24s22 9 22 24z" fill="#4a3358"/><circle cx="60" cy="62" r="22" fill="#2a1f36"/><path d="M10 150c4-32 24-50 50-50s46 18 50 50z" fill="#2a1f36"/></svg><figcaption>Daniel, 35</figcaption></figure>
+</div>
+<p class="co">Your private chat is open. Nova left you a note from the date.</p>
+<button class="btn p" data-go="dates" data-open="chat">Say hello</button>
+<button class="btn q" data-go="recap">See your recap</button>
+</div>
+</section>
+
+<section class="scr full" id="nomatch" aria-labelledby="h-nm" hidden>
+<h1 class="dl" id="h-nm" tabindex="-1" style="margin-top:24px">Not a match this time</h1>
+<p class="bd">It takes two yeses. Nobody will see who chose what.</p>
+<div class="card"><p class="mt">From your recap</p><p class="bd">The room loved your road-trip story: 31 rounds of applause.</p></div>
+<button class="btn p" data-go="recap">See your recap</button>
+<button class="btn s" data-seat>Request another seat</button>
+<button class="btn q" data-go="tonight">Back to the show</button>
+</section>
+
+<section class="scr full" id="recap" aria-labelledby="h-recap" hidden>
+<div class="bar"><button class="icon" data-go="tonight" aria-label="Close recap"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button><span class="sp"></span><span class="mt">Thursday's show, date 7</span></div>
+<h1 class="dl" id="h-recap" tabindex="-1">Your recap</h1>
+<div class="stats"><div class="stat"><b>31</b><span class="mt">rounds of applause</span></div><div class="stat"><b>52%</b><span class="mt">of the talking was you</span></div><div class="stat"><b>81%</b><span class="mt">of the room said yes</span></div></div>
+<div class="card"><p class="mt" style="color:var(--nova)">Notes from Nova</p><p class="co"><b>What landed:</b> your road-trip story got the biggest laugh of the night.</p><p class="co"><b>Try next time:</b> ask one follow-up before you change the subject.</p></div>
+<h2 class="ttl">Your clip</h2>
+<div class="clip" role="img" aria-label="Clip preview. Alicia and Daniel, Thursday's show: and that's how I ended up driving a goat to Tulsa."><p class="clipwm">Unseen</p><p class="cliptx">“…and that’s how I ended up driving a goat to Tulsa.”</p><div><div class="wave sm"></div><p class="clipnm">Alicia and Daniel</p><p class="mt">Thursday's show</p></div></div>
+<p class="mt c" id="clipState" role="status">A clip is only posted if you both say yes. Daniel hasn't answered yet.</p>
+<div class="row"><button class="btn s sm" id="clipNo">Don't share</button><button class="btn p sm" id="clipYes">Approve clip</button></div>
+</section>
+
+<section class="scr" id="dates" aria-labelledby="h-dates" hidden>
+<div id="datesList" style="display:flex;flex-direction:column;gap:16px">
+<h1 class="dl" id="h-dates" tabindex="-1">Dates</h1>
+<div class="ticket"><p class="mt">Your next seat</p><p class="hl">None yet</p><button class="btn s sm" data-seat style="margin-top:8px">Request a seat</button></div>
+<h2 class="ttl" style="margin-top:8px">Matches</h2>
+<button class="match" id="openChat"><span class="ph-sm" aria-hidden="true"><svg viewBox="0 0 120 120"><rect width="120" height="120" fill="#b7beff"/><circle cx="60" cy="50" r="24" fill="#2a1f36"/><path d="M14 120c4-30 22-46 46-46s42 16 46 46z" fill="#2a1f36"/></svg></span><span style="flex:1"><span class="dn" style="display:block">Daniel, 35</span><span class="mt">New match from Thursday's show</span></span><span class="badge">New</span></button>
+<h2 class="ttl" style="margin-top:8px">Past dates</h2>
+<div><div class="li"><span class="co" style="flex:1">Thursday with Daniel</span><span class="mt">Match</span></div><div class="li"><span class="co" style="flex:1">Last Sunday with Ren</span><span class="mt">Not this time</span></div></div>
+</div>
+<div id="chat" hidden style="display:flex;flex-direction:column;gap:12px;min-height:100%">
+<div class="bar"><button class="icon" id="chatBack" aria-label="Back to Dates"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button><span class="ph-sm" aria-hidden="true"><svg viewBox="0 0 120 120"><rect width="120" height="120" fill="#b7beff"/><circle cx="60" cy="50" r="24" fill="#2a1f36"/><path d="M14 120c4-30 22-46 46-46s42 16 46 46z" fill="#2a1f36"/></svg></span><span style="flex:1;min-width:0"><h1 class="dn" id="h-chat" tabindex="-1">Daniel, 35</h1><span class="mt">Revealed on Thursday's show</span></span><button class="icon" data-sheet="more" aria-label="More options"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h.01M12 12h.01M19 12h.01" stroke-width="3"/></svg></button></div>
+<div class="thread" id="thread"><p class="note"><b>Nova, from your date</b>You two never settled the pineapple pizza debate.</p></div>
+<button class="chip" id="starter" style="align-self:flex-start">Pick up the pineapple debate</button>
+<button class="btn q sm" style="width:auto;align-self:flex-start;padding:0" data-toast="Safety tips open here: meet somewhere public, share your plans with a friend, keep your own ride home.">Planning to meet? Safety tips</button>
+<form class="composer" id="composer"><label class="sr" for="msg">Message Daniel</label><input id="msg" placeholder="Message Daniel" autocomplete="off"><button class="icon" style="background:var(--lamp);color:var(--lamp-ink)" aria-label="Send"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 3L3 10.5l7.5 3L13.5 21z"/><path d="M10.5 13.5L21 3"/></svg></button></form>
+</div>
+</section>
+
+<nav class="dock" id="dock" aria-label="Room actions" hidden>
+<button class="dk" data-sheet="ask"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .8-1 1.5M12 16.5h.01"/></svg></span>Ask</button>
+<button class="dk" data-sheet="gift"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="9" width="16" height="11" rx="1.5"/><path d="M12 9v11M4 13h16M12 9c-1.5-3-5-3-5-1s3 1 5 1zM12 9c1.5-3 5-3 5-1s-3 1-5 1z"/></svg></span>Gesture</button>
+<button class="dk" data-sheet="chat"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg></span>Chat</button>
+<button class="dk" data-seat><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v3a3 3 0 0 0 0 6v3H4v-3a3 3 0 0 0 0-6z"/></svg></span>Get a seat</button>
+</nav>
+<div class="nudge" id="nudge" role="region" aria-label="Seats this week" hidden><p class="dn">Could that be you?</p><p class="co dim">Seats are open Thursday and Friday. Getting ready takes about 7 minutes.</p><div class="row"><button class="btn q sm" id="nudgeNo">Not now</button><button class="btn p sm" data-seat>Request a seat</button></div></div>
+
+<nav class="tabs" id="tabs" aria-label="Main" hidden>
+<button class="tab" data-tab="tonight"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M8.5 15.5a5 5 0 0 1 0-7M15.5 8.5a5 5 0 0 1 0 7M5.6 18.4a9 9 0 0 1 0-12.8M18.4 5.6a9 9 0 0 1 0 12.8"/></svg>Tonight</button>
+<button class="tab" data-tab="dates"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v3a3 3 0 0 0 0 6v3H4v-3a3 3 0 0 0 0-6z"/></svg>Dates</button>
+<button class="tab" data-tab="you"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>You</button>
+</nav>
+<div class="mini" id="mini" hidden><span class="lamp"><i></i></span><span style="flex:1;min-width:0"><span class="hl" style="display:block;font-size:15px">Maya and Theo</span><span class="mt">On air, date 4 of 12</span></span><button class="btn p sm" style="width:auto" data-go="live">Open</button></div>
+
+<div class="scrim" id="scrim"></div>
+
+<div class="sheet" id="sh-gift" role="dialog" aria-modal="true" aria-labelledby="t-gift"><div class="grab"></div>
+<h2 class="ttl" id="t-gift">Send a gesture</h2>
+<p class="co dim">Gestures fill the lightning round, and Maya and Theo each get a share. You have <b style="color:var(--pearl)"><span id="coins">40</span> coins</b>.</p>
+<button class="gift" data-gift="10" data-name="Applause"><b>Applause</b><span class="mt">10 coins, [PRICE]</span></button>
+<button class="gift" data-gift="25" data-name="A rose"><b>A rose</b><span class="mt">25 coins, [PRICE]</span></button>
+<button class="gift" data-gift="60" data-name="An encore"><b>An encore</b><span class="mt">60 coins, [PRICE]</span></button>
+<div class="card" id="needCoins" hidden><p class="co">You need <span id="short">20</span> more coins for that. Coin packs start at [PRICE].</p><button class="btn s sm" data-toast="The App Store or Google Play purchase sheet opens here.">See coin packs</button></div>
+<p class="mt">Your spending summary and an optional monthly limit are in Wallet.</p>
+<button class="btn q" data-close>Done</button></div>
+
+<div class="sheet" id="sh-ask" role="dialog" aria-modal="true" aria-labelledby="t-ask"><div class="grab"></div>
+<h2 class="ttl" id="t-ask">Ask Maya and Theo something</h2>
+<p class="co dim">Nova picks a few questions from the room. Personal details are removed before anything is read out.</p>
+<label class="mt" for="q">Your question</label>
+<input class="field" id="q" placeholder="What's your go-to karaoke song?">
+<button class="btn p" id="askSend">Send to Nova</button>
+<button class="btn q" data-close>Cancel</button></div>
+
+<div class="sheet" id="sh-chat" role="dialog" aria-modal="true" aria-labelledby="t-chat"><div class="grab"></div>
+<h2 class="ttl" id="t-chat">Room chat</h2>
+<p class="mt">Maya and Theo can't see this. Keep it kind; personal details are hidden automatically.</p>
+<div class="rc" id="rc"><p><b>Jordan</b>a fringe she did not agree to, I'm gone</p><p><b>Sam</b>Theo's laugh though</p><p class="mod">A message was hidden for sharing personal details.</p><p><b>Priya</b>second date or I riot</p></div>
+<form class="composer" id="rcForm"><label class="sr" for="rcIn">Message the room</label><input id="rcIn" placeholder="Say something kind" autocomplete="off"><button class="icon" style="background:var(--lamp);color:var(--lamp-ink)" aria-label="Send to the room"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 3L3 10.5l7.5 3L13.5 21z"/><path d="M10.5 13.5L21 3"/></svg></button></form>
+<button class="btn q" data-close>Close</button></div>
+
+<div class="sheet" id="sh-seat" role="dialog" aria-modal="true" aria-labelledby="t-seat"><div class="grab"></div>
+<div id="seatForm" style="display:flex;flex-direction:column;gap:14px">
+<h2 class="ttl" id="t-seat">Request a seat</h2>
+<p class="mt">Which nights work? Pick any.</p>
+<div class="chips" role="group" aria-label="Nights"><button class="chip" aria-pressed="true">Thu</button><button class="chip" aria-pressed="true">Fri</button><button class="chip" aria-pressed="false">Sat</button><button class="chip" aria-pressed="false">Sun</button></div>
+<div class="card"><div class="row"><span class="co">You'd like to meet</span><span class="sp"></span><button class="btn q sm" style="width:auto;padding:0" data-toast="Your preferences open here.">Change</button></div><p class="hl">Men, 30 to 38</p></div>
+<p class="mt">You're verified and your blind card is ready.</p>
+<button class="btn p" id="seatGo">Request seat</button>
+<p class="mt c">We'll cast by Wednesday and ask you to confirm on the day.</p>
+</div>
+<div id="seatDone" hidden style="display:flex;flex-direction:column;gap:14px">
+<h2 class="ttl">Seat requested</h2>
+<p class="co dim">Thursday or Friday. By Wednesday you'll know which night and what time you're on.</p>
+<button class="btn p" id="skipThu">Skip ahead to Thursday, backstage</button>
+<p class="mt c">Prototype shortcut</p>
+<button class="btn q" id="seatDoneBtn">Done</button>
+</div></div>
+
+<div class="sheet" id="sh-nottonight" role="dialog" aria-modal="true" aria-labelledby="t-nt"><div class="grab"></div>
+<h2 class="ttl" id="t-nt">No problem</h2>
+<p class="co dim">A standby dater takes your seat. It doesn't count against you, and you can request another night any time.</p>
+<button class="btn p" id="ntConfirm">Give up my seat</button>
+<button class="btn q" data-close>Stay backstage</button></div>
+
+<div class="sheet" id="sh-leave" role="dialog" aria-modal="true" aria-labelledby="t-leave"><div class="grab"></div>
+<h2 class="ttl" id="t-leave">Leave this date?</h2>
+<p class="co dim">Nova closes the date kindly. Nobody hears a reason unless you choose to report.</p>
+<button class="btn s" id="leaveGo">Leave date</button>
+<button class="btn d sm" data-sheet="report">Leave and report</button>
+<button class="btn q" data-close>Stay</button></div>
+
+<div class="sheet" id="sh-report" role="dialog" aria-modal="true" aria-labelledby="t-rep"><div class="grab"></div>
+<h2 class="ttl" id="t-rep">Report Daniel</h2>
+<p class="co dim">Nova pauses the date and a live moderator listens in. You'll never be cast with Daniel again.</p>
+<div class="chips" role="group" aria-label="What happened"><button class="chip" aria-pressed="false">Sexual comments</button><button class="chip" aria-pressed="false">Harassment</button><button class="chip" aria-pressed="false">Asked for personal details</button><button class="chip" aria-pressed="false">Something else</button></div>
+<button class="btn d" id="reportGo">Pause and report</button>
+<button class="btn q" data-close>Cancel</button></div>
+
+<div class="sheet" id="sh-more" role="dialog" aria-modal="true" aria-labelledby="t-more"><div class="grab"></div>
+<h2 class="ttl" id="t-more">Daniel</h2>
+<button class="btn s" data-sheet="loop">Close the loop</button>
+<button class="btn d sm" data-toast="Reporting opens the same sheet you saw on air.">Report</button>
+<button class="btn d sm" data-toast="Blocked. Daniel can't message you, hear your dates or be cast with you.">Block</button>
+<button class="btn q" data-close>Cancel</button></div>
+
+<div class="sheet" id="sh-loop" role="dialog" aria-modal="true" aria-labelledby="t-loop"><div class="grab"></div>
+<h2 class="ttl" id="t-loop">Close the loop with Daniel</h2>
+<p class="co dim">We'll send this note and archive the chat. Edit it first if you like.</p>
+<label class="sr" for="loopNote">Your note</label>
+<textarea class="field" id="loopNote" rows="4">Thanks for Thursday, I really enjoyed the date. I don't think we're a match, but I hope your next one is great.</textarea>
+<button class="btn p" id="loopSend">Send and close</button>
+<button class="btn q" data-close>Not now</button></div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+</div>
+
+<aside class="panel" aria-label="Prototype controls">
+<h1>Unseen</h1>
+<p>Version 2: the whole path from first open to first message. Tap through inside the phone, or jump anywhere.</p>
+<h2>Join</h2>
+<ol class="jump"><li><button data-jump="welcome"><span>1</span>Welcome</button></li><li><button data-jump="dob"><span>2</span>Birthday</button></li><li><button data-jump="city"><span>3</span>City</button></li><li><button data-jump="remind"><span>4</span>Reminders</button></li></ol>
+<h2>Listen</h2>
+<ol class="jump"><li><button data-jump="tonight"><span>5</span>Tonight</button></li><li><button data-jump="live"><span>6</span>Live room</button></li><li><button data-jump="end"><span>7</span>End of a date</button></li></ol>
+<h2>Step up</h2>
+<ol class="jump"><li><button data-jump="getseat"><span>8</span>Get on the show</button></li><li><button data-jump="verify"><span>9</span>ID check</button></li><li><button data-jump="card"><span>10</span>Blind card</button></li></ol>
+<h2>On air</h2>
+<ol class="jump"><li><button data-jump="backstage"><span>11</span>Backstage</button></li><li><button data-jump="onair"><span>12</span>On air, as a dater</button></li><li><button data-jump="decide"><span>13</span>Your decision</button></li><li><button data-jump="outcome"><span>14</span>The outcome</button></li></ol>
+<h2>After</h2>
+<ol class="jump"><li><button data-jump="recap"><span>15</span>Recap and clip</button></li><li><button data-jump="dates"><span>16</span>Dates and chat</button></li></ol>
+<h2>Daniel's answer</h2>
+<div class="seg" role="group" aria-label="Daniel's answer"><button data-partner="1" aria-pressed="true">Reveal</button><button data-partner="0" aria-pressed="false">Keep it unseen</button></div>
+<h2>Sound</h2>
+<div class="seg" role="group" aria-label="Sound"><button data-sound="0" aria-pressed="true">Off</button><button data-sound="1" aria-pressed="false">On</button></div>
+<p style="margin-top:8px">Dates run fast-forward here. Prices, the launch city and retention periods are placeholders until they're set.</p>
+<button class="reset" id="reset">Start over</button>
+</aside>
+</main>
+
+<script>
+(function(){
+var $=function(s){return document.querySelector(s)},$$=function(s){return Array.prototype.slice.call(document.querySelectorAll(s))};
+var device=$('#device');
+var S={coins:40,goal:64,partner:true,seat:false,listening:false,verified:false,carded:false,recorded:false,nudged:false,sound:false,cur:'welcome'};
+var T=[];
+function clr(){T.forEach(function(t){clearInterval(t);clearTimeout(t)});T=[]}
+function every(f,ms){var t=setInterval(f,ms);T.push(t);return t}
+function after(f,ms){var t=setTimeout(f,ms);T.push(t);return t}
+var reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function fmt(s){s=Math.max(0,Math.round(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+var th;
+function toast(m){var t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(th);th=setTimeout(function(){t.classList.remove('on')},2800)}
+var LINT=/\b(work|works|office|street|st|ave|avenue|road|rd|school|hospital|apartment|apt)\b|\d{3,}/i;
+var PORT='<svg viewBox="0 0 120 180" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><rect width="120" height="180" fill="#f2b27c"/><path d="M33 112c-2-34 8-70 27-70s29 36 27 70z" fill="#4a3358"/><circle cx="60" cy="72" r="22" fill="#2a1f36"/><path d="M12 180c3-36 22-56 48-56s45 20 48 56z" fill="#2a1f36"/></svg>';
+var ac=null;
+function tone(fs,step,len){if(!S.sound)return;try{ac=ac||new (window.AudioContext||window.webkitAudioContext)();if(ac.state==='suspended')ac.resume();var t0=ac.currentTime+.03;fs.forEach(function(f,i){var o=ac.createOscillator(),g=ac.createGain(),t=t0+i*step;o.type='sine';o.frequency.value=f;g.gain.setValueAtTime(.0001,t);g.gain.exponentialRampToValueAtTime(.12,t+.03);g.gain.exponentialRampToValueAtTime(.0001,t+len);o.connect(g);g.connect(ac.destination);o.start(t);o.stop(t+len+.05)})}catch(e){}}
+var SND={sting:function(){tone([523.25,659.25,783.99],.09,.5)},chime:function(){tone([392,523.25,659.25,1046.5],.18,1.3)},tick:function(){tone([987.77],0,.2)},end:function(){tone([659.25,523.25],.16,.6)}};
+var lastFocus=null;
+function closeSheets(){$$('.sheet.open').forEach(function(s){s.classList.remove('open')});$('#scrim').classList.remove('on')}
+function sheet(id){
+  closeSheets();var s=$('#sh-'+id);if(!s)return;
+  var ae=document.activeElement;if(!(ae&&ae.closest&&ae.closest('.sheet')))lastFocus=ae;
+  if(id==='seat'){$('#seatForm').hidden=S.seat;$('#seatDone').hidden=!S.seat}
+  if(id==='gift')$('#needCoins').hidden=true;
+  s.classList.add('open');$('#scrim').classList.add('on');
+  var f=s.querySelector('button,input,textarea');if(f)setTimeout(function(){f.focus()},80);
+}
+function shut(){closeSheets();if(lastFocus&&lastFocus.focus)lastFocus.focus();lastFocus=null}
+function focusHead(id,opts){if(opts&&opts.nofocus)return;var scr=$('#'+id),h=(id==='dates'&&opts&&opts.chat)?$('#h-chat'):(scr.querySelector('[data-step]:not([hidden]) [tabindex="-1"]')||scr.querySelector('[tabindex="-1"]'));if(h)h.focus({preventScroll:true})}
+function steps(sec,n){$$('#'+sec+' [data-step]').forEach(function(d){d.hidden=+d.dataset.step!==n});$('#'+sec).scrollTop=0}
+function updateChecklist(){var a=$('#ck1'),b=$('#ck2');a.classList.toggle('done',S.verified);a.textContent=S.verified?'✓':'1';b.classList.toggle('done',S.carded);b.textContent=S.carded?'✓':'2';$('#gsGo').textContent=!S.verified?'Verify my ID':!S.carded?'Make my blind card':'Pick my nights'}
+function requestSeat(){if(!S.verified||!S.carded)go('getseat');else sheet('seat')}
+var tabbed={tonight:1,dates:1};
+function say(w,t){var who=$('#sWho');who.textContent=w==='Nova'?'Nova (AI)':w;who.classList.toggle('n',w==='Nova');$('#sNow').textContent=t;$('#orbM').classList.toggle('talk',w==='Maya');$('#orbT').classList.toggle('talk',w==='Theo');$('#nRing').classList.toggle('talk',w==='Nova')}
+var lines=[['Nova','Maya, your card says to ask about your worst haircut. Go on.'],['Maya','So I told the barber to surprise me.'],['Theo','That is either very brave or a cry for help.'],['Maya','Both. I left with a fringe I did not agree to.'],['Nova','A question from the room. Theo, what would you have asked for?'],['Theo','Honestly? Whatever she got. It sounds like a story.'],['Maya','It is a story. It has a sequel.'],['Theo','Then I need the sequel. Second date, minimum.']];
+function startNext(){var n=45;$('#upnext').hidden=false;$('#nextIn').textContent=fmt(n);every(function(){n--;$('#nextIn').textContent=fmt(n);if(n<=0)go('live')},1000)}
+function endDate(){
+  SND.end();$('#liveTime').textContent='Deciding';$('#poll').hidden=true;
+  $$('#live .orb').forEach(function(x){x.classList.add('hush')});
+  say('Nova',"That's time. Maya and Theo are deciding, privately.");
+  after(function(){
+    $('#result').hidden=false;SND.chime();
+    say('Nova',"It's mutual. What happens next is theirs.");
+    after(function(){
+      if(!S.nudged){S.nudged=true;$('#nudge').hidden=false;say('Nova','If that sounded like your kind of night, there are seats this week.')}
+      startNext();
+    },3000);
+  },4200);
+}
+var cardN=1;
+function fillPreview(){var nm=$('#cName').value.trim()||'Alicia';$('#pvName').textContent=nm+', 33';var pr=$('#c1pro [aria-pressed="true"]');$('#pvPro').textContent=(pr&&pr.textContent!=='Add your own')?pr.textContent:'';$('#pvP1').textContent=$('#p1').value.trim()||'Something you love talking about';$('#pvP2').textContent=$('#p2').value.trim()||'Naming a song from the first second'}
+function cstep(n){cardN=n;steps('card',n);$('#cardStep').textContent=n<7?'Step '+n+' of 6':'Your blind card';$('#cardBar').style.width=Math.round(Math.min(n,6)/6*100)+'%';if(n===7)fillPreview();focusHead('card',{})}
+function vstep(n){steps('verify',n);focusHead('verify',{});if(n===3)after(function(){S.verified=true;updateChecklist();vstep(4)},1800)}
+function lintBad(){return LINT.test($('#p1').value)||LINT.test($('#p2').value)}
+function sparks(){if(reduce)return;for(var i=0;i<7;i++){(function(i){var s=document.createElement('span');s.className='spark';s.style.left=(36+Math.random()*28)+'%';s.style.animationDelay=(i*.08)+'s';device.appendChild(s);setTimeout(function(){s.remove()},2200)})(i)}}
+var enter={
+  live:function(o){
+    S.listening=true;SND.sting();
+    $('#result').hidden=true;$('#upnext').hidden=true;$('#poll').hidden=true;
+    $$('#live .orb').forEach(function(x){x.classList.remove('hush')});
+    $$('[data-vote]').forEach(function(x){x.setAttribute('aria-pressed','false')});$('#pollNote').textContent='Results show after they decide.';
+    if(o.end){endDate();return}
+    var left=340,i=1;say(lines[0][0],lines[0][1]);$('#liveTime').textContent=fmt(left)+' left';
+    every(function(){var l=lines[i%lines.length];say(l[0],l[1]);if(i===4)$('#poll').hidden=false;i++},3200);
+    every(function(){left-=9;$('#liveTime').textContent=fmt(left)+' left';if(left<=0){clr();endDate()}},1000);
+    every(function(){var n=138+Math.floor(Math.random()*12);$$('[data-count]').forEach(function(e){e.textContent=n})},4000);
+  },
+  verify:function(o){vstep(o.step||0)},
+  card:function(o){cstep(o.step||1)},
+  backstage:function(){var s=239;$('#bsCount').textContent=fmt(s);every(function(){s--;$('#bsCount').textContent=fmt(s)},1000);if(!reduce)every(function(){$('#meter').style.width=Math.round(20+Math.random()*70)+'%'},140)},
+  onair:function(){SND.sting();var s=30;$('#moment').hidden=true;$('#oaTime').textContent=fmt(s)+' left';every(function(){s--;$('#oaTime').textContent=fmt(s)+' left';if(s<=0)go('decide')},1000);every(function(){if(Math.random()<.5){var a=$('#applause');a.textContent=String(+a.textContent+1)}},1500)},
+  decide:function(){var s=60;$$('.choice').forEach(function(c){c.setAttribute('aria-pressed','false')});$('#decNote').textContent=s+' seconds left. No answer counts as keep it unseen.';every(function(){s--;$('#decNote').textContent=Math.max(s,0)+' seconds left. No answer counts as keep it unseen.';if(s<=0)go('nomatch')},1000)},
+  reveal:function(){var r=$('#reveal');r.classList.remove('lit');after(function(){r.classList.add('lit');SND.chime();try{if(navigator.vibrate)navigator.vibrate(30)}catch(e){}},reduce?50:900)},
+  dates:function(o){var c=!!(o&&o.chat);$('#chat').hidden=!c;$('#datesList').hidden=c;device.classList.toggle('chat-open',c)}
+};
+function go(id,opts){
+  opts=opts||{};clr();closeSheets();lastFocus=null;
+  if(id==='outcome')id=S.partner?'reveal':'nomatch';
+  S.cur=id;
+  $$('.scr').forEach(function(s){s.hidden=s.id!==id});
+  if(id!=='dates')device.classList.remove('chat-open');
+  var chat=id==='dates'&&!!opts.chat;
+  $('#tabs').hidden=!tabbed[id]||chat;
+  $$('.tab').forEach(function(t){if(t.dataset.tab===id)t.setAttribute('aria-current','page');else t.removeAttribute('aria-current')});
+  var mini=S.listening&&!!tabbed[id]&&!chat;$('#mini').hidden=!mini;device.classList.toggle('has-mini',mini);
+  $('#dock').hidden=id!=='live';$('#nudge').hidden=true;
+  var key=(id==='live'&&opts.end)?'end':(id==='reveal'||id==='nomatch')?'outcome':id;
+  $$('.jump button').forEach(function(b){b.setAttribute('aria-current',String(b.dataset.jump===key))});
+  if(enter[id])enter[id](opts);
+  $('#'+id).scrollTop=0;
+  focusHead(id,opts);
+}
+device.addEventListener('click',function(e){
+  var b=e.target.closest('button');if(!b||!device.contains(b))return;
+  var d=b.dataset;
+  if(d.go){if(b.hasAttribute('data-mini'))S.listening=true;go(d.go,{chat:d.open==='chat'});return}
+  if(b.hasAttribute('data-seat')){requestSeat();return}
+  if(d.sheet){sheet(d.sheet);return}
+  if(b.hasAttribute('data-close')){shut();return}
+  if(d.toast){toast(d.toast);return}
+  if(d.vstep){vstep(+d.vstep);return}
+  if(d.cstep){var n=+d.cstep;if(n===4&&lintBad()){$('#lint').hidden=false;toast('Edit the highlighted answer first.');return}cstep(n);return}
+  if(d.tab){if(d.tab==='you'){toast("Your profile isn't part of this prototype.");return}go(d.tab);return}
+  if(d.opt){$$('[data-opt="'+d.opt+'"]').forEach(function(x){x.setAttribute('aria-pressed',String(x===b))});return}
+  if(b.hasAttribute('data-vote')){b.parentElement.querySelectorAll('button').forEach(function(x){x.setAttribute('aria-pressed',String(x===b))});$('#pollNote').textContent='Vote counted. Results show after they decide.';return}
+  if(d.gift){var c=+d.gift;if(c>S.coins){$('#short').textContent=c-S.coins;$('#needCoins').hidden=false;return}
+    S.coins-=c;$('#coins').textContent=S.coins;S.goal=Math.min(100,S.goal+Math.round(c*.6));$('#goalBar').style.width=S.goal+'%';$('#goalPct').textContent=S.goal+'%';shut();sparks();SND.tick();
+    if(S.goal>=100&&S.cur==='live'){say('Nova','The lightning round is unlocked. Three quick ones, coming up.');toast('Lightning round unlocked.')}else toast(d.name+' sent to Maya and Theo.');return}
+  if(d.age){var lo=+$('#ageLo').value,hi=+$('#ageHi').value,dd=+d.d;if(d.age==='lo')lo=Math.min(hi,Math.max(18,lo+dd));else hi=Math.max(lo,Math.min(99,hi+dd));$('#ageLo').value=lo;$('#ageHi').value=hi;return}
+  if(b.hasAttribute('data-slot')){if(d.busy)return;d.busy='1';b.textContent='Checking match…';after(function(){b.removeAttribute('data-slot');b.classList.add('has');b.innerHTML=PORT+'<span class="tick">Matches your selfie</span>';b.setAttribute('aria-label','Photo added. Matches your verified selfie.')},1100);return}
+  if(b.getAttribute('role')==='switch'){b.setAttribute('aria-checked',String(b.getAttribute('aria-checked')!=='true'));return}
+  if(b.classList.contains('chip')&&b.closest('.chips')){var g=b.closest('.chips');if(g.hasAttribute('data-single')){g.querySelectorAll('.chip').forEach(function(x){x.setAttribute('aria-pressed',String(x===b))})}else b.setAttribute('aria-pressed',String(b.getAttribute('aria-pressed')!=='true'));return}
+});
+device.addEventListener('keydown',function(e){if(e.key==='Escape'&&$('.sheet.open'))shut()});
+$('#scrim').addEventListener('click',shut);
+$('#taste').addEventListener('click',function(){
+  $('#tastebox').hidden=false;SND.sting();
+  var L=[['Maya','It is a story. It has a sequel.'],['Theo','Then I need the sequel. Second date, minimum.']],k=0;
+  function sh(){$('#tasteWho').textContent=L[k%2][0];$('#tasteSay').textContent=L[k%2][1];k++}
+  sh();every(sh,2600);
+  after(function(){clr();$('#tasteWho').textContent='A moment from last night';$('#tasteSay').textContent='The full show starts at 8.'},6400);
+});
+function age(){var m=+$('#dM').value,d=+$('#dD').value,y=+$('#dY').value;if(!m||!d||!y||m>12||d>31||y<1900||y>2026)return null;var a=2026-y;if(m>10||(m===10&&d>12))a--;return a}
+function dobMsg(){var a=age(),el=$('#dobMsg');if(a===null)el.textContent='Check the date and try again.';else el.textContent=a<18?'Unseen is for adults only.':"You're "+a+'.'}
+['#dM','#dD','#dY'].forEach(function(s){$(s).addEventListener('input',dobMsg)});
+$('#dobGo').addEventListener('click',function(){var a=age();if(a===null){dobMsg();$('#dM').focus();return}if(a<18){$('#dobMsg').textContent="Unseen is for adults only. We haven't saved anything.";return}go('city')});
+$('#cityGo').addEventListener('click',function(){var other=$$('[data-opt="city"]')[1].getAttribute('aria-pressed')==='true';go('remind');if(other)toast("You're on the waitlist. We'll send highlights until we're live near you.")});
+$('#remOn').addEventListener('click',function(){$('#remChip').textContent='Reminder on';go('tonight');toast('Reminders on for show nights.')});
+$('#nhX').addEventListener('click',function(){$('#newHere').hidden=true;$('#h-tonight').focus()});
+$('#nudgeNo').addEventListener('click',function(){$('#nudge').hidden=true;toast("No problem. We won't ask again tonight.")});
+$('#gsGo').addEventListener('click',function(){if(!S.verified)go('verify');else if(!S.carded)go('card');else sheet('seat')});
+$('#cardBack').addEventListener('click',function(){if(cardN>1)cstep(cardN-1);else go('getseat')});
+$$('[data-lint]').forEach(function(t){t.addEventListener('input',function(){$('#lint').hidden=!lintBad()})});
+var recT=null;
+function stopRec(){clearInterval(recT);var b=$('#recBtn');b.dataset.state='done';b.textContent='Play';b.classList.remove('on');$('#recDone').hidden=false;S.recorded=true}
+$('#recBtn').addEventListener('click',function(){
+  var b=$('#recBtn'),st=b.dataset.state;
+  if(st==='rec'){stopRec();return}
+  if(st==='done'){toast('Playing your intro.');return}
+  b.dataset.state='rec';b.textContent='Stop';b.classList.add('on');var s=0,w=$('#recWave');w.innerHTML='';$('#recDone').hidden=true;
+  recT=every(function(){s+=.5;$('#recTime').textContent=fmt(s)+' of 0:15';var sp=document.createElement('span');sp.style.height=Math.round(6+Math.random()*38)+'px';w.appendChild(sp);if(s>=15)stopRec()},500);
+});
+$('#recRe').addEventListener('click',function(){clearInterval(recT);var b=$('#recBtn');b.dataset.state='idle';b.textContent='Record';b.classList.remove('on');$('#recWave').innerHTML='';$('#recTime').textContent='0:00 of 0:15';$('#recDone').hidden=true;S.recorded=false});
+$('#release').addEventListener('change',function(){if(this.checked)$('#relMsg').hidden=true});
+$('#cardFinish').addEventListener('click',function(){if(!$('#release').checked){$('#relMsg').hidden=false;$('#release').focus();return}cstep(7)});
+$('#pickNights').addEventListener('click',function(){S.carded=true;updateChecklist();sheet('seat')});
+$('#askSend').addEventListener('click',function(){var q=$('#q');if(!q.value.trim()){toast('Write a question first.');q.focus();return}q.value='';shut();toast("Sent to Nova. If it's picked, you'll hear it on air.")});
+$('#rcForm').addEventListener('submit',function(e){e.preventDefault();var i=$('#rcIn'),v=i.value.trim();if(!v)return;var p=document.createElement('p');if(LINT.test(v)){p.className='mod';p.textContent='Your message was hidden: it looked like a personal detail.'}else{var bb=document.createElement('b');bb.textContent='You';p.appendChild(bb);p.appendChild(document.createTextNode(v))}$('#rc').appendChild(p);i.value='';$('#rc').scrollTop=100000});
+$('#seatGo').addEventListener('click',function(){S.seat=true;$('#seatNone').hidden=true;$('#seatReq').hidden=false;$('#seatForm').hidden=true;$('#seatDone').hidden=false;$('#skipThu').focus()});
+$('#skipThu').addEventListener('click',function(){go('backstage')});
+$('#seatDoneBtn').addEventListener('click',function(){var c=S.cur;shut();if(c==='card'||c==='getseat'||c==='verify')go('tonight')});
+$('#ntConfirm').addEventListener('click',function(){go('tonight');toast('Seat released, no strike. Request another night any time.')});
+$('#leaveGo').addEventListener('click',function(){go('tonight');toast('You left the date. Nova closed it for you.')});
+$('#reportGo').addEventListener('click',function(){go('tonight');toast("Date ended. A moderator is reviewing it; you'll hear back in Safety center.")});
+$('#muteBtn').addEventListener('click',function(e){var b=e.currentTarget;b.setAttribute('aria-pressed',String(b.getAttribute('aria-pressed')!=='true'))});
+$('#momentBtn').addEventListener('click',function(){var m=$('#moment');m.textContent='Nova is covering for 30 seconds. Take your time.';m.hidden=false;after(function(){m.hidden=true},6000)});
+$$('[data-choose]').forEach(function(b){b.addEventListener('click',function(){
+  clr();var yes=b.dataset.choose==='reveal';$$('.choice').forEach(function(c){c.setAttribute('aria-pressed',String(c===b))});
+  $('#decNote').textContent=yes?'Locked in. Waiting for both answers…':'Locked in.';
+  after(function(){go(yes&&S.partner?'reveal':'nomatch')},yes?1800:900);
+})});
+$('#openChat').addEventListener('click',function(){go('dates',{chat:true})});
+$('#chatBack').addEventListener('click',function(){go('dates')});
+$('#starter').addEventListener('click',function(){var m=$('#msg');m.value='Okay, the pineapple thing. I have a position and it is correct.';m.focus()});
+function add(k,t){var p=document.createElement('p');p.className=k;p.textContent=t;$('#thread').appendChild(p);var sc=$('#dates');sc.scrollTop=sc.scrollHeight}
+$('#composer').addEventListener('submit',function(e){
+  e.preventDefault();var m=$('#msg'),v=m.value.trim();if(!v){toast('Write a message first.');m.focus();return}
+  add('out',v);m.value='';$('#starter').hidden=true;
+  var ty=document.createElement('p');ty.className='typing';ty.textContent='Daniel is typing…';
+  after(function(){$('#thread').appendChild(ty)},900);
+  after(function(){ty.remove();add('in','Finally. Pineapple belongs on pizza and I will defend this on air.')},2600);
+});
+$('#loopSend').addEventListener('click',function(){go('dates');toast('Note sent. The chat is archived.')});
+$('#clipYes').addEventListener('click',function(){$('#clipState').textContent='You approved. If Daniel says yes too, you can both share it.'});
+$('#clipNo').addEventListener('click',function(){$('#clipState').textContent="Not shared. We'll delete the clip, and nobody will see it."});
+$$('.jump button').forEach(function(b){b.addEventListener('click',function(){
+  var j=b.dataset.jump;
+  if(j==='live'||j==='end')S.listening=true;
+  if(j==='end')go('live',{end:true});
+  else if(j==='card'){if(!S.verified){S.verified=true;updateChecklist()}go('card',{step:1})}
+  else go(j);
+  if(device.getBoundingClientRect().top<0)device.scrollIntoView({behavior:reduce?'auto':'smooth',block:'start'});
+})});
+$$('[data-partner]').forEach(function(b){b.addEventListener('click',function(){S.partner=b.dataset.partner==='1';$$('[data-partner]').forEach(function(x){x.setAttribute('aria-pressed',String(x===b))})})});
+$$('[data-sound]').forEach(function(b){b.addEventListener('click',function(){S.sound=b.dataset.sound==='1';$$('[data-sound]').forEach(function(x){x.setAttribute('aria-pressed',String(x===b))});if(S.sound)SND.tick()})});
+$$('.wave').forEach(function(w,j){[8,14,20,11,22,16,9,18,24,12,7,19,15,8,21,12,17,10].forEach(function(h,i){var s=document.createElement('span');s.style.height=h+'px';s.style.animationDelay=(((i*7+j*3)%10)/10)+'s';w.appendChild(s)})});
+var INIT={thread:$('#thread').innerHTML,rc:$('#rc').innerHTML,photos:$('#photos3').innerHTML};
+$('#reset').addEventListener('click',function(){
+  S.coins=40;S.goal=64;S.seat=false;S.listening=false;S.verified=false;S.carded=false;S.recorded=false;S.nudged=false;
+  $('#coins').textContent='40';$('#goalBar').style.width='64%';$('#goalPct').textContent='64%';
+  $('#seatNone').hidden=false;$('#seatReq').hidden=true;$('#newHere').hidden=false;$('#remChip').textContent='Show 8 to 11 pm';
+  $('#thread').innerHTML=INIT.thread;$('#rc').innerHTML=INIT.rc;$('#photos3').innerHTML=INIT.photos;$('#starter').hidden=false;$('#applause').textContent='24';
+  $('#tastebox').hidden=true;$('#recRe').click();$('#release').checked=false;$('#relMsg').hidden=true;$('#lint').hidden=true;
+  $$('[role="switch"]').forEach(function(x){x.setAttribute('aria-checked','false')});
+  $('#clipState').textContent="A clip is only posted if you both say yes. Daniel hasn't answered yet.";
+  updateChecklist();go('welcome',{nofocus:true});
+});
+updateChecklist();
+go('welcome',{nofocus:true});
+})();
+</script>
+</body>
+</html>

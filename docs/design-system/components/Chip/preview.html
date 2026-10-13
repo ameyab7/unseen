@@ -1,0 +1,14 @@
+<!-- @dsCard group="Forms" height=190 subtitle="Multi-select with a pressed state" -->
+<div class="uh">
+<style>
+.uh{background:var(--velvet);padding:var(--space-l);font-family:var(--font-text);display:flex;flex-direction:column;gap:var(--space-s)}
+.uh p{margin:0;font:400 13px/18px var(--font-text);color:var(--mist)}
+.uh .g{display:flex;flex-wrap:wrap;gap:var(--space-xs)}
+.uh button{min-height:44px;padding:0 var(--space-m);border-radius:var(--radius-pill);border:1.5px solid var(--seam-strong);background:none;color:var(--pearl);font:500 15px var(--font-text);cursor:pointer}
+.uh button[aria-pressed="true"]{background:var(--lamplight);border-color:var(--lamplight);color:var(--lamplight-ink)}
+.uh button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+</style>
+<p id="uh-l">Which nights work? Pick any.</p>
+<div class="g" role="group" aria-labelledby="uh-l"><button aria-pressed="true">Thu</button><button aria-pressed="true">Fri</button><button aria-pressed="false">Sat</button><button aria-pressed="false">Sun</button></div>
+</div>
+<script>document.querySelectorAll('.uh button').forEach(function(b){b.addEventListener('click',function(){b.setAttribute('aria-pressed',String(b.getAttribute('aria-pressed')!=='true'))})});</script>

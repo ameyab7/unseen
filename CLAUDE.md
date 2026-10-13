@@ -1,0 +1,73 @@
+# Unseen
+
+Live, audio-only dating show for iOS and Android. Two verified strangers talk on air,
+an AI host called Nova runs the show, a city audience listens, votes and sends gestures.
+Photos unlock only if both daters choose reveal.
+
+Expo app in apps/mobile, moderator console in apps/console, Supabase backend in
+supabase/, AI host agent in services/nova (Python). Nothing is built yet: the first
+task is the week 1-2 foundations in docs/technical-plan.pdf.
+
+## Where the design lives (read before any UI work)
+- docs/design-system/README.md: brand book. Color rules, type, motion, voice and
+  copy, accessibility, the show's running order, Nova's on-air voice.
+- packages/tokens/tokens.json: the only source of colors, type, spacing and radii.
+- docs/design-system/components/<Name>/README.md: the spec for each design-system
+  component. preview.html shows it rendered.
+- docs/prototype/unseen-prototype.html: every screen and flow. Each screen is a
+  <section class="scr"> with an id (welcome, dob, city, remind, tonight, live,
+  getseat, verify, card, backstage, onair, decide, reveal, nomatch, recap, dates,
+  chat). Sheets use data-sheet. Read the matching section and its CSS before
+  building a screen.
+- docs/design-system/prototype-only-components.md: components that exist only in
+  the prototype. For these, the prototype's markup and CSS are the spec.
+- docs/technical-plan.pdf (text copy in technical-plan.txt): stack, data model,
+  API, roadmap.
+
+When the design system and the prototype disagree, the design system wins. When
+neither covers something (for example the You tab), build it from existing
+components and say so in the pull request.
+
+## Commands
+- pnpm dev: Expo dev client
+- pnpm typecheck, pnpm lint, pnpm test
+- supabase start: local stack; pnpm db:test: pgTAP tests; pnpm db:types: regenerate types
+- services/nova: uv run pytest
+
+## Architecture rules
+- A write that touches more than one row is a Postgres function in a migration,
+  never several client calls.
+- Every table has RLS enabled and a pgTAP test in supabase/tests proving who can
+  and cannot read it.
+- Room events and API payloads are zod schemas in packages/shared. Import them;
+  never redeclare.
+- Screens in app/ stay thin. Data hooks live in src/features/<feature>/api.ts,
+  visuals in src/ui.
+
+## UI rules
+- Only tokens from src/theme (generated from tokens.json): no hex values, raw font
+  sizes or new colors.
+- Component names match the design system. Read the component's README before
+  building it.
+- One lamplight-filled primary button per screen. On consent screens (Reveal or
+  Keep it unseen, clip approval) both options look identical.
+- Bodoni Moda only at 24px and up; platform font everywhere else.
+- Every touchable has an accessibilityLabel and a 44 pt target, and supports
+  Dynamic Type and Reduce Motion. Screen-reader labels carry state
+  ("Maya, 29, she/her, speaking").
+- Copy is sentence case, calm, no exclamation marks. Use the brand book's wording
+  table. Nova is labelled "Nova (AI)" the first time it appears on a screen.
+
+## Privacy rules (never break)
+- Never log or send to analytics: transcripts, chat text, photos, ID data.
+- No user can read another user's decision. Only resolve_date computes outcomes.
+- Reveal photos are served only through signed URLs after a mutual match.
+- No code, test or script calls production.
+
+## Workflow
+- For changes touching more than 3 files, propose a plan and wait for approval.
+- Write or update tests in the same change. Run typecheck, lint and tests before
+  calling a task done.
+- Ask before adding a dependency. Never edit generated files (tokens.ts,
+  database.types.ts).
+- Record architecture decisions in docs/decisions/, one short file each.

@@ -1,0 +1,29 @@
+<!-- @dsCard group="Show" height=400 subtitle="The on-air card on Tonight" -->
+<div class="ul">
+<style>
+.ul{background:var(--velvet);padding:var(--space-l);font-family:var(--font-text)}
+.ul .c{max-width:350px;background:var(--plush);border-radius:var(--radius-l);padding:var(--space-m);display:flex;flex-direction:column;gap:var(--space-s);color:var(--pearl)}
+.ul .r{display:flex;align-items:center;gap:var(--space-xs)}
+.ul .lamp{display:inline-flex;align-items:center;gap:6px;color:var(--on-air);font:600 13px/18px var(--font-text)}
+.ul .lamp i{width:8px;height:8px;border-radius:50%;background:var(--on-air)}
+.ul .m{font:400 13px/18px var(--font-text);color:var(--mist);margin:0}
+.ul .sp{flex:1}
+.ul .pair{display:flex;justify-content:center;gap:var(--space-m);padding:var(--space-xs) 0}
+.ul .av{width:56px;height:56px;border-radius:50%;background:var(--plush-raised);display:flex;align-items:center;justify-content:center;font:italic 500 22px var(--font-display);color:var(--mist)}
+.ul .on{outline:2px solid var(--lamplight);outline-offset:4px}
+.ul .nm{margin:0;text-align:center;font:italic 500 24px/30px var(--font-display)}
+.ul .w{display:flex;align-items:center;justify-content:center;gap:3px;height:24px}
+.ul .w span{width:3px;border-radius:2px;background:var(--lamplight)}
+.ul button{height:52px;border-radius:var(--radius-pill);background:var(--lamplight);color:var(--lamplight-ink);font:600 17px var(--font-text);border:0;cursor:pointer}
+.ul button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+</style>
+<article class="c" aria-label="On air now: Maya, 29 and Theo, 31">
+<div class="r"><span class="lamp"><i></i>On air</span><span class="m">Date 4 of 12</span><span class="sp"></span><span class="m">142 listening</span></div>
+<div class="pair"><div class="av on" aria-label="Maya, speaking">M</div><div class="av" aria-label="Theo">T</div></div>
+<p class="nm">Maya, 29 and Theo, 31</p>
+<div class="w" aria-hidden="true"></div>
+<p class="m" style="text-align:center">6 minutes left, hosted by Nova (AI)</p>
+<button>Listen in</button>
+</article>
+</div>
+<script>(function(){var l=document.createElement('link');l.rel='stylesheet';l.href='https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..700;1,6..96,400..700&display=swap';document.head.appendChild(l);var h=[8,14,20,11,22,16,9,18,24,12,7,19,15,8,21,12,17,10,13,6];var w=document.querySelector('.ul .w');h.forEach(function(v){var s=document.createElement('span');s.style.height=v+'px';w.appendChild(s);});})();</script>
