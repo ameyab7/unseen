@@ -7,6 +7,8 @@ const APP_ID = 'com.ameyab7.unseen';
 
 const config: ExpoConfig = {
   name: 'Unseen',
+  // The Expo project @ameyab7/unseen, created by eas init. EAS builds use these.
+  owner: 'ameyab7',
   slug: 'unseen',
   scheme: 'unseen',
   version: '1.0.0',
@@ -60,6 +62,11 @@ const config: ExpoConfig = {
   ],
   experiments: {
     typedRoutes: true,
+  },
+  extra: {
+    eas: {
+      projectId: '0894f1c2-1f30-49bd-8a98-c0e7dff1a9ef',
+    },
   },
 };
 
