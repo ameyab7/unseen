@@ -12,6 +12,7 @@ events and timings only, never text.
 """
 
 import asyncio
+import random
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -19,7 +20,7 @@ from enum import StrEnum
 
 from nova import prompts, script
 from nova.cards import Pair, Seat
-from nova.cues import Moment, Say, Segment
+from nova.cues import Moment, RoomFacts, Say
 from nova.events import Event, EventLog
 from nova.guardrails import Violation, check, clean, question_is_off_limits
 from nova.models import LineModel, ModelRefused
@@ -130,6 +131,7 @@ class LineWriter:
         live_timeout: float = 2.0,
         prep_timeout: float = 60.0,
         events: EventLog | None = None,
+        rng: random.Random | None = None,
     ) -> None:
         self._model = model
         self._pair = pair
@@ -137,9 +139,11 @@ class LineWriter:
         self._live_timeout = live_timeout
         self._prep_timeout = prep_timeout
         self._events = events or EventLog()
+        self._rng = rng or random.Random()  # picks shapes and openings, so lines vary
         self._prepared: dict[tuple[Moment, Seat | None, str | None], Line] = {}
         self._silences = 0
         self._silence_lines: list[str] = []
+        self._room_talk_lines: list[str] = []
 
     # --- Before the date ------------------------------------------------------------------
 
@@ -147,7 +151,7 @@ class LineWriter:
         """Writes every set piece, one at a time (lightning questions see the earlier ones)."""
         started = time.monotonic()
         for say in self._set_piece_cues():
-            attempt = await self._attempt(say, self._prompt_for(say, None), self._prep_timeout)
+            attempt = await self._attempt(say, self._prompt_for(say), self._prep_timeout)
             self._prepared[_key(say)] = self._settle(say, attempt, Source.PREPARED)
         fallbacks = sum(line.source is Source.FALLBACK for line in self._prepared.values())
         self._events.emit(
@@ -159,8 +163,8 @@ class LineWriter:
 
     # --- During the date ------------------------------------------------------------------
 
-    async def line_for(self, say: Say, *, segment: Segment | None = None) -> Line:
-        line = await self._line_for(say, segment)
+    async def line_for(self, say: Say) -> Line:
+        line = await self._line_for(say)
         self._events.emit(
             Event.LINE,
             moment=line.moment,
@@ -171,12 +175,12 @@ class LineWriter:
         )
         return line
 
-    async def attempt_for(self, say: Say, *, segment: Segment | None = None) -> Attempt:
+    async def attempt_for(self, say: Say) -> Attempt:
         """One model attempt for a cue, with no fallback: for the evaluation script."""
         timeout = self._prep_timeout if say.moment in SET_PIECES else self._live_timeout
-        return await self._attempt(say, self._prompt_for(say, segment), timeout)
+        return await self._attempt(say, self._prompt_for(say), timeout)
 
-    async def _line_for(self, say: Say, segment: Segment | None) -> Line:
+    async def _line_for(self, say: Say) -> Line:
         if say.text is not None:
             return Line(say.text, Source.FIXED, say.moment)
         if say.moment in SET_PIECES:
@@ -194,10 +198,13 @@ class LineWriter:
                 script.DECLINE_QUESTION, Source.FALLBACK, say.moment, error=ErrorKind.DECLINED
             )
 
-        attempt = await self._attempt(say, self._prompt_for(say, segment), self._live_timeout)
+        attempt = await self._attempt(say, self._prompt_for(say), self._live_timeout)
         line = self._settle(say, attempt, Source.MODEL)
-        if say.moment is Moment.SILENCE and line.source is Source.MODEL:
-            self._silence_lines = [*self._silence_lines, line.text][-5:]
+        if line.source is Source.MODEL:
+            if say.moment is Moment.SILENCE:
+                self._silence_lines = [*self._silence_lines, line.text][-5:]
+            if say.moment is Moment.ROOM_TALK:
+                self._room_talk_lines = [*self._room_talk_lines, line.text][-5:]
         return line
 
     # --- Internals ------------------------------------------------------------------------
@@ -277,7 +284,7 @@ class LineWriter:
                 return [script.REPLY_FALLBACK]
         raise ValueError(f"No fallback for {say.moment}")
 
-    def _prompt_for(self, say: Say, segment: Segment | None) -> str:
+    def _prompt_for(self, say: Say) -> str:
         pair = self._pair
         match say.moment:
             case Moment.DOORS_INTRO:
@@ -296,13 +303,17 @@ class LineWriter:
             case Moment.OUTRO:
                 return prompts.outro(pair)
             case Moment.NEXT_UP:
-                return prompts.next_up(self._next_pair or pair)
+                shape = self._rng.choice(prompts.NEXT_UP_SHAPES)
+                return prompts.next_up(self._next_pair or pair, shape=shape)
             case Moment.SILENCE:
                 return prompts.silence(pair, previous=self._silence_lines)
             case Moment.FROM_THE_ROOM:
                 return prompts.from_the_room(pair, say.detail or "")
             case Moment.ROOM_TALK:
-                return prompts.room_talk(pair, segment)
+                opening = self._rng.choice(prompts.ROOM_TALK_OPENINGS)
+                return prompts.room_talk(
+                    _room(say), opening=opening, previous=self._room_talk_lines
+                )
             case Moment.REPLY:
                 return prompts.reply(pair, _seat(say), say.detail or "")
         raise ValueError(f"No prompt for {say.moment}")
@@ -336,6 +347,12 @@ def _seat(say: Say) -> Seat:
     if say.about is None:
         raise ValueError(f"{say.moment} needs a seat")
     return say.about
+
+
+def _room(say: Say) -> RoomFacts:
+    if say.room is None:
+        raise ValueError(f"{say.moment} needs room facts")
+    return say.room
 
 
 def _lightning_number(say: Say) -> int:

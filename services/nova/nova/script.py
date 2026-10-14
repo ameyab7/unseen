@@ -59,7 +59,7 @@ LIGHTNING_FALLBACKS = (
 )
 DECLINE_QUESTION = "Let's leave that one for another night. Back to you two."
 ROOM_TALK_FALLBACK = "Thanks for keeping the chat kind tonight, room."
-# Only for ordinary questions: a dater who wants to stop never gets a reply cue at all.
+# Never for a dater who clearly wants to stop: they never get a reply cue at all.
 REPLY_FALLBACK = "I'm the AI host, so I'll stay out of that one. Back to you two."
 
 

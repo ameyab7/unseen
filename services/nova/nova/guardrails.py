@@ -28,6 +28,12 @@ class Violation(StrEnum):
     INSTRUCTIONS = "instructions"
 
 
+class Distress(StrEnum):
+    NONE = "none"
+    MAYBE = "maybe"  # might be distress: the moderator is alerted, Nova answers as usual
+    CLEAR = "clear"  # wants to stop: Nova pauses for the dater, the moderator is alerted
+
+
 def _any(*patterns: str, flags: int = re.IGNORECASE) -> re.Pattern[str]:
     return re.compile("|".join(f"(?:{p})" for p in patterns), flags)
 
@@ -178,13 +184,14 @@ INSTRUCTING_NOVA = _any(
     r"\bjailbreak\b",
 )
 
-# A dater telling Nova they want to stop, or sounding distressed. Nova never deflects these:
-# the show runner pauses for that dater and alerts the moderator. Leans hard towards
-# hearing it: a false alarm ("can you help us pick a topic?") costs a short breather and a
-# look from the moderator; a miss would leave a dater unheard.
+# What a dater says to Nova, heard before any reply. Clear: they want to stop, aren't
+# comfortable or safe, or need a moment; the show runner pauses for them and alerts the
+# moderator, and Nova never deflects. Maybe: words that might be distress ("help", "I'm
+# scared"); the moderator is alerted and Nova answers as usual. Both lean towards hearing
+# it: a false alarm costs a breather or a look from the moderator; a miss leaves a dater
+# unheard.
 NOT_ME = r"(?<!n't )(?<!not )"  # "don't stop now" is not a request to stop
-DISTRESS = _any(
-    r"\bhelp\b",
+CLEAR_DISTRESS = _any(
     # Stopping, ending, leaving.
     r"\b(?:want|wanna|need|like|have)\s+to\s+(?:stop|end|leave|quit|pause|get out)\b",
     r"\b(?:want|wanna|need|have)\s+to\s+go(?:\s+home|\s+now)?\s*(?:[.?!,]|$)",
@@ -199,16 +206,24 @@ DISTRESS = _any(
     r"\b(?:i'm|i am)\s+(?:so\s+|just\s+)?done\s+with\s+(?:this|it|the date)\b",
     r"\bi\s+can(?:'t|not)\s+do\s+this\b",
     r"\b(?:this|it|that)(?:'s| is)\s+(?:all\s+|getting\s+|a bit\s+)?too much\b",
-    # Needing a break.
+    # Needing a moment.
     r"\bneed\s+(?:a|some)\s+(?:break|minute|moment|second|sec|breather|space|air)\b",
     r"\bgive me\s+(?:a|some)\s+(?:minute|moment|second|sec|break|space)\b",
-    # Not comfortable, not safe.
+    # Not comfortable, not safe, not well.
     r"\b(?:uncomfortable|unsafe|unwell)\b",
-    r"(?:\bnot|n't)\s+(?:feel(?:ing)?\s+)?(?:very\s+|so\s+|really\s+)?(?:comfortable|ok|okay"
-    r"|safe|alright|all right|fine|well)\b",
-    r"\b(?:scared|frightened|terrified|upset|anxious|panic\w*|overwhelmed|distressed"
-    r"|crying)\b",
-    r"\b(?:harass\w*|threaten\w*|abus\w*|inappropriate|creepy)\b",
+    r"(?:\bnot|n't)\s+(?:feel(?:ing)?\s+)?(?:very\s+|so\s+|really\s+)?(?:comfortable|safe)\b",
+    r"\bi(?:'m| am)\s+(?:really\s+|just\s+|so\s+)?not\s+(?:feeling\s+)?(?:ok|okay|alright"
+    r"|all right|fine|well|good)\b",
+    r"\bi\s+(?:don't|do not)\s+feel\s+(?:very\s+|so\s+|really\s+)?(?:ok|okay|alright"
+    r"|all right|well|good)\b",
+    r"\bpanic attacks?\b|\bpanicking\b|\b(?:overwhelmed|distressed)\b",
+    r"\b(?:harass\w*|threaten\w*|abus\w*)\b",
+)
+MAYBE_DISTRESS = _any(
+    r"\bhelp\b",
+    r"\b(?:scared|frightened|terrified|upset|anxious|crying)\b",
+    r"\b(?:inappropriate|creepy)\b",
+    r"(?:\bnot|n't)\s+(?:ok|okay|alright|all right|fine)\b",  # "that's not okay"
 )
 
 SHOW_NAME = "Unseen"  # capitalised, it's the show; "keep it unseen" is decision talk
@@ -298,10 +313,16 @@ def question_is_off_limits(question: str) -> bool:
     )
 
 
-def sounds_distressed(words: str) -> bool:
-    """True when a dater speaking to Nova wants to stop or sounds distressed: "I want to
-    stop", "I'm not comfortable", "can we end this", "help" and the like."""
-    return bool(DISTRESS.search(" ".join(words.translate(STRAIGHT_QUOTES).split())))
+def distress_in(words: str) -> Distress:
+    """How a dater speaking to Nova sounds. Clear: "I want to stop", "I'm not comfortable",
+    "can we end this", "I need a moment" and the like. Maybe: "help", "I'm scared", "that's
+    not okay". Clear wins when both appear."""
+    words = " ".join(words.translate(STRAIGHT_QUOTES).split())
+    if CLEAR_DISTRESS.search(words):
+        return Distress.CLEAR
+    if MAYBE_DISTRESS.search(words):
+        return Distress.MAYBE
+    return Distress.NONE
 
 
 def _has_formatting(text: str) -> bool:

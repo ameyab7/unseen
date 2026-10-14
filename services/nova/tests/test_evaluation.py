@@ -4,7 +4,15 @@ NOVA_LLM) is on demand: uv run python -m nova.evaluation. It is never part of CI
 import asyncio
 
 from nova.cues import Moment
-from nova.evaluation import CASES, fallback_rates, render, run_cases
+from nova.evaluation import (
+    CASES,
+    CaseResult,
+    Repetition,
+    fallback_rates,
+    render,
+    repetition,
+    run_cases,
+)
 from nova.lines import LIVE_REACTIONS, SET_PIECES
 
 EXPECTED = {
@@ -27,6 +35,7 @@ EXPECTED = {
     "injection in what a dater says",
     "dater wants to stop",
     "dater is not comfortable",
+    "dater asks for help",
 }
 
 
@@ -96,6 +105,13 @@ async def test_a_dater_who_wants_to_stop_gets_a_pause_and_never_reaches_the_mode
         assert "pause" in result.note
 
 
+async def test_a_dater_who_may_be_distressed_alerts_the_moderator_and_nova_answers():
+    results = await run_cases(FakeModel(well_behaved), live_timeout=1.0, prep_timeout=1.0)
+    help_ = next(r for r in results if r.name == "dater asks for help")
+    assert help_.passed and help_.text is not None and help_.fallback is False
+    assert "moderator alerted" in help_.note
+
+
 async def test_a_model_that_is_too_slow_fails():
     model = FakeModel("Maya and Theo, over to you.", delay=0.2)
     results = await run_cases(model, live_timeout=0.05, prep_timeout=0.05)
@@ -112,11 +128,12 @@ async def test_reports_the_fallback_rate_for_every_moment_the_model_writes():
     rates = fallback_rates(results)
     assert set(rates) == SET_PIECES | LIVE_REACTIONS
     assert all(rate.replaced == 0 for rate in rates.values())
-    assert rates[Moment.REPLY].tried == 2 * 4, "four reply cases reach the model, twice each"
+    assert rates[Moment.REPLY].tried == 2 * 5, "five reply cases reach the model, twice each"
 
     report = render(results, model_name=model.name)
-    assert "Fallback rate per moment" in report
-    assert "reply" in report and "0 of 8" in report
+    for column in ("fallbacks", "near-duplicates", "same opening"):
+        assert column in report
+    assert "reply" in report and "0 of 10" in report
 
 
 async def test_every_line_that_breaks_a_rule_counts_as_a_fallback_with_its_reasons():
@@ -140,4 +157,48 @@ async def test_questions_declined_and_daters_paused_before_the_model_are_not_cou
     results = await run_cases(FakeModel(well_behaved), live_timeout=1.0, prep_timeout=1.0)
     rates = fallback_rates(results)
     assert rates[Moment.FROM_THE_ROOM].tried == 1, "only the cheeky question reaches the model"
-    assert rates[Moment.REPLY].tried == 4, "the two daters who want to stop never do"
+    assert rates[Moment.REPLY].tried == 5, "the two daters who clearly want to stop never do"
+
+
+# --- Repetition: does Nova keep saying the same thing? ------------------------------------
+
+
+def heard(moment: Moment, text: str) -> CaseResult:
+    return CaseResult("a case", moment, text, (), fallback=False)
+
+
+QUIET = "The studio is quiet for a moment. What are you all thinking about tonight?"
+
+
+def test_near_duplicates_and_repeated_openings_are_counted_per_moment():
+    results = [
+        heard(Moment.ROOM_TALK, QUIET),
+        heard(
+            Moment.ROOM_TALK,
+            "The studio is a little quiet for a moment. What are you all thinking about while "
+            "we wait?",
+        ),
+        heard(Moment.ROOM_TALK, "The studio is electric tonight. Who has a question for them?"),
+        heard(Moment.ROOM_TALK, "Room, thank you for keeping the chat kind."),
+        heard(Moment.OUTRO, QUIET),
+    ]
+    assert repetition(results) == {
+        Moment.ROOM_TALK: Repetition(lines=4, near_duplicates=1, same_opening=2),
+        Moment.OUTRO: Repetition(lines=1, near_duplicates=0, same_opening=0),
+    }
+
+
+def test_only_lines_the_room_would_hear_count_towards_repetition():
+    results = [
+        heard(Moment.SILENCE, QUIET),
+        CaseResult("a case", Moment.SILENCE, QUIET, ("too_long",), fallback=True),
+        CaseResult("a case", Moment.REPLY, None, (), note="paused before the model"),
+    ]
+    assert repetition(results) == {Moment.SILENCE: Repetition(1, 0, 0)}
+
+
+async def test_a_model_that_says_the_same_thing_every_time_is_all_repetition():
+    model = FakeModel(well_behaved)
+    results = await run_cases(model, live_timeout=1.0, prep_timeout=1.0, repeat=3)
+    silence = repetition(results)[Moment.SILENCE]
+    assert silence == Repetition(lines=3, near_duplicates=2, same_opening=2)

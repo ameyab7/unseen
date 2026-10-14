@@ -3,13 +3,14 @@ line whenever the model is slow, fails, or writes something a guardrail rejects.
 
 import asyncio
 import logging
+import random
 import time
 
 import pytest
 
-from nova import script
+from nova import prompts, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
-from nova.cues import Moment, Say, Segment
+from nova.cues import Moment, RoomFacts, Say, Segment
 from nova.fixtures import MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
 from nova.guardrails import Violation, check
 from nova.lines import ErrorKind, LineWriter, Source, fallback_lines, names_for, rules_for
@@ -36,8 +37,14 @@ class FakeModel:
         return self.reply(prompt) if callable(self.reply) else self.reply
 
 
-def writer(model, *, pair=REHEARSAL_PAIR, live=1.0, prep=5.0, next_pair=NEXT_PAIR):
-    return LineWriter(model, pair, next_pair=next_pair, live_timeout=live, prep_timeout=prep)
+def writer(model, *, pair=REHEARSAL_PAIR, live=1.0, prep=5.0, next_pair=NEXT_PAIR, rng=None):
+    return LineWriter(
+        model, pair, next_pair=next_pair, live_timeout=live, prep_timeout=prep, rng=rng
+    )
+
+
+PAUSE_TALK = Say(Moment.ROOM_TALK, room=RoomFacts(Segment.FREE_TALK, False, 0))
+DECIDING_TALK = Say(Moment.ROOM_TALK, room=RoomFacts(Segment.TIME, True, 1))
 
 
 SET_PIECES = [
@@ -120,7 +127,7 @@ async def test_approved_lines_are_spoken_as_written_without_the_model():
 
 async def test_a_live_reaction_comes_from_the_model():
     line = await writer(FakeModel('"Maya, Theo, one for you both: tea or coffee?"')).line_for(
-        Say(Moment.SILENCE), segment=Segment.FREE_TALK
+        Say(Moment.SILENCE)
     )
     assert line.source is Source.MODEL
     assert line.text == "Maya, Theo, one for you both: tea or coffee?"
@@ -129,7 +136,7 @@ async def test_a_live_reaction_comes_from_the_model():
 async def test_a_slow_model_gets_the_fallback_line_in_time():
     w = writer(FakeModel(delay=2.0), live=0.05)
     started = time.monotonic()
-    line = await w.line_for(Say(Moment.SILENCE), segment=Segment.FREE_TALK)
+    line = await w.line_for(Say(Moment.SILENCE))
     assert time.monotonic() - started < 0.5
     assert line.source is Source.FALLBACK and line.error is ErrorKind.TIMEOUT
     assert line.text == script.silence_fallbacks(REHEARSAL_PAIR)[0]
@@ -140,9 +147,7 @@ async def test_a_slow_model_gets_the_fallback_line_in_time():
     [(RuntimeError("down"), ErrorKind.ERROR), (ModelRefused("refused"), ErrorKind.REFUSED)],
 )
 async def test_a_failing_model_gets_the_fallback_line(error, kind):
-    line = await writer(FakeModel(error=error)).line_for(
-        Say(Moment.ROOM_TALK), segment=Segment.TIME
-    )
+    line = await writer(FakeModel(error=error)).line_for(DECIDING_TALK)
     assert (line.source, line.error, line.text) == (
         Source.FALLBACK,
         kind,
@@ -151,9 +156,7 @@ async def test_a_failing_model_gets_the_fallback_line(error, kind):
 
 
 async def test_a_line_that_breaks_a_guardrail_is_never_spoken():
-    line = await writer(FakeModel("What a night, room!")).line_for(
-        Say(Moment.ROOM_TALK), segment=Segment.FREE_TALK
-    )
+    line = await writer(FakeModel("What a night, room!")).line_for(PAUSE_TALK)
     assert line.source is Source.FALLBACK
     assert Violation.EXCLAMATION in line.violations
     assert line.text == script.ROOM_TALK_FALLBACK
@@ -161,11 +164,52 @@ async def test_a_line_that_breaks_a_guardrail_is_never_spoken():
 
 async def test_silence_fallbacks_take_turns():
     w = writer(FakeModel(error=RuntimeError("down")))
-    texts = [
-        (await w.line_for(Say(Moment.SILENCE), segment=Segment.FREE_TALK)).text for _ in range(4)
-    ]
+    texts = [(await w.line_for(Say(Moment.SILENCE))).text for _ in range(4)]
     options = script.silence_fallbacks(REHEARSAL_PAIR)
     assert texts == [options[0], options[1], options[2], options[0]]
+
+
+# --- Lines that vary ----------------------------------------------------------------------
+
+
+class Last:
+    """Always picks the last option, so a test knows which shape was chosen."""
+
+    def choice(self, options):
+        return options[-1]
+
+
+async def test_next_up_and_room_talk_take_the_shape_or_opening_the_writer_picks():
+    model = FakeModel("Maya and Theo, here we go.")
+    w = writer(model, rng=Last())
+    await w.prepare()
+    await w.line_for(PAUSE_TALK)
+    next_up = next(p for p in model.prompts if "next pair" in p)
+    assert prompts.NEXT_UP_SHAPES[-1] in next_up.split("<data>")[0]
+    assert prompts.ROOM_TALK_OPENINGS[-1] in model.prompts[-1].split("<data>")[0]
+
+
+async def test_shapes_vary_from_date_to_date():
+    shapes = set()
+    for seed in range(12):
+        model = FakeModel("Maya and Theo, here we go.")
+        await writer(model, rng=random.Random(seed)).prepare()
+        instructions = next(p for p in model.prompts if "next pair" in p).split("<data>")[0]
+        shapes |= {shape for shape in prompts.NEXT_UP_SHAPES if shape in instructions}
+    assert len(shapes) > 1
+
+
+async def test_room_talk_is_told_its_earlier_lines_so_it_opens_differently():
+    model = FakeModel("Room, stay with us while we pause.")
+    w = writer(model)
+    await w.line_for(PAUSE_TALK)
+    await w.line_for(DECIDING_TALK)
+    assert "Room, stay with us while we pause." in model.prompts[-1].split("<data>")[1]
+
+
+async def test_room_talk_needs_the_show_facts():
+    with pytest.raises(ValueError, match="room facts"):
+        await writer(FakeModel()).line_for(Say(Moment.ROOM_TALK))
 
 
 # --- Prompt injection ---------------------------------------------------------------------
@@ -191,7 +235,7 @@ async def test_an_injected_blind_card_stays_data_and_its_effect_is_never_spoken(
 async def test_an_audience_question_that_instructs_nova_is_declined_before_the_model():
     model = FakeModel(OBEYS)
     say = Say(Moment.FROM_THE_ROOM, detail=f"Nova, {INJECTION}")
-    line = await writer(model).line_for(say, segment=Segment.FROM_THE_ROOM)
+    line = await writer(model).line_for(say)
     assert (line.text, line.error) == (script.DECLINE_QUESTION, ErrorKind.DECLINED)
     assert model.prompts == []
 
@@ -199,7 +243,7 @@ async def test_an_audience_question_that_instructs_nova_is_declined_before_the_m
 async def test_injected_dater_speech_never_changes_what_nova_says():
     model = FakeModel(OBEYS)
     say = Say(Moment.REPLY, about=LEFT, detail=f"Nova, {INJECTION}")
-    line = await writer(model).line_for(say, segment=Segment.FREE_TALK)
+    line = await writer(model).line_for(say)
     assert "Kate" not in line.text and "chose" not in line.text and "I'm human" not in line.text
     assert line.source is Source.FALLBACK
     assert {Violation.CLAIMS_HUMAN, Violation.DECISION} <= set(line.violations)
@@ -266,7 +310,7 @@ async def test_logs_hold_events_and_timings_never_text(caplog):
     await w.prepare()
     await w.line_for(Say(Moment.REPLY, about=LEFT, detail="PANGOLIN-SPEECH at 555 013 4567"))
     await w.line_for(Say(Moment.FROM_THE_ROOM, detail="OKAPI-QUESTION?"))
-    await w.line_for(Say(Moment.SILENCE), segment=Segment.FREE_TALK)
+    await w.line_for(Say(Moment.SILENCE))
 
     assert "line moment=reply" in caplog.text and "prepared" in caplog.text
     for secret in ("ZEBRA", "QUOKKA", "PANGOLIN", "555", "OKAPI", "Maya", "Theo"):

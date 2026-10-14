@@ -63,18 +63,31 @@ class EndReason(StrEnum):
 class ModeratorAlert(StrEnum):
     PAUSE_NOT_BACK = "pause_not_back"  # a dater asked for a moment and isn't back after 30 s
     REPEATED_PAUSE = "repeated_pause"  # the second (or later) pause in this date
-    DATER_DISTRESSED = "dater_distressed"  # a dater asked Nova to stop or sounded distressed
+    DATER_DISTRESSED = "dater_distressed"  # a dater asked Nova to stop: Nova paused for them
+    POSSIBLE_DISTRESS = "possible_distress"  # maybe distress ("help"): Nova answered as usual
+
+
+@dataclass(frozen=True)
+class RoomFacts:
+    """What Nova may work from when it talks to the room: facts about the show, never
+    names, decisions, spending or anything a dater or listener wrote."""
+
+    segment: Segment
+    poll_open: bool
+    questions_asked: int  # audience questions read so far in this date
 
 
 @dataclass(frozen=True)
 class Say:
     """A line for Nova. With text, Nova says exactly that (an approved line). Without,
-    the line writer (task 4) writes one for this moment, about this dater, from detail."""
+    the line writer writes one for this moment, about this dater, from detail; talk to the
+    room works from the room facts."""
 
     moment: Moment
     text: str | None = None
     about: Seat | None = None
     detail: str | None = None
+    room: RoomFacts | None = None
 
 
 @dataclass(frozen=True)
