@@ -15,6 +15,7 @@ from nova.fixtures import MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
 from nova.guardrails import Violation, check
 from nova.lines import ErrorKind, LineWriter, Source, fallback_lines, names_for, rules_for
 from nova.models import ModelRefused
+from nova.tonight import NAME, Tonight
 
 LEFT, RIGHT = Seat.LEFT, Seat.RIGHT
 
@@ -37,10 +38,26 @@ class FakeModel:
         return self.reply(prompt) if callable(self.reply) else self.reply
 
 
-def writer(model, *, pair=REHEARSAL_PAIR, live=1.0, prep=5.0, next_pair=NEXT_PAIR, rng=None):
+def writer(
+    model, *, pair=REHEARSAL_PAIR, live=1.0, prep=5.0, next_pair=NEXT_PAIR, rng=None, tonight=None
+):
     return LineWriter(
-        model, pair, next_pair=next_pair, live_timeout=live, prep_timeout=prep, rng=rng
+        model,
+        pair,
+        next_pair=next_pair,
+        live_timeout=live,
+        prep_timeout=prep,
+        rng=rng,
+        tonight=tonight,
     )
+
+
+def instructions(prompt: str) -> str:
+    return prompt.split("<data>")[0]
+
+
+def data(prompt: str) -> str:
+    return prompt.split("<data>")[1]
 
 
 PAUSE_TALK = Say(Moment.ROOM_TALK, room=RoomFacts(Segment.FREE_TALK, False, 0))
@@ -68,12 +85,12 @@ async def test_set_pieces_are_written_before_the_date_and_never_during_it():
     model = FakeModel("Maya and Theo, here we go.")
     w = writer(model)
     await w.prepare()
-    assert len(model.prompts) == len(SET_PIECES)
+    assert len(model.prompts) == 3 * len(SET_PIECES), "three candidates each"
     for say in SET_PIECES:
         line = await w.line_for(say)
         assert line.source is Source.PREPARED, say
         assert line.text == "Maya and Theo, here we go."
-    assert len(model.prompts) == len(SET_PIECES), "no model calls during the date"
+    assert len(model.prompts) == 3 * len(SET_PIECES), "no model calls during the date"
 
 
 async def test_a_set_piece_that_was_not_prepared_uses_its_fallback_without_the_model():
@@ -99,19 +116,80 @@ async def test_set_pieces_that_fail_fall_back_one_by_one():
 
 
 async def test_lightning_questions_are_told_about_earlier_ones_to_avoid_repeats():
-    replies = iter(["Mountains or sea?", "Tea or coffee?", "Cats or dogs?"])
+    questions = {1: "Mountains or sea?", 2: "Tea or coffee?", 3: "Cats or dogs?"}
 
     def reply(prompt: str) -> str:
-        if "lightning" in prompt.split("<data>")[0].lower():
-            return next(replies)
+        for n, question in questions.items():
+            if f"question {n} of 3" in instructions(prompt):
+                return question
         return "Maya and Theo, here we go."
 
     model = FakeModel(reply)
-    w = writer(model)
+    await writer(model).prepare()
+    lightning = [p for p in model.prompts if "lightning" in instructions(p).lower()]
+    assert len(lightning) == 9, "three candidates for each of three questions"
+    assert all("Mountains or sea?" in data(p) for p in lightning[3:])
+    assert all("Tea or coffee?" in data(p) for p in lightning[6:])
+
+
+OUTRO_TASK = "the date is over"
+
+
+def outro_candidates(*candidates: str):
+    """A model whose three outro candidates are these, in order; anything else is plain."""
+    outros = iter(candidates)
+
+    def reply(prompt: str) -> str:
+        if OUTRO_TASK in instructions(prompt):
+            return next(outros)
+        return "Maya and Theo, here we go."
+
+    return FakeModel(reply)
+
+
+async def test_each_set_piece_keeps_the_candidate_least_like_what_nova_said_tonight():
+    tonight = Tonight()
+    tonight.remember(Moment.OUTRO, "Thank you, Sam and Priya.", names=["Sam", "Priya"])
+    model = outro_candidates(
+        "Thank you, Maya and Theo.",
+        "Maya and Theo, that was a lovely conversation, thank you both.",
+        "Thanks, Maya and Theo.",
+    )
+    w = writer(model, tonight=tonight)
     await w.prepare()
-    lightning = [p for p in model.prompts if "lightning" in p.split("<data>")[0].lower()]
-    assert "Mountains or sea?" in lightning[1].split("<data>")[1]
-    assert "Tea or coffee?" in lightning[2].split("<data>")[1]
+    line = await w.line_for(Say(Moment.OUTRO))
+    assert line.source is Source.PREPARED
+    assert line.text == "Maya and Theo, that was a lovely conversation, thank you both."
+
+
+async def test_a_candidate_that_breaks_a_guardrail_is_never_kept_however_fresh():
+    tonight = Tonight()
+    tonight.remember(Moment.OUTRO, "Thank you, Sam and Priya.", names=["Sam", "Priya"])
+    model = outro_candidates(
+        "Thank you, Maya and Theo.", "What a night, Maya and Theo!", "Thank you, Maya and Theo."
+    )
+    w = writer(model, tonight=tonight)
+    await w.prepare()
+    assert (await w.line_for(Say(Moment.OUTRO))).text == "Thank you, Maya and Theo."
+
+
+async def test_tonight_is_shared_across_dates_and_earlier_daters_names_never_reach_a_prompt():
+    tonight = Tonight()
+    first = writer(FakeModel("Maya and Theo, here we go."), tonight=tonight)
+    await first.prepare()
+    await first.line_for(Say(Moment.SILENCE))
+
+    later = FakeModel("Sam and Priya, here we go.")
+    second = writer(later, pair=NEXT_PAIR, next_pair=None, tonight=tonight)
+    await second.prepare()
+    await second.line_for(Say(Moment.SILENCE))
+
+    said = f"{NAME} and {NAME}, here we go."
+    outro = next(p for p in later.prompts if OUTRO_TASK in instructions(p))
+    assert said in data(outro), "the earlier date's outro"
+    assert said in data(later.prompts[-1]), "the earlier date's silence prompt"
+    for prompt in later.prompts:
+        assert "Maya" not in prompt and "Theo" not in prompt
 
 
 # --- Fixed lines and live reactions -------------------------------------------------------
@@ -166,7 +244,19 @@ async def test_silence_fallbacks_take_turns():
     w = writer(FakeModel(error=RuntimeError("down")))
     texts = [(await w.line_for(Say(Moment.SILENCE))).text for _ in range(4)]
     options = script.silence_fallbacks(REHEARSAL_PAIR)
-    assert texts == [options[0], options[1], options[2], options[0]]
+    assert texts[0] == options[0]
+    assert sorted(texts[:3]) == sorted(options), "all three before any repeats"
+    assert texts[3] in options
+
+
+async def test_silence_fallbacks_take_turns_across_the_whole_night():
+    tonight, options = Tonight(), script.silence_fallbacks(NEXT_PAIR)
+    first = writer(FakeModel(error=RuntimeError("down")), tonight=tonight)
+    await first.line_for(Say(Moment.SILENCE))
+    later = writer(FakeModel(error=RuntimeError("down")), pair=NEXT_PAIR, tonight=tonight)
+    texts = [(await later.line_for(Say(Moment.SILENCE))).text for _ in range(2)]
+    assert options[0] not in texts, "the earlier date already heard the first one"
+    assert sorted(texts) == sorted(options[1:])
 
 
 # --- Lines that vary ----------------------------------------------------------------------
@@ -210,6 +300,14 @@ async def test_room_talk_is_told_its_earlier_lines_so_it_opens_differently():
 async def test_room_talk_needs_the_show_facts():
     with pytest.raises(ValueError, match="room facts"):
         await writer(FakeModel()).line_for(Say(Moment.ROOM_TALK))
+
+
+async def test_a_dater_who_may_be_distressed_never_hears_nova_stay_out_of_it():
+    w = writer(FakeModel(error=RuntimeError("down")))
+    maybe = await w.line_for(Say(Moment.REPLY, about=LEFT, detail="Help, what do I ask Theo?"))
+    assert maybe.text == script.TAKE_YOUR_TIME == "Take all the time you need."
+    ordinary = await w.line_for(Say(Moment.REPLY, about=LEFT, detail="Nova, are you human?"))
+    assert ordinary.text == script.REPLY_FALLBACK
 
 
 # --- Prompt injection ---------------------------------------------------------------------

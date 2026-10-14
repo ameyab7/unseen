@@ -2,6 +2,7 @@
 NOVA_LLM) is on demand: uv run python -m nova.evaluation. It is never part of CI."""
 
 import asyncio
+import re
 
 from nova.cues import Moment
 from nova.evaluation import (
@@ -9,10 +10,14 @@ from nova.evaluation import (
     CaseResult,
     Repetition,
     fallback_rates,
+    night_summary,
     render,
+    render_night,
     repetition,
     run_cases,
+    run_night,
 )
+from nova.fixtures import NIGHT
 from nova.lines import LIVE_REACTIONS, SET_PIECES
 
 EXPECTED = {
@@ -50,12 +55,14 @@ def well_behaved(prompt: str) -> str:
 class FakeModel:
     name = "fake/model"
 
-    def __init__(self, reply, delay=0.0):
-        self.reply, self.delay = reply, delay
+    def __init__(self, reply="", delay=0.0, error=None):
+        self.reply, self.delay, self.error = reply, delay, error
 
     async def write(self, *, system: str, prompt: str) -> str:
         if self.delay:
             await asyncio.sleep(self.delay)
+        if self.error:
+            raise self.error
         return self.reply(prompt) if callable(self.reply) else self.reply
 
 
@@ -202,3 +209,53 @@ async def test_a_model_that_says_the_same_thing_every_time_is_all_repetition():
     results = await run_cases(model, live_timeout=1.0, prep_timeout=1.0, repeat=3)
     silence = repetition(results)[Moment.SILENCE]
     assert silence == Repetition(lines=3, near_duplicates=2, same_opening=2)
+
+
+# --- A full night: the repetition number we track -----------------------------------------
+
+
+def stock_thanks(prompt: str) -> str:
+    """A model with one stock line: it thanks whichever daters the task names."""
+    names = re.findall(r'"first_name": "(\w+)"', prompt)
+    return f"Thank you, {names[0]} and {names[1]}." if len(names) >= 2 else "Thank you, room."
+
+
+FIRST_NAMES = [card.first_name for pair in NIGHT for card in (pair.left, pair.right)]
+
+
+def test_a_full_night_is_eight_dates_with_different_pairs():
+    assert len(NIGHT) == 8
+    assert len(set(FIRST_NAMES)) == 16
+
+
+async def test_a_full_night_masks_names_so_a_stock_line_counts_as_repetition():
+    night = await run_night(FakeModel(stock_thanks), live_timeout=1.0, prep_timeout=1.0)
+    assert len(night.lines) == 8 * 16 - 1, "sixteen lines a date; no next up after the last"
+    assert {line.date for line in night.lines} == set(range(1, 9))
+    outros = [line.text for line in night.lines if line.moment is Moment.OUTRO]
+    assert outros == ["Thank you, [name] and [name]."] * 8
+    for line in night.lines:
+        for name in FIRST_NAMES:
+            assert not re.search(rf"\b{name}\b", line.text), (name, line.text)
+
+    rates, repeats = night_summary(night)
+    assert repeats[Moment.OUTRO] == Repetition(lines=8, near_duplicates=7, same_opening=7)
+    assert rates[Moment.OUTRO].replaced == 0
+
+
+async def test_fallbacks_count_towards_night_repetition_because_the_room_hears_them():
+    night = await run_night(
+        FakeModel(error=RuntimeError("down")), live_timeout=1.0, prep_timeout=1.0
+    )
+    rates, repeats = night_summary(night)
+    assert rates[Moment.OUTRO].replaced == 8 and rates[Moment.OUTRO].reasons["error"] == 8
+    assert repeats[Moment.OUTRO].near_duplicates == 7
+
+
+async def test_the_night_report_shows_the_lines_and_the_repetition_across_the_night():
+    night = await run_night(FakeModel(stock_thanks), live_timeout=1.0, prep_timeout=1.0)
+    report = render_night(night, model_name="fake/model")
+    assert "8 dates" in report and "Across the whole night" in report
+    for column in ("fallbacks", "near-duplicates", "same opening"):
+        assert column in report
+    assert "Thank you, [name] and [name]." in report

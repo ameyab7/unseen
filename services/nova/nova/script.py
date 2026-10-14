@@ -61,6 +61,8 @@ DECLINE_QUESTION = "Let's leave that one for another night. Back to you two."
 ROOM_TALK_FALLBACK = "Thanks for keeping the chat kind tonight, room."
 # Never for a dater who clearly wants to stop: they never get a reply cue at all.
 REPLY_FALLBACK = "I'm the AI host, so I'll stay out of that one. Back to you two."
+# Instead of the line above when what the dater said might be distress ("help").
+TAKE_YOUR_TIME = "Take all the time you need."
 
 
 def doors_fallback(pair: Pair) -> str:

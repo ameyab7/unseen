@@ -32,16 +32,21 @@ Date: 2026-10-13. Status: accepted.
     so "I'll stay out of that one" is never the answer.
   - **Maybe** ("help", "I'm scared", "that's not okay"): the moderator is alerted
     (`possible_distress`) and Nova answers as usual, so "can you help us pick a topic?"
-    gets a normal reply.
+    gets a normal reply. If the model fails, Nova says "Take all the time you need.",
+    never "I'll stay out of that one" (signed off by the product owner on 2026-10-13).
 
   Both lean towards hearing distress: a false alarm costs a breather or a look from the
   moderator.
-- **Lines vary.** Each line is written on its own, so asking the model to "vary" can't
-  work. Instead the line writer picks a shape for Next up and an opening for talk to the
-  room at random, and room talk is shown its earlier lines from the same date. Next up
-  never compares or pairs up the next daters. Room talk works only from safe facts about
-  the show (the segment, whether the poll is open, how many audience questions so far),
-  and never mentions the outcome, spending or anyone's looks.
+- **Lines vary across the night.** Listeners hear every date, so Nova remembers every line
+  it has used tonight, across dates (`nova/tonight.py`). Every prompt sees the lines
+  already said for its moment (daters' names masked, so no earlier dater's name reaches a
+  later date) and is told not to repeat or echo them. Each set piece gets three candidates
+  during prep; Nova keeps the one that passes the guardrails and is least similar to
+  tonight's lines. The line writer also picks a shape for Next up and an opening for talk
+  to the room at random. Next up never compares or pairs up the next daters. Room talk
+  works only from safe facts about the show (the segment, whether the poll is open, how
+  many audience questions so far), and never mentions the outcome, spending or anyone's
+  looks.
 - **Timeouts are settings.** `NOVA_LIVE_TIMEOUT_SECONDS` (default 2) for live reactions:
   measured on the development PC, warm Gemma's live lines took a median of 321-342 ms and
   at most 565 ms over 60 runs, so 2 s is about 3.5x the worst case and caps dead air at
@@ -56,6 +61,11 @@ Date: 2026-10-13. Status: accepted.
   (near-duplicates, with a word-level similarity of 0.7 or more to an earlier line; and
   lines that open with the same three words as an earlier one). Rehearsals measure the
   fallback rate too, from the `line` events, which record each line's moment and source.
+- **Full-night repetition is the number we track.** `--night` runs eight dates with
+  different pairs through the real line writer and tonight's memory, then reports, per
+  moment, repetition across the whole night among every line the room hears, fallbacks
+  included and names masked. The per-case run repeats identical inputs, so it overstates
+  repetition for lines that depend on the pair.
 
 ## How each guardrail checks, and what it can't catch
 
