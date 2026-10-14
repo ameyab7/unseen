@@ -63,6 +63,7 @@ class EndReason(StrEnum):
 class ModeratorAlert(StrEnum):
     PAUSE_NOT_BACK = "pause_not_back"  # a dater asked for a moment and isn't back after 30 s
     REPEATED_PAUSE = "repeated_pause"  # the second (or later) pause in this date
+    DATER_DISTRESSED = "dater_distressed"  # a dater asked Nova to stop or sounded distressed
 
 
 @dataclass(frozen=True)

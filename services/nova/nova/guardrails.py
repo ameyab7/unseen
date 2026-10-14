@@ -178,6 +178,39 @@ INSTRUCTING_NOVA = _any(
     r"\bjailbreak\b",
 )
 
+# A dater telling Nova they want to stop, or sounding distressed. Nova never deflects these:
+# the show runner pauses for that dater and alerts the moderator. Leans hard towards
+# hearing it: a false alarm ("can you help us pick a topic?") costs a short breather and a
+# look from the moderator; a miss would leave a dater unheard.
+NOT_ME = r"(?<!n't )(?<!not )"  # "don't stop now" is not a request to stop
+DISTRESS = _any(
+    r"\bhelp\b",
+    # Stopping, ending, leaving.
+    r"\b(?:want|wanna|need|like|have)\s+to\s+(?:stop|end|leave|quit|pause|get out)\b",
+    r"\b(?:want|wanna|need|have)\s+to\s+go(?:\s+home|\s+now)?\s*(?:[.?!,]|$)",
+    r"\b(?:can|could|should|shall)\s+we\s+(?:please\s+|just\s+)?(?:stop|end|finish|pause"
+    r"|wrap up)\b",
+    rf"\blet'?s\s+(?:please\s+|just\s+)?{NOT_ME}(?:stop|end|pause)\b",
+    rf"\bplease\s+stop\b|{NOT_ME}\bstop\b[,.]?\s*please\b",
+    rf"{NOT_ME}\bstop\s+(?:this|the date|the show)\b",
+    r"\bend\s+(?:this|the date|the show)\b",
+    r"\bget me (?:out|off)\b|\btake me off\b|\bi\s+want\s+out\b",
+    r"\bi(?:'m| am)\s+(?:so\s+|just\s+)?(?:done|out|leaving)\s*(?:[.?!,]|$)",
+    r"\b(?:i'm|i am)\s+(?:so\s+|just\s+)?done\s+with\s+(?:this|it|the date)\b",
+    r"\bi\s+can(?:'t|not)\s+do\s+this\b",
+    r"\b(?:this|it|that)(?:'s| is)\s+(?:all\s+|getting\s+|a bit\s+)?too much\b",
+    # Needing a break.
+    r"\bneed\s+(?:a|some)\s+(?:break|minute|moment|second|sec|breather|space|air)\b",
+    r"\bgive me\s+(?:a|some)\s+(?:minute|moment|second|sec|break|space)\b",
+    # Not comfortable, not safe.
+    r"\b(?:uncomfortable|unsafe|unwell)\b",
+    r"(?:\bnot|n't)\s+(?:feel(?:ing)?\s+)?(?:very\s+|so\s+|really\s+)?(?:comfortable|ok|okay"
+    r"|safe|alright|all right|fine|well)\b",
+    r"\b(?:scared|frightened|terrified|upset|anxious|panic\w*|overwhelmed|distressed"
+    r"|crying)\b",
+    r"\b(?:harass\w*|threaten\w*|abus\w*|inappropriate|creepy)\b",
+)
+
 SHOW_NAME = "Unseen"  # capitalised, it's the show; "keep it unseen" is decision talk
 ALWAYS_ALLOWED = frozenset({"I", "AI", "OK", SHOW_NAME})
 DAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
@@ -189,12 +222,13 @@ CALENDAR = frozenset(DAYS + MONTHS)
 SENTENCE_END = re.compile(r"[.?!]+(?=\s|$)")
 WORD = re.compile(r"[^\W\d_][\w'-]*")
 ALLOWED_PUNCTUATION = set(".,?;:'\"()-–—…")
+STRAIGHT_QUOTES = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"'})
 
 
 def clean(text: str) -> str:
     """Undoes the wrapping models add: smart quotes, line breaks, surrounding quotes and a
     "Nova:" label. Content is never changed."""
-    text = text.translate(str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"'}))
+    text = text.translate(STRAIGHT_QUOTES)
     text = " ".join(text.split())
     for _ in range(2):
         text = text.strip().strip('"').strip()
@@ -262,6 +296,12 @@ def question_is_off_limits(question: str) -> bool:
         or PERSONAL_DETAIL.search(question)
         or STREET.search(question)
     )
+
+
+def sounds_distressed(words: str) -> bool:
+    """True when a dater speaking to Nova wants to stop or sounds distressed: "I want to
+    stop", "I'm not comfortable", "can we end this", "help" and the like."""
+    return bool(DISTRESS.search(" ".join(words.translate(STRAIGHT_QUOTES).split())))
 
 
 def _has_formatting(text: str) -> bool:

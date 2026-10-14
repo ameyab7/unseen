@@ -43,6 +43,7 @@ from nova.cues import (
     StopSpeaking,
 )
 from nova.decisions import DecisionDesk, Outcome
+from nova.guardrails import sounds_distressed
 from nova.questions import AudienceQuestion
 from nova.timing import FULL, Timing
 
@@ -183,12 +184,8 @@ class ShowRunner:
         moderator keeps waiting, resumes or ends the date. No limit on how often, but the
         moderator is alerted when the same dater pauses a second time."""
         cues = self._advance(now)
-        if self._live and self._away is None and self.segment in ON_AIR:
-            self._away, self._held_since, self._overdue = seat, now, False
-            self._pauses[seat] += 1
-            cues += [Say(Moment.NEED_A_MOMENT, text=script.NEED_A_MOMENT), Say(Moment.ROOM_TALK)]
-            if self._pauses[seat] > 1:
-                cues.append(AlertModerator(ModeratorAlert.REPEATED_PAUSE, seat))
+        if self._can_pause:
+            cues += self._pause(now, seat, script.NEED_A_MOMENT)
         return cues
 
     def back(self, now: float, seat: Seat) -> list[Cue]:
@@ -257,9 +254,18 @@ class ShowRunner:
 
     def dater_asked_nova(self, now: float, seat: Seat, words: str) -> list[Cue]:
         """A dater spoke to Nova on air. Their words are data for the reply, never
-        instructions. Only while they're on air: not on a pause, not while deciding."""
+        instructions. Only while they're on air: not on a pause, not while deciding.
+
+        A dater who wants to stop or sounds distressed never gets a reply, so Nova can't
+        deflect them. The moderator is alerted at once, whenever it happens. If a pause can
+        start, Nova says the kind line and starts a need-a-moment pause for that dater; if
+        not (another pause, the decision window), Nova stays quiet and the moderator acts."""
         cues = self._advance(now)
-        if self._live and self._held_since is None and self.segment in ON_AIR:
+        if sounds_distressed(words):
+            cues.append(AlertModerator(ModeratorAlert.DATER_DISTRESSED, seat))
+            if self._can_pause:
+                cues += self._pause(now, seat, script.DISTRESS_PAUSE)
+        elif self._live and self._held_since is None and self.segment in ON_AIR:
             cues.append(Say(Moment.REPLY, about=seat, detail=words))
         return cues
 
@@ -268,6 +274,21 @@ class ShowRunner:
     @property
     def _live(self) -> bool:
         return self._started_at is not None and self.end_reason is None and not self.finished
+
+    @property
+    def _can_pause(self) -> bool:
+        """On air, and nobody else on a pause."""
+        return self._live and self._away is None and self.segment in ON_AIR
+
+    def _pause(self, now: float, seat: Seat, line: str) -> list[Cue]:
+        """Nova says the line and covers with talk to the room; the show clock holds until
+        the same dater is back."""
+        self._away, self._held_since, self._overdue = seat, now, False
+        self._pauses[seat] += 1
+        cues: list[Cue] = [Say(Moment.NEED_A_MOMENT, text=line), Say(Moment.ROOM_TALK)]
+        if self._pauses[seat] > 1:
+            cues.append(AlertModerator(ModeratorAlert.REPEATED_PAUSE, seat))
+        return cues
 
     def _show_time(self, now: float) -> float:
         if self._started_at is None:

@@ -78,14 +78,14 @@ async def test_claude_caches_the_rules_and_sends_no_sampling_settings():
     assert beta.calls == []
 
 
-@pytest.mark.parametrize("name", ["claude-opus-5-5", "claude-sonnet-5-5"])
-async def test_claude_opus_and_sonnet_turn_on_server_side_fallbacks(name):
+@pytest.mark.parametrize("name", ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"])
+async def test_no_claude_model_uses_server_side_refusal_fallbacks_for_now(name):
+    """Decision 0005: added back if and when Nova switches to Claude."""
     client, messages, beta = fake_anthropic(claude_reply())
     await AnthropicModel(name, client=client).write(system="RULES", prompt="TASK")
-    call = beta.calls[0]
-    assert call["betas"] == ["server-side-fallback-2026-07-01"]
-    assert call["fallbacks"] == "default"
-    assert messages.calls == []
+    assert beta.calls == []
+    assert len(messages.calls) == 1
+    assert "betas" not in messages.calls[0] and "fallbacks" not in messages.calls[0]
 
 
 async def test_a_claude_refusal_raises_so_nova_uses_a_fallback_line():

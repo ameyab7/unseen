@@ -450,6 +450,71 @@ def test_need_a_moment_only_on_air_and_one_at_a_time():
     assert show.at(520, "need_a_moment", LEFT) == [], "not while the daters decide"
 
 
+# --- A dater who wants to stop ------------------------------------------------------------
+
+
+KIND = Say(Moment.NEED_A_MOMENT, text=script.DISTRESS_PAUSE)
+DISTRESSED = AlertModerator(ModeratorAlert.DATER_DISTRESSED, LEFT)
+
+
+@pytest.mark.parametrize(
+    "words", ["Nova, I want to stop.", "I'm not comfortable.", "Can we end this?", "Help."]
+)
+def test_a_dater_who_wants_to_stop_gets_a_kind_line_a_pause_and_the_moderator(words):
+    show = Show()
+    assert show.at(100, "dater_asked_nova", LEFT, words) == [
+        DISTRESSED,
+        KIND,
+        Say(Moment.ROOM_TALK),
+    ]
+    show.until(119.5)
+    assert show.cues(since=100.5, before=120) == [], "the show holds, as for a moment"
+    assert show.at(120, "back", LEFT) == [WELCOME_BACK]
+    show.until(300)
+    assert (260.0, "from_the_room") in show.segments(), "the running order shifted by 20 s"
+
+
+def test_the_kind_line_is_the_one_the_product_owner_approved():
+    assert script.DISTRESS_PAUSE == "Of course. Let's take a breather."
+
+
+def test_nova_never_deflects_a_dater_who_wants_to_stop():
+    show = Show()
+    cues = show.at(100, "dater_asked_nova", RIGHT, "Nova, help, can we end this?")
+    assert Say(Moment.REPLY, about=RIGHT, detail="Nova, help, can we end this?") not in cues
+    assert [c.moment for c in cues if isinstance(c, Say)] == [
+        Moment.NEED_A_MOMENT,
+        Moment.ROOM_TALK,
+    ], "no reply cue, so the model never sees the words and never says it'll stay out of it"
+
+
+def test_after_a_distress_pause_the_usual_pause_rules_apply():
+    show = Show()
+    show.at(100, "dater_asked_nova", LEFT, "I'm not comfortable.")
+    show.until(130)
+    assert show.cues(since=130, before=130.5) == NOT_BACK, "not back in 30 s"
+    show.at(140, "back", LEFT)
+    assert show.at(200, "dater_asked_nova", LEFT, "Help.") == [
+        DISTRESSED,
+        KIND,
+        Say(Moment.ROOM_TALK),
+        AlertModerator(ModeratorAlert.REPEATED_PAUSE, LEFT),
+    ]
+
+
+def test_when_a_pause_cant_start_nova_stays_quiet_but_the_moderator_is_always_alerted():
+    show = Show()
+    show.at(100, "need_a_moment", RIGHT)
+    assert show.at(105, "dater_asked_nova", LEFT, "I want to stop.") == [DISTRESSED], "a pause"
+    show.at(110, "back", RIGHT)
+    # The 10 s hold moved Time from 480 to 490 and the result from 540 to 550.
+    assert show.at(495, "dater_asked_nova", LEFT, "Can we end this?") == [DISTRESSED], "deciding"
+    show.until(560)
+    assert show.at(560, "dater_asked_nova", LEFT, "Help.") == [DISTRESSED], "after the result"
+    show.until(700)
+    assert show.at(700, "dater_asked_nova", LEFT, "Help.") == [DISTRESSED], "after the show"
+
+
 # --- A dater leaves -----------------------------------------------------------------------
 
 
