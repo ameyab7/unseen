@@ -4,9 +4,12 @@ version = "0.1.0"
 description = "Nova, the AI host of Unseen: a LiveKit agent."
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    # openai: Ollama's OpenAI-compatible API (local Gemma). anthropic: Claude, when
-    # NOVA_LLM selects it. silero: voice activity detection for silence in free talk.
+    # LiveKit agents, with silero for voice activity detection (silence in free talk).
     "livekit-agents[anthropic,openai,silero]~=1.8.6",
+    # Nova's line writer calls these SDKs directly (both come with the LiveKit extras):
+    # openai for Ollama's OpenAI-compatible API (local Gemma), anthropic for Claude.
+    "anthropic~=0.125",
+    "openai~=2.54",
     "python-dotenv~=1.2",
 ]
 

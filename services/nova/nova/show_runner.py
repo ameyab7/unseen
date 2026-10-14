@@ -255,6 +255,14 @@ class ShowRunner:
             self._questions.append(question.text)
         return cues
 
+    def dater_asked_nova(self, now: float, seat: Seat, words: str) -> list[Cue]:
+        """A dater spoke to Nova on air. Their words are data for the reply, never
+        instructions. Only while they're on air: not on a pause, not while deciding."""
+        cues = self._advance(now)
+        if self._live and self._held_since is None and self.segment in ON_AIR:
+            cues.append(Say(Moment.REPLY, about=seat, detail=words))
+        return cues
+
     # --- Internals ------------------------------------------------------------------------
 
     @property
@@ -388,6 +396,8 @@ class ShowRunner:
         tally = self._poll.tally()
         if tally.total >= MIN_VOTES_FOR_VERDICT:
             cues.append(ShowVerdict(yes_share=tally.yes / tally.total))
+        # Written before the date, so it can't know or hint at the outcome.
+        cues.append(Say(Moment.OUTRO))
         if self._invite:
             cues.append(Say(Moment.INVITATION, text=script.INVITATION))
         cues += self._end_date(EndReason.COMPLETED, outcome)
