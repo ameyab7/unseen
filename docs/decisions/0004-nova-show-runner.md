@@ -52,6 +52,7 @@ Date: 2026-10-13. Status: accepted.
   `dates.end_reason` column when the schema is written.
 - The questions table needs a moderator-approved status distinct from the automatic screen.
 - The moderator console needs the two pause alerts ("not back after 30 seconds" and
-  "second pause by the same dater"), and for a dater who isn't back, three controls: keep
+  "second pause by the same dater"), the distress alert ("a dater told Nova they want to
+  stop", decision 0005), and for a dater who isn't back, three controls: keep
   waiting, resume without them, and end the date (the runner's `moderator_keep_waiting`,
   `moderator_resume` and `moderator_end`). It also needs a control to stop the fallback.

@@ -61,16 +61,13 @@ class OllamaModel:
         return content
 
 
-# Server-side refusal fallbacks (beta), on by default for these models. Nova still has its
-# own fallback line if the whole chain declines.
-SERVER_FALLBACK_MODELS = frozenset({"claude-opus-5-5", "claude-sonnet-5-5"})
-
-
 class AnthropicModel:
     """Claude through the official Anthropic SDK.
 
     Nova's rules go in a cached system block. No temperature or other sampling settings
     (current Claude models reject them), and effort "low": these are short spoken lines.
+    A refusal raises, and Nova says its own fallback line. No server-side refusal fallback
+    for now; decision 0005 adds it back if and when Nova switches to Claude.
     """
 
     MAX_TOKENS = 2048  # room for adaptive thinking; the line itself is short
@@ -81,20 +78,13 @@ class AnthropicModel:
         self._client = client or AsyncAnthropic(api_key=api_key, max_retries=0)
 
     async def write(self, *, system: str, prompt: str) -> str:
-        request: dict[str, Any] = {
-            "model": self._model,
-            "max_tokens": self.MAX_TOKENS,
-            "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-            "messages": [{"role": "user", "content": prompt}],
-            "output_config": {"effort": "low"},
-        }
-        if self._model in SERVER_FALLBACK_MODELS:
-            response = await self._client.beta.messages.create(
-                **request, betas=["server-side-fallback-2026-07-01"], fallbacks="default"
-            )
-        else:
-            response = await self._client.messages.create(**request)
-
+        response = await self._client.messages.create(
+            model=self._model,
+            max_tokens=self.MAX_TOKENS,
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": prompt}],
+            output_config={"effort": "low"},
+        )
         if response.stop_reason == "refusal":
             raise ModelRefused("refused")
         if response.stop_reason == "max_tokens":

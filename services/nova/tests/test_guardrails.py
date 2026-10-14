@@ -3,7 +3,7 @@ model's output (or a prompt injection that fooled it) and the room."""
 
 import pytest
 
-from nova.guardrails import Violation, check, clean, question_is_off_limits
+from nova.guardrails import Violation, check, clean, question_is_off_limits, sounds_distressed
 
 NAMES = frozenset({"Maya", "Theo", "Nova"})
 V = Violation
@@ -279,3 +279,66 @@ def test_an_idea_can_sound_lovely_but_a_person_cannot():
     assert found("Sounds lovely, Maya. Tell us more.") == set()
     assert V.LOOKS_OR_VOICE in found("Maya sounds lovely tonight.")
     assert V.LOOKS_OR_VOICE in found("Theo, you sound nervous.")
+
+
+# --- A dater who wants to stop -----------------------------------------------------------
+
+DISTRESSED = [
+    # The product owner's examples.
+    "Nova, I want to stop.",
+    "I'm not comfortable.",
+    "Can we end this?",
+    "Help.",
+    # Other ways to say it.
+    "Nova, help me out here, please.",
+    "I'd like to stop now.",
+    "Can we stop?",
+    "Please stop.",
+    "Let's stop the date.",
+    "Honestly I don’t feel comfortable with this.",  # a curly apostrophe, from speech-to-text
+    "This is making me uncomfortable.",
+    "That's not okay.",
+    "I'm not OK.",
+    "I don't feel safe.",
+    "I feel unsafe.",
+    "Can we end the date?",
+    "I want to leave.",
+    "I need to go.",
+    "Get me out of here.",
+    "Take me off air.",
+    "I'm done.",
+    "I can't do this.",
+    "This is too much.",
+    "I need a break.",
+    "Give me a minute.",
+    "I'm scared.",
+    "I'm really upset.",
+    "I feel anxious.",
+    "I'm having a panic attack.",
+    "I'm overwhelmed.",
+    "He's harassing me.",
+    "That was inappropriate.",
+]
+
+
+@pytest.mark.parametrize("words", DISTRESSED)
+def test_a_dater_who_wants_to_stop_or_sounds_distressed_is_heard(words):
+    assert sounds_distressed(words)
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        "Nova, are you a real person?",
+        "Nova, who chose what on the last date?",
+        "I can't stop laughing.",
+        "Don't stop now, this is fun.",
+        "That was really helpful.",
+        "I'm comfortable talking about anything.",
+        "I'm totally fine with that question.",
+        "Nova, what's the weirdest date you've heard of?",
+        "Nova, you're doing a great job.",
+    ],
+)
+def test_ordinary_things_said_to_nova_are_not_distress(words):
+    assert not sounds_distressed(words)

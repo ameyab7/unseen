@@ -22,6 +22,8 @@ NEED_A_MOMENT = "Let's take a short breather. Room, stay with us."
 WELCOME_BACK = "And we're back."  # only when the dater who paused actually returns
 BEAR_WITH_US = "Bear with us a little longer, room."  # once, if they're not back in time
 MODERATOR_END = "We're ending this date here. Thanks for listening, everyone."
+# When a dater tells Nova they want to stop or sounds distressed: never a deflection.
+DISTRESS_PAUSE = "Of course. Let's take a breather."
 
 
 def time_line(pair: Pair) -> str:
@@ -48,7 +50,7 @@ def result_line(outcome: Outcome) -> str:
 # Used when the model is too slow, fails, or writes a line a guardrail rejects. Built only
 # from structured card fields (first name, age), never from free text a dater or listener
 # wrote, so an injected card or question can't reach the room through a fallback.
-# PENDING SIGN-OFF: none of these are in the brand book or the prototype.
+# Not in the brand book or the prototype; signed off by the product owner on 2026-10-13.
 
 LIGHTNING_FALLBACKS = (
     "Quick one: mountains or sea?",
@@ -57,6 +59,7 @@ LIGHTNING_FALLBACKS = (
 )
 DECLINE_QUESTION = "Let's leave that one for another night. Back to you two."
 ROOM_TALK_FALLBACK = "Thanks for keeping the chat kind tonight, room."
+# Only for ordinary questions: a dater who wants to stop never gets a reply cue at all.
 REPLY_FALLBACK = "I'm the AI host, so I'll stay out of that one. Back to you two."
 
 
