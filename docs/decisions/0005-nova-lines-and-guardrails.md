@@ -44,11 +44,17 @@ Date: 2026-10-13. Status: accepted.
   during prep; Nova keeps the one that passes the guardrails and is least similar to
   tonight's lines. The line writer also picks a shape for Next up and an opening for talk
   to the room at random, and gives each date's three lightning questions one of each
-  format (either/or, finish the sentence, one-word answer) in a random order. The outro
-  is one sentence with no question. Next up never compares or pairs up the next daters. Room talk
-  works only from safe facts about the show (the segment, whether the poll is open, how
-  many audience questions so far), and never mentions the outcome, spending or anyone's
-  looks.
+  format (either/or, finish the sentence, one-word answer) in a random order; each is one
+  sentence. The model's outro is one sentence with no question. Next up never compares
+  or pairs up the next daters. Room talk works only from safe facts about the show (the
+  segment, whether the poll is open, how many audience questions so far), and never
+  mentions the outcome, spending or anyone's looks.
+- **Fixed fallbacks take turns across the night.** Silence, lightning and outro
+  fallbacks each use the option least like what Nova has said tonight, so a night
+  doesn't hear the same fallback twice while another is unused. "Last quick one" only
+  ever comes last. The four outro fallbacks were signed off by the product owner on
+  2026-10-13; two are two short sentences, which the one-sentence rule (for the model)
+  allows for them.
 - **Timeouts are settings.** `NOVA_LIVE_TIMEOUT_SECONDS` (default 2) for live reactions:
   measured on the development PC, warm Gemma's live lines took a median of 321-342 ms and
   at most 565 ms over 60 runs, so 2 s is about 3.5x the worst case and caps dead air at
@@ -85,7 +91,7 @@ fallback line, never an unsafe one.
 | Spending | Coins, gestures, gifts, roses, encores, buy, spending money, membership, subscribe | Indirect asks ("show them some love tonight") |
 | Unkind | A short list of insults (stupid, pathetic, desperate, creepy, shut up) | Sarcasm, tone, mockery without those words |
 | Instructions | Talk of instructions, rules, the system, data, prompts, angle brackets, "I was told"; Nova claiming any name but Nova ("I'm Kate", "call me Kate") | An injection that steers Nova into an ordinary-looking line, such as an untrue but harmless claim about a dater |
-| Voice and format | Exclamation marks, emoji, symbols, markdown, length (characters and sentences), names in the wrong case; the outro is one sentence with no question; a lightning question doesn't open with both daters' names | Tone, wrong pronouns, a question ending in a full stop (handled by the instructions only) |
+| Voice and format | Exclamation marks, emoji, symbols, markdown, length (characters and sentences), names in the wrong case; the model's outro is one sentence with no question; a lightning question is one sentence and doesn't open with both daters' names | Tone, wrong pronouns, a question ending in a full stop (handled by the instructions only) |
 | A dater who wants to stop (what they say to Nova, not Nova's line) | Clear: wanting to stop, end or leave, needing a moment or a break, not comfortable, safe or well, overwhelmed, a panic attack, harassment. Maybe: "help", scared, upset, anxious, crying, creepy, inappropriate, "that's not okay" | Distress said to the other dater rather than to Nova, worded another way ("I'd rather be anywhere else"), or heard only in a voice |
 
 Before the model, audience questions about personal details or looks, or that try to give

@@ -249,7 +249,9 @@ async def test_fallbacks_count_towards_night_repetition_because_the_room_hears_t
     )
     rates, repeats = night_summary(night)
     assert rates[Moment.OUTRO].replaced == 8 and rates[Moment.OUTRO].reasons["error"] == 8
-    assert repeats[Moment.OUTRO].near_duplicates == 7
+    outros = {line.text for line in night.lines if line.moment is Moment.OUTRO}
+    assert len(outros) == 4, "the four approved outro fallbacks take turns"
+    assert repeats[Moment.OUTRO].near_duplicates >= 4, "eight dates, four lines: repeats count"
 
 
 async def test_the_night_report_shows_the_lines_and_the_repetition_across_the_night():

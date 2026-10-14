@@ -78,8 +78,16 @@ def last_word_fallback(card: BlindCard) -> str:
     return f"{card.first_name}, the last word is yours."
 
 
-def outro_fallback(pair: Pair) -> str:
-    return f"{pair.left.first_name} and {pair.right.first_name}, thank you both."
+def outro_fallbacks(pair: Pair) -> tuple[str, str, str, str]:
+    """Taken in turn across the night (signed off by the product owner on 2026-10-13). Two
+    are two short sentences; the one-sentence rule is for the model's own outros."""
+    left, right = pair.left.first_name, pair.right.first_name
+    return (
+        f"{left} and {right}, thank you both.",
+        f"Thank you, {left}. Thank you, {right}.",
+        f"That's our date with {left} and {right}. Thank you both.",
+        f"{left}, {right}, thank you for being here tonight.",
+    )
 
 
 def next_up_fallback(pair: Pair) -> str:
