@@ -30,6 +30,24 @@ class TestLlmChoice:
             LlmChoice.parse("openai/gpt-5")
 
 
+class TestSpeech:
+    def test_nova_has_a_voice_and_hears_daters_by_default(self):
+        settings = Settings.from_env(GOOD)
+        assert settings.voice == "cartesia/sonic-3:f31cc6a7-c1e8-4764-980c-60a361443dd1"
+        assert settings.stt == "deepgram/nova-3"
+
+    def test_the_voice_and_speech_recognition_are_settings(self):
+        settings = Settings.from_env(
+            {**GOOD, "NOVA_VOICE": " deepgram/aura-2:odysseus ", "NOVA_STT": "deepgram/flux"}
+        )
+        assert (settings.voice, settings.stt) == ("deepgram/aura-2:odysseus", "deepgram/flux")
+
+    @pytest.mark.parametrize("value", ["odysseus", "deepgram/", "/aura-2:odysseus"])
+    def test_a_voice_needs_a_provider_and_model(self, value):
+        with pytest.raises(ConfigError, match='NOVA_VOICE must look like "provider/model'):
+            Settings.from_env({**GOOD, "NOVA_VOICE": value})
+
+
 class TestSettings:
     def test_reads_every_value(self):
         settings = Settings.from_env(GOOD)

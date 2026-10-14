@@ -18,6 +18,11 @@ DEFAULT_ENV_FILE = Path(__file__).parents[1] / ".env"
 
 PROVIDERS = ("anthropic", "ollama")
 
+# LiveKit's built-in speech models. The voice is a shortlist pick until the product owner
+# chooses one (task 5); Robyn is Cartesia's neutral, mature voice.
+DEFAULT_VOICE = "cartesia/sonic-3:f31cc6a7-c1e8-4764-980c-60a361443dd1"
+DEFAULT_STT = "deepgram/nova-3"
+
 
 class ConfigError(ValueError):
     """A missing or malformed setting. The message names it, never its value."""
@@ -55,6 +60,9 @@ class Settings:
     # How long a set piece may take before the date. Loading Gemma cold took 28 s, so 60 s
     # covers a cold start plus the line; the date only starts once these are ready.
     prep_timeout: float = 60.0
+    # Nova's voice as "provider/model:voice", and the speech recognition that hears daters.
+    voice: str = DEFAULT_VOICE
+    stt: str = DEFAULT_STT
 
     REQUIRED: ClassVar[tuple[str, ...]] = (
         "LIVEKIT_URL",
@@ -68,6 +76,8 @@ class Settings:
         "OLLAMA_BASE_URL",
         "NOVA_LIVE_TIMEOUT_SECONDS",
         "NOVA_PREP_TIMEOUT_SECONDS",
+        "NOVA_VOICE",
+        "NOVA_STT",
     )
 
     @classmethod
@@ -90,7 +100,17 @@ class Settings:
             ollama_base_url=env.get("OLLAMA_BASE_URL", "").strip() or cls.ollama_base_url,
             live_timeout=_seconds(env, "NOVA_LIVE_TIMEOUT_SECONDS", cls.live_timeout),
             prep_timeout=_seconds(env, "NOVA_PREP_TIMEOUT_SECONDS", cls.prep_timeout),
+            voice=_voice(env.get("NOVA_VOICE", "").strip() or cls.voice),
+            stt=env.get("NOVA_STT", "").strip() or cls.stt,
         )
+
+
+def _voice(value: str) -> str:
+    model = value.partition(":")[0]
+    provider, _, name = model.partition("/")
+    if not provider or not name:
+        raise ConfigError(f'NOVA_VOICE must look like "provider/model:voice", got {value!r}')
+    return value
 
 
 def _seconds(env: Mapping[str, str], name: str, default: float) -> float:

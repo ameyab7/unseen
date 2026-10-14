@@ -1,0 +1,168 @@
+"""Nova in a LiveKit room: one measured rehearsal date for the Agents Playground (task 5).
+
+    uv run python -m nova.agent dev
+
+Then open agents-playground.livekit.io, choose the project and connect. Nova prepares its
+set pieces, waits for you, and runs one rehearsal date (about three minutes) as the host
+of Maya and Theo. You play both daters: speak, start with "Nova, ..." to talk to Nova, and
+type commands in the chat box (nova/rehearsal.py, Command): maya, theo, moment, back,
+unlock, ask <question>, reveal, unseen, keep, resume, end, leave. At the end the report
+(codes and numbers only) is logged and saved in services/nova/rehearsals/.
+
+Privacy (CLAUDE.md): recording is off, so LiveKit Cloud keeps no audio, transcripts or
+traces; LiveKit's own log fields that carry what people said (lk.pii.*) are redacted; and
+what daters say or type stays in memory.
+"""
+
+import asyncio
+import contextlib
+import logging
+import os
+import time
+from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference, room_io
+
+from nova.config import load_settings
+from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
+from nova.models import build_model
+from nova.rehearsal import Rehearsal, render_report
+from nova.timing import REHEARSAL
+
+logger = logging.getLogger("nova.agent")
+
+START_OPTIONS: dict[str, Any] = {"record": False}
+REPORTS = Path(__file__).parents[1] / "rehearsals"  # never committed
+REDACTED = "[redacted]"
+
+
+class RedactPii(logging.Filter):
+    """LiveKit marks log fields holding what people said or typed with an lk.pii. prefix.
+    They're blanked before any record is written."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        for key in list(vars(record)):
+            if key.startswith("lk.pii"):
+                setattr(record, key, REDACTED)
+        return True
+
+
+def redact_logs() -> None:
+    redact = RedactPii()
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(redact)
+
+
+def voice_parts(voice: str) -> tuple[str, str | None]:
+    """ "provider/model:voice" -> ("provider/model", "voice")."""
+    model, _, name = voice.partition(":")
+    return model, name or None
+
+
+class SessionSpeaker:
+    """Nova's voice through the agent session. Lines play one at a time and can't be talked
+    over; a line's first audio is when the agent's state turns to speaking."""
+
+    START_TIMEOUT = 10.0
+
+    def __init__(self, session: Any, *, clock: Callable[[], float] = time.monotonic) -> None:
+        self._session = session
+        self._clock = clock
+        self._speaking = asyncio.Event()
+        self._started_at: float | None = None
+        session.on("agent_state_changed", self._on_state)
+
+    def _on_state(self, event: Any) -> None:
+        if event.new_state == "speaking" and not self._speaking.is_set():
+            self._started_at = self._clock()
+            self._speaking.set()
+
+    async def speak(self, text: str) -> float | None:
+        self._speaking.clear()
+        self._started_at = None
+        handle = self._session.say(text, allow_interruptions=False, add_to_chat_ctx=False)
+        with contextlib.suppress(TimeoutError):  # never started: measured as a miss
+            await asyncio.wait_for(self._speaking.wait(), self.START_TIMEOUT)
+        started = self._started_at
+        await handle.wait_for_playout()
+        return started
+
+    def stop(self) -> None:
+        self._session.interrupt(force=True)
+
+
+server = AgentServer()
+
+
+@server.rtc_session()
+async def rehearse(ctx: JobContext) -> None:
+    redact_logs()
+    settings = load_settings()
+    model, voice = voice_parts(settings.voice)
+    session = AgentSession(
+        stt=inference.STT(settings.stt, language="en"),
+        tts=inference.TTS(model, voice=voice) if voice else inference.TTS(model),
+    )
+    rehearsal = Rehearsal(
+        REHEARSAL_PAIR,
+        model=build_model(settings),
+        speaker=SessionSpeaker(session),
+        voice=settings.voice,
+        stt=settings.stt,
+        timing=REHEARSAL,
+        next_pair=NEXT_PAIR,
+        live_timeout=settings.live_timeout,
+        prep_timeout=settings.prep_timeout,
+    )
+
+    def on_user_state(event: Any) -> None:
+        if event.new_state == "speaking":
+            rehearsal.speech_started()
+        elif event.old_state == "speaking":
+            rehearsal.speech_ended()
+
+    def on_transcript(event: Any) -> None:
+        if event.is_final:
+            rehearsal.transcript(event.transcript)
+
+    def on_chat(_session: AgentSession, event: room_io.TextInputEvent) -> None:
+        rehearsal.command(event.text)
+
+    session.on("user_state_changed", on_user_state)
+    session.on("user_input_transcribed", on_transcript)
+
+    preparing = asyncio.create_task(rehearsal.prepare())
+    await session.start(
+        agent=Agent(instructions="Nova's lines come from the show runner; no replies here."),
+        room=ctx.room,
+        room_options=room_io.RoomOptions(
+            text_input=room_io.TextInputOptions(text_input_cb=on_chat)
+        ),
+        **START_OPTIONS,
+    )
+    await ctx.wait_for_participant()
+    await preparing
+    await rehearsal.run()
+
+    report = render_report(rehearsal)
+    REPORTS.mkdir(exist_ok=True)
+    path = REPORTS / f"{datetime.now():%Y-%m-%d-%H%M%S}.txt"
+    path.write_text(report + "\n", encoding="utf-8")
+    logger.info("rehearsal report saved to %s\n%s", path, report)
+    ctx.shutdown("rehearsal finished")
+
+
+def main() -> None:
+    settings = load_settings()
+    # The LiveKit CLI and its speech models read these from the environment.
+    os.environ.setdefault("LIVEKIT_URL", settings.livekit_url)
+    os.environ.setdefault("LIVEKIT_API_KEY", settings.livekit_api_key)
+    os.environ.setdefault("LIVEKIT_API_SECRET", settings.livekit_api_secret)
+    cli.run_app(server)
+
+
+if __name__ == "__main__":
+    main()

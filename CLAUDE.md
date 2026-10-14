@@ -41,6 +41,9 @@ components and say so in the pull request.
   and attacks against the real model in NOVA_LLM; --night runs a full night of eight dates
   and reports repetition across it (the number we track). On demand only, never in CI;
   run it before any model change (docs/decisions/0005-nova-lines-and-guardrails.md)
+- services/nova: uv run python -m nova.agent dev runs Nova in LiveKit for one measured
+  rehearsal date in the Agents Playground; uv run python -m nova.voices writes voice
+  samples. Both use LiveKit credit (docs/spike-results.md)
 
 Install app packages from apps/mobile with
 `node ../../node_modules/expo/bin/cli install <pkg>`, not `npx expo install`, then
