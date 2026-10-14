@@ -2,13 +2,15 @@
 
 - Approved lines (cue text) are spoken as written.
 - Set pieces (the Doors intro, first questions, lightning questions, last words, the outro
-  and Next up) are written before the date by prepare(). The model is never called for
-  them during the date; anything missing uses its fallback.
+  and Next up) are written before the date by prepare(), three candidates each; the one
+  kept passes the guardrails and is least like what Nova has said tonight. The model is
+  never called for them during the date; anything missing uses its fallback.
 - Live reactions (a silence, an audience question, talk to the room, a reply to a dater)
   call the model during the date, within live_timeout.
 
-Every model line passes the guardrails or is replaced by a fallback line. The log records
-events and timings only, never text.
+Every model line passes the guardrails or is replaced by a fallback line. Every prompt
+sees what Nova has said tonight for that moment, across dates (nova/tonight.py). The log
+records events and timings only, never text.
 """
 
 import asyncio
@@ -22,8 +24,9 @@ from nova import prompts, script
 from nova.cards import Pair, Seat
 from nova.cues import Moment, RoomFacts, Say
 from nova.events import Event, EventLog
-from nova.guardrails import Violation, check, clean, question_is_off_limits
+from nova.guardrails import Distress, Violation, check, clean, distress_in, question_is_off_limits
 from nova.models import LineModel, ModelRefused
+from nova.tonight import Tonight
 
 SET_PIECES = frozenset(
     {
@@ -36,6 +39,7 @@ SET_PIECES = frozenset(
     }
 )
 LIVE_REACTIONS = frozenset({Moment.SILENCE, Moment.FROM_THE_ROOM, Moment.ROOM_TALK, Moment.REPLY})
+CANDIDATES = 3  # model lines written for each set piece; the best one is kept
 
 
 class Source(StrEnum):
@@ -115,6 +119,7 @@ def fallback_lines(pair: Pair, next_pair: Pair | None) -> list[tuple[Moment, str
         (Moment.FROM_THE_ROOM, script.DECLINE_QUESTION),
         (Moment.ROOM_TALK, script.ROOM_TALK_FALLBACK),
         (Moment.REPLY, script.REPLY_FALLBACK),
+        (Moment.REPLY, script.TAKE_YOUR_TIME),
     ]
     if next_pair is not None:
         lines.append((Moment.NEXT_UP, script.next_up_fallback(next_pair)))
@@ -132,6 +137,7 @@ class LineWriter:
         prep_timeout: float = 60.0,
         events: EventLog | None = None,
         rng: random.Random | None = None,
+        tonight: Tonight | None = None,
     ) -> None:
         self._model = model
         self._pair = pair
@@ -140,19 +146,22 @@ class LineWriter:
         self._prep_timeout = prep_timeout
         self._events = events or EventLog()
         self._rng = rng or random.Random()  # picks shapes and openings, so lines vary
+        self._tonight = tonight or Tonight()  # shared by every date's writer tonight
+        self._names = {pair.left.first_name, pair.right.first_name}
+        if next_pair is not None:
+            self._names |= {next_pair.left.first_name, next_pair.right.first_name}
         self._prepared: dict[tuple[Moment, Seat | None, str | None], Line] = {}
-        self._silences = 0
-        self._silence_lines: list[str] = []
-        self._room_talk_lines: list[str] = []
 
     # --- Before the date ------------------------------------------------------------------
 
     async def prepare(self) -> None:
-        """Writes every set piece, one at a time (lightning questions see the earlier ones)."""
+        """Writes every set piece, one at a time, so each sees the ones chosen before it
+        (tonight's memory includes them as soon as they're chosen)."""
         started = time.monotonic()
         for say in self._set_piece_cues():
-            attempt = await self._attempt(say, self._prompt_for(say), self._prep_timeout)
-            self._prepared[_key(say)] = self._settle(say, attempt, Source.PREPARED)
+            line = await self._prepare_one(say)
+            self._prepared[_key(say)] = line
+            self._tonight.remember(say.moment, line.text, names=self._names)
         fallbacks = sum(line.source is Source.FALLBACK for line in self._prepared.values())
         self._events.emit(
             Event.PREPARED,
@@ -165,6 +174,8 @@ class LineWriter:
 
     async def line_for(self, say: Say) -> Line:
         line = await self._line_for(say)
+        if line.source is not Source.FIXED and line.moment in LIVE_REACTIONS:
+            self._tonight.remember(line.moment, line.text, names=self._names)
         self._events.emit(
             Event.LINE,
             moment=line.moment,
@@ -191,23 +202,32 @@ class LineWriter:
         if say.moment not in LIVE_REACTIONS:
             raise ValueError(f"No line for {say.moment}: it needs approved text")
 
-        if say.moment is Moment.SILENCE:
-            self._silences += 1
         if say.moment is Moment.FROM_THE_ROOM and question_is_off_limits(say.detail or ""):
             return Line(
                 script.DECLINE_QUESTION, Source.FALLBACK, say.moment, error=ErrorKind.DECLINED
             )
 
         attempt = await self._attempt(say, self._prompt_for(say), self._live_timeout)
-        line = self._settle(say, attempt, Source.MODEL)
-        if line.source is Source.MODEL:
-            if say.moment is Moment.SILENCE:
-                self._silence_lines = [*self._silence_lines, line.text][-5:]
-            if say.moment is Moment.ROOM_TALK:
-                self._room_talk_lines = [*self._room_talk_lines, line.text][-5:]
-        return line
+        return self._settle(say, attempt, Source.MODEL)
 
     # --- Internals ------------------------------------------------------------------------
+
+    async def _prepare_one(self, say: Say) -> Line:
+        """Three candidates at once; keeps the one that passes the guardrails and is least
+        like what Nova has said tonight for this moment. If none passes, the fallback."""
+        attempts = await asyncio.gather(
+            *(
+                self._attempt(say, self._prompt_for(say), self._prep_timeout)
+                for _ in range(CANDIDATES)
+            )
+        )
+        passing = [attempt for attempt in attempts if attempt.ok]
+        best = min(
+            passing,
+            key=lambda a: self._tonight.closeness(say.moment, a.text or "", names=self._names),
+            default=attempts[0],
+        )
+        return self._settle(say, best, Source.PREPARED)
 
     async def _attempt(self, say: Say, prompt: str, timeout: float) -> Attempt:
         started = time.monotonic()
@@ -271,8 +291,13 @@ class LineWriter:
             case Moment.NEXT_UP:
                 return [script.next_up_fallback(self._next_pair or pair)]
             case Moment.SILENCE:
-                options = script.silence_fallbacks(pair)
-                return [options[(max(self._silences, 1) - 1) % len(options)]]
+                # The one least like tonight's silence prompts: they take turns all night.
+                return [
+                    min(
+                        script.silence_fallbacks(pair),
+                        key=lambda o: self._tonight.closeness(say.moment, o, names=self._names),
+                    )
+                ]
             case Moment.FROM_THE_ROOM:
                 return [
                     script.from_the_room_verbatim(say.detail or ""),
@@ -281,41 +306,36 @@ class LineWriter:
             case Moment.ROOM_TALK:
                 return [script.ROOM_TALK_FALLBACK]
             case Moment.REPLY:
+                if distress_in(say.detail or "") is not Distress.NONE:
+                    return [script.TAKE_YOUR_TIME]  # never "I'll stay out of that one"
                 return [script.REPLY_FALLBACK]
         raise ValueError(f"No fallback for {say.moment}")
 
     def _prompt_for(self, say: Say) -> str:
-        pair = self._pair
+        pair, tonight = self._pair, self._tonight.said(say.moment)
         match say.moment:
             case Moment.DOORS_INTRO:
-                return prompts.doors_intro(pair)
+                return prompts.doors_intro(pair, tonight=tonight)
             case Moment.FIRST_QUESTION:
-                return prompts.first_question(pair, _seat(say))
+                return prompts.first_question(pair, _seat(say), tonight=tonight)
             case Moment.LIGHTNING_QUESTION:
-                earlier = [
-                    line.text
-                    for key, line in self._prepared.items()
-                    if key[0] is Moment.LIGHTNING_QUESTION and line.source is Source.PREPARED
-                ]
-                return prompts.lightning_question(pair, _lightning_number(say), previous=earlier)
+                return prompts.lightning_question(pair, _lightning_number(say), tonight=tonight)
             case Moment.LAST_WORD:
-                return prompts.last_word(pair, _seat(say))
+                return prompts.last_word(pair, _seat(say), tonight=tonight)
             case Moment.OUTRO:
-                return prompts.outro(pair)
+                return prompts.outro(pair, tonight=tonight)
             case Moment.NEXT_UP:
                 shape = self._rng.choice(prompts.NEXT_UP_SHAPES)
-                return prompts.next_up(self._next_pair or pair, shape=shape)
+                return prompts.next_up(self._next_pair or pair, shape=shape, tonight=tonight)
             case Moment.SILENCE:
-                return prompts.silence(pair, previous=self._silence_lines)
+                return prompts.silence(pair, tonight=tonight)
             case Moment.FROM_THE_ROOM:
-                return prompts.from_the_room(pair, say.detail or "")
+                return prompts.from_the_room(pair, say.detail or "", tonight=tonight)
             case Moment.ROOM_TALK:
                 opening = self._rng.choice(prompts.ROOM_TALK_OPENINGS)
-                return prompts.room_talk(
-                    _room(say), opening=opening, previous=self._room_talk_lines
-                )
+                return prompts.room_talk(_room(say), opening=opening, tonight=tonight)
             case Moment.REPLY:
-                return prompts.reply(pair, _seat(say), say.detail or "")
+                return prompts.reply(pair, _seat(say), say.detail or "", tonight=tonight)
         raise ValueError(f"No prompt for {say.moment}")
 
     def _set_piece_cues(self) -> list[Say]:

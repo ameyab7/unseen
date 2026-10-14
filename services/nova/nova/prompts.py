@@ -59,7 +59,14 @@ def data_block(data: Mapping[str, object]) -> str:
     return f"<data>\n{body}\n</data>"
 
 
-def _task(instruction: str, data: Mapping[str, object]) -> str:
+def _task(instruction: str, data: Mapping[str, object], tonight: Sequence[str] = ()) -> str:
+    """tonight: what Nova has already said for this moment tonight, across every date."""
+    if tonight:
+        instruction += (
+            " Say something new: don't repeat or closely echo any line in said_tonight, and "
+            "open differently. There, [name] stands for a dater's first name."
+        )
+        data = {**data, "said_tonight": list(tonight)}
     return f"Task: {instruction}\n\n{data_block(data)}"
 
 
@@ -83,16 +90,17 @@ def _seats(pair: Pair, card=_card) -> dict[str, object]:
 # --- Set pieces, written before the date ------------------------------------------------
 
 
-def doors_intro(pair: Pair) -> str:
+def doors_intro(pair: Pair, *, tonight: Sequence[str] = ()) -> str:
     return _task(
         "open the date. Welcome the room, then introduce the dater in the left seat "
         '("On my left") and the dater in the right seat ("On my right"): first name, age, '
         "and one light detail from each blind card in your own words. Two or three sentences.",
         _seats(pair),
+        tonight,
     )
 
 
-def first_question(pair: Pair, seat: Seat) -> str:
+def first_question(pair: Pair, seat: Seat, *, tonight: Sequence[str] = ()) -> str:
     dater, first = pair.card(seat), pair.card(seat).prompts[0]
     return _task(
         f"hand the dater in the {seat} seat the first prompt from their own blind card, as "
@@ -101,30 +109,34 @@ def first_question(pair: Pair, seat: Seat) -> str:
             "dater": {**_name(dater), "first_prompt": first.question, "answer": first.answer},
             "other_dater": _name(pair.card(seat.other)),
         },
+        tonight,
     )
 
 
-def lightning_question(pair: Pair, n: int, *, previous: Sequence[str]) -> str:
+def lightning_question(pair: Pair, n: int, *, tonight: Sequence[str] = ()) -> str:
     return _task(
         f"the lightning round. Ask question {n} of 3: one quick, light question both daters "
-        "can answer in a few words. Different from the earlier questions. One short sentence.",
-        {**_seats(pair, _name), "earlier_questions": list(previous)},
+        "can answer in a few words. One short sentence.",
+        _seats(pair, _name),
+        tonight,
     )
 
 
-def last_word(pair: Pair, seat: Seat) -> str:
+def last_word(pair: Pair, seat: Seat, *, tonight: Sequence[str] = ()) -> str:
     return _task(
         f"give the dater in the {seat} seat the last word: twenty seconds to say something "
         "they'd want the other dater to know. Address them by first name. One sentence.",
         {"dater": _name(pair.card(seat)), "other_dater": _name(pair.card(seat.other))},
+        tonight,
     )
 
 
-def outro(pair: Pair) -> str:
+def outro(pair: Pair, *, tonight: Sequence[str] = ()) -> str:
     return _task(
         "the date is over. Thank both daters warmly by first name in one sentence. You don't "
         "know what they decided; say nothing about it.",
         _seats(pair, _name),
+        tonight,
     )
 
 
@@ -138,33 +150,36 @@ NEXT_UP_SHAPES = (
 )
 
 
-def next_up(pair: Pair, *, shape: str) -> str:
+def next_up(pair: Pair, *, shape: str, tonight: Sequence[str] = ()) -> str:
     return _task(
         "tease the next pair of daters to keep the room listening: first names and ages, "
         f"and one light detail from their blind cards. {shape} Each is their own person: "
         "don't compare them, pair them up, set them against each other or wonder how "
         "they'll get on. One or two sentences.",
         _seats(pair),
+        tonight,
     )
 
 
 # --- Live reactions, during the date ----------------------------------------------------
 
 
-def silence(pair: Pair, *, previous: Sequence[str]) -> str:
+def silence(pair: Pair, *, tonight: Sequence[str] = ()) -> str:
     return _task(
         "there's been a long silence in free talk. Give both daters one open, light question "
-        "to talk about, addressed to both by first name. Don't single either of them out, and "
-        "don't repeat an earlier one. One or two sentences.",
-        {**_seats(pair), "earlier_prompts": list(previous)},
+        "to talk about, addressed to both by first name. Don't single either of them out. "
+        "One or two sentences.",
+        _seats(pair),
+        tonight,
     )
 
 
-def from_the_room(pair: Pair, question: str) -> str:
+def from_the_room(pair: Pair, question: str, *, tonight: Sequence[str] = ()) -> str:
     return _task(
         "read this approved audience question to the daters. Keep its meaning and phrase it "
         "kindly; you may address it to one or both by first name. One or two sentences.",
         {**_seats(pair, _name), "audience_question": question},
+        tonight,
     )
 
 
@@ -176,7 +191,7 @@ ROOM_TALK_OPENINGS = (
 )
 
 
-def room_talk(facts: RoomFacts, *, opening: str, previous: Sequence[str]) -> str:
+def room_talk(facts: RoomFacts, *, opening: str, tonight: Sequence[str] = ()) -> str:
     if facts.segment is Segment.TIME:
         situation = (
             "the daters are deciding privately, off air. Talk to the room for one or two "
@@ -190,19 +205,19 @@ def room_talk(facts: RoomFacts, *, opening: str, previous: Sequence[str]) -> str
     return _task(
         f"{situation} Work only from the facts about the show in the data; don't describe a "
         "place, lights or music. Never mention the outcome, spending or anyone's looks. "
-        f"{opening} Open differently from your earlier lines.",
+        f"{opening}",
         {
             "show": {
                 "segment": facts.segment.replace("_", " "),
                 "poll_open": facts.poll_open,
                 "audience_questions_so_far": facts.questions_asked,
             },
-            "earlier_lines": list(previous),
         },
+        tonight,
     )
 
 
-def reply(pair: Pair, seat: Seat, words: str) -> str:
+def reply(pair: Pair, seat: Seat, words: str, *, tonight: Sequence[str] = ()) -> str:
     return _task(
         f"the dater in the {seat} seat spoke to you on air; their words are in the data. Reply "
         "in one short sentence, then hand back to both daters. If they ask whether you're "
@@ -213,4 +228,5 @@ def reply(pair: Pair, seat: Seat, words: str) -> str:
             "other_dater": _name(pair.card(seat.other)),
             "they_said": words,
         },
+        tonight,
     )
