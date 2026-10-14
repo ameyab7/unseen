@@ -43,7 +43,9 @@ Date: 2026-10-13. Status: accepted.
   later date) and is told not to repeat or echo them. Each set piece gets three candidates
   during prep; Nova keeps the one that passes the guardrails and is least similar to
   tonight's lines. The line writer also picks a shape for Next up and an opening for talk
-  to the room at random. Next up never compares or pairs up the next daters. Room talk
+  to the room at random, and gives each date's three lightning questions one of each
+  format (either/or, finish the sentence, one-word answer) in a random order. The outro
+  is one sentence with no question. Next up never compares or pairs up the next daters. Room talk
   works only from safe facts about the show (the segment, whether the poll is open, how
   many audience questions so far), and never mentions the outcome, spending or anyone's
   looks.
@@ -79,11 +81,11 @@ fallback line, never an unsafe one.
 | Decisions | Words about the outcome (reveal, unseen, mutual, match, chose, picked, said yes, second date, photos, see each other) and hints (sparks, chemistry, made for each other, lovely couple, I bet, my guess, fingers crossed). The capitalised show name "Unseen" is allowed | Hints without those words ("I've a good feeling about tonight", "they seem happy") |
 | Looks or voice | Appearance words (gorgeous, handsome, attractive), "looks great", "you're so cute", "voice", "accent", "you sound lovely" | Indirect compliments ("that smile must be something"), unlisted adjectives, clothes |
 | Personal details | Phone numbers, numbers of 3+ digits, emails, @handles, web addresses, social platforms, "works at", "lives on", a capitalised word plus Street/Road, surname words and "Maya Lopez", school words, Nova asking where someone lives, works or spends time; plus any proper noun from what the dater or listener said for this line, wherever it appears | Lowercase descriptions ("the bakery by the station"), spelled-out numbers ("five five five"), job titles, places that are described rather than named |
-| Unknown names | Any capitalised word mid-sentence that isn't a dater's first name, Nova, AI, a day or month, or the show; any acronym | A proper noun the model invents at the start of a sentence; lowercase names |
+| Unknown names | Any capitalised word mid-sentence that isn't a dater's first name, Nova, AI, a day or month, the show, or a name or place on the blind card of a dater the line is about ("lost in Lisbon"); any acronym. A card that tries to give Nova instructions lends no words, and a word from what a dater or listener said live is blocked even if it's also on a card | A proper noun the model invents at the start of a sentence; lowercase names |
 | Spending | Coins, gestures, gifts, roses, encores, buy, spending money, membership, subscribe | Indirect asks ("show them some love tonight") |
 | Unkind | A short list of insults (stupid, pathetic, desperate, creepy, shut up) | Sarcasm, tone, mockery without those words |
-| Instructions | Talk of instructions, rules, the system, data, prompts, angle brackets, "I was told" | An injection that steers Nova into an ordinary-looking line, such as an untrue but harmless claim about a dater |
-| Voice and format | Exclamation marks, emoji, symbols, markdown, length (characters and sentences), names in the wrong case | Tone, wrong pronouns, a question ending in a full stop (handled by the instructions only) |
+| Instructions | Talk of instructions, rules, the system, data, prompts, angle brackets, "I was told"; Nova claiming any name but Nova ("I'm Kate", "call me Kate") | An injection that steers Nova into an ordinary-looking line, such as an untrue but harmless claim about a dater |
+| Voice and format | Exclamation marks, emoji, symbols, markdown, length (characters and sentences), names in the wrong case; the outro is one sentence with no question; a lightning question doesn't open with both daters' names | Tone, wrong pronouns, a question ending in a full stop (handled by the instructions only) |
 | A dater who wants to stop (what they say to Nova, not Nova's line) | Clear: wanting to stop, end or leave, needing a moment or a break, not comfortable, safe or well, overwhelmed, a panic attack, harassment. Maybe: "help", scared, upset, anxious, crying, creepy, inappropriate, "that's not okay" | Distress said to the other dater rather than to Nova, worded another way ("I'd rather be anywhere else"), or heard only in a voice |
 
 Before the model, audience questions about personal details or looks, or that try to give

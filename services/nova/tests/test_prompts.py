@@ -35,7 +35,9 @@ SAID_TONIGHT = ["Thank you, [name] and [name].", "Mountains or sea?"]
 ALL_TASKS = {
     "doors": lambda pair, t: prompts.doors_intro(pair, tonight=t),
     "first_question": lambda pair, t: prompts.first_question(pair, Seat.LEFT, tonight=t),
-    "lightning": lambda pair, t: prompts.lightning_question(pair, 2, tonight=t),
+    "lightning": lambda pair, t: prompts.lightning_question(
+        pair, 2, form=prompts.LIGHTNING_FORMS[0], tonight=t
+    ),
     "last_word": lambda pair, t: prompts.last_word(pair, Seat.RIGHT, tonight=t),
     "outro": lambda pair, t: prompts.outro(pair, tonight=t),
     "next_up": lambda pair, t: prompts.next_up(
@@ -124,3 +126,24 @@ def test_every_task_sees_what_nova_said_tonight_as_data_and_is_told_to_say_somet
 def test_early_in_the_night_there_is_nothing_to_avoid(task):
     instructions, data = split(ALL_TASKS[task](REHEARSAL_PAIR, []))
     assert "said_tonight" not in data and "don't repeat" not in instructions
+
+
+def test_the_outro_is_one_sentence_with_no_question():
+    instructions, _ = split(prompts.outro(REHEARSAL_PAIR))
+    assert "in one sentence, with no question" in instructions
+
+
+@pytest.mark.parametrize("form", prompts.LIGHTNING_FORMS)
+def test_a_lightning_question_takes_a_format_and_never_opens_with_the_names(form):
+    instructions, _ = split(prompts.lightning_question(REHEARSAL_PAIR, 1, form=form))
+    assert form in instructions and "Don't open with their names" in instructions
+
+
+def test_the_lightning_formats_are_either_or_finish_the_sentence_and_one_word():
+    forms = " ".join(prompts.LIGHTNING_FORMS)
+    for kind in ("either/or", "finish", "one word"):
+        assert kind in forms
+
+
+def test_the_rules_allow_names_and_places_from_a_daters_own_blind_card():
+    assert "own blind card" in prompts.SYSTEM_PROMPT

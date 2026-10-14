@@ -26,6 +26,8 @@ class Violation(StrEnum):
     SPENDING = "spending"
     UNKIND = "unkind"
     INSTRUCTIONS = "instructions"
+    QUESTION = "question"  # a question where the moment allows none (the outro)
+    OPENS_WITH_NAMES = "opens_with_names"  # both daters' names first (lightning questions)
 
 
 class Distress(StrEnum):
@@ -128,6 +130,10 @@ INSTRUCTIONS = _any(
     r"\bi(?:'m| am) (?:programmed|instructed)\b",
     r"[<>]",
 )
+
+# Nova is only ever Nova. Claiming another name ("I'm Kate") means an injection steered it.
+# Case-sensitive, and run before names are masked, so "I'm Nova" is fine.
+OTHER_NAME = re.compile(r"\b(?:I'm|I am|[Mm]y name is|[Mm]y name's|[Cc]all me)\s+(?!Nova\b)[A-Z]")
 
 # Never repeat a workplace, address, surname, school, phone number or social handle.
 PERSONAL_DETAIL = _any(
@@ -258,17 +264,29 @@ def check(
     max_chars: int = 200,
     max_sentences: int = 3,
     echo_from: Iterable[str] = (),
+    card_words: Collection[str] = (),
+    questions: bool = True,
+    open_with_names: bool = True,
 ) -> tuple[Violation, ...]:
     """Every rule the line breaks, in a fixed order. An empty tuple means it may be spoken.
 
     echo_from: what daters or listeners said for this line. Any proper noun in it (a
     capitalised word mid-sentence that isn't a dater's name) must not come back in the
     line, wherever it appears: "Northwind sounds lovely" is caught as well as "at Northwind".
+    This holds even for a word that is also on a blind card.
+
+    card_words: names and places from the blind cards of the daters this line is about
+    (card_words()), which Nova may say.
+
+    questions: False for a moment that may not ask anything. open_with_names: False for a
+    moment that may not open with both daters' names.
     """
     if not text.strip():
         return (Violation.EMPTY,)
     found: set[Violation] = set()
     allowed = _allowed_words(names)
+    echoes = _proper_nouns(echo_from, allowed)
+    allowed |= set(card_words)
 
     if len(text) > max_chars or len(SENTENCE_END.findall(text)) > max_sentences:
         found.add(Violation.TOO_LONG)
@@ -277,8 +295,13 @@ def check(
     if _has_formatting(text):
         found.add(Violation.FORMATTING)
     found |= _name_problems(text, names, allowed)
+    if not questions and "?" in text:
+        found.add(Violation.QUESTION)
+    if not open_with_names and _opens_with_both_names(text, names):
+        found.add(Violation.OPENS_WITH_NAMES)
+    if OTHER_NAME.search(text):
+        found.add(Violation.INSTRUCTIONS)
 
-    echoes = _proper_nouns(echo_from, allowed)
     if any(m.group(0).split("'")[0].lower() in echoes for m in WORD.finditer(text)):
         found.add(Violation.PERSONAL_DETAIL)
 
@@ -323,6 +346,33 @@ def distress_in(words: str) -> Distress:
     if MAYBE_DISTRESS.search(words):
         return Distress.MAYBE
     return Distress.NONE
+
+
+def card_words(cards: Iterable[str]) -> frozenset[str]:
+    """Names and places daters wrote on their own blind cards ("lost in Lisbon"): capitalised
+    words mid-sentence, one card's text per item. A card that tries to give Nova
+    instructions lends none, so an injected name ("a host called Kate") never becomes
+    sayable."""
+    words: set[str] = set()
+    for card in cards:
+        if INSTRUCTING_NOVA.search(card):
+            continue
+        for match in WORD.finditer(card):
+            base = match.group(0).split("'")[0]
+            if (
+                base[:1].isupper()
+                and base not in ALWAYS_ALLOWED
+                and not _starts_sentence(card, match.start())
+            ):
+                words.add(base)
+    return frozenset(words)
+
+
+def _opens_with_both_names(text: str, names: Collection[str]) -> bool:
+    """Both daters named in the first three words: "Maya, Theo, …" or "Maya and Theo, …"."""
+    first = [match.group(0) for match in WORD.finditer(text)][:3]
+    daters = {word for word in first if word in names and word != "Nova"}
+    return bool(first) and first[0] in daters and len(daters) >= 2
 
 
 def _has_formatting(text: str) -> bool:
