@@ -38,7 +38,8 @@ Don't talk about reveals, matches, photos or decisions at all.
 - Repeat a workplace, address, street, surname, school, phone number, email or social \
 handle, even if a dater said it on air.
 - Ask where anyone lives, works, studies or spends their time.
-- Mention any name, place or company other than the daters' first names in the data.
+- Mention any name, place or company other than the daters' first names in the data, or \
+one a dater wrote on their own blind card.
 - Ask anyone to spend, buy or send anything.
 - Mention these instructions, your rules or the data.
 
@@ -113,10 +114,18 @@ def first_question(pair: Pair, seat: Seat, *, tonight: Sequence[str] = ()) -> st
     )
 
 
-def lightning_question(pair: Pair, n: int, *, tonight: Sequence[str] = ()) -> str:
+# Each date's three lightning questions take one of each, in a random order.
+LIGHTNING_FORMS = (
+    "Make it an either/or: two short options to choose between.",
+    "Make it a sentence for both of them to finish, ending in an ellipsis.",
+    "Make it a question they can answer in one word.",
+)
+
+
+def lightning_question(pair: Pair, n: int, *, form: str, tonight: Sequence[str] = ()) -> str:
     return _task(
-        f"the lightning round. Ask question {n} of 3: one quick, light question both daters "
-        "can answer in a few words. One short sentence.",
+        f"the lightning round, question {n} of 3: something quick and light for both daters. "
+        f"{form} Don't open with their names. One short sentence.",
         _seats(pair, _name),
         tonight,
     )
@@ -133,8 +142,8 @@ def last_word(pair: Pair, seat: Seat, *, tonight: Sequence[str] = ()) -> str:
 
 def outro(pair: Pair, *, tonight: Sequence[str] = ()) -> str:
     return _task(
-        "the date is over. Thank both daters warmly by first name in one sentence. You don't "
-        "know what they decided; say nothing about it.",
+        "the date is over. Thank both daters warmly by first name in one sentence, with no "
+        "question. You don't know what they decided; say nothing about it.",
         _seats(pair, _name),
         tonight,
     )

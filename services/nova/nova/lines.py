@@ -21,10 +21,18 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from nova import prompts, script
-from nova.cards import Pair, Seat
+from nova.cards import BlindCard, Pair, Seat
 from nova.cues import Moment, RoomFacts, Say
 from nova.events import Event, EventLog
-from nova.guardrails import Distress, Violation, check, clean, distress_in, question_is_off_limits
+from nova.guardrails import (
+    Distress,
+    Violation,
+    card_words,
+    check,
+    clean,
+    distress_in,
+    question_is_off_limits,
+)
 from nova.models import LineModel, ModelRefused
 from nova.tonight import Tonight
 
@@ -61,6 +69,8 @@ class ErrorKind(StrEnum):
 class Rules:
     max_chars: int = 200
     max_sentences: int = 3
+    questions: bool = True
+    open_with_names: bool = True
 
 
 def rules_for(moment: Moment) -> Rules:
@@ -68,16 +78,24 @@ def rules_for(moment: Moment) -> Rules:
         return Rules(max_chars=320, max_sentences=4)
     if moment in (Moment.NEXT_UP, Moment.FROM_THE_ROOM):
         return Rules(max_chars=260)
+    if moment is Moment.OUTRO:
+        return Rules(max_sentences=1, questions=False)
+    if moment is Moment.LIGHTNING_QUESTION:
+        return Rules(open_with_names=False)
     return Rules()
 
 
-def names_for(moment: Moment, pair: Pair, next_pair: Pair | None) -> frozenset[str]:
-    """The only names a line may contain: tonight's daters, Nova, and for Next up the next
-    pair."""
-    names = {pair.left.first_name, pair.right.first_name, "Nova"}
+def cards_for(moment: Moment, pair: Pair, next_pair: Pair | None) -> list[BlindCard]:
+    """The daters a line is about: the pair on air, and for Next up the next pair too."""
+    cards = [pair.left, pair.right]
     if moment is Moment.NEXT_UP and next_pair is not None:
-        names |= {next_pair.left.first_name, next_pair.right.first_name}
-    return frozenset(names)
+        cards += [next_pair.left, next_pair.right]
+    return cards
+
+
+def names_for(moment: Moment, pair: Pair, next_pair: Pair | None) -> frozenset[str]:
+    """The only first names a line may contain: the daters it's about, and Nova."""
+    return frozenset({card.first_name for card in cards_for(moment, pair, next_pair)} | {"Nova"})
 
 
 @dataclass(frozen=True)
@@ -146,6 +164,10 @@ class LineWriter:
         self._prep_timeout = prep_timeout
         self._events = events or EventLog()
         self._rng = rng or random.Random()  # picks shapes and openings, so lines vary
+        # This date's lightning questions: one of each format, in a random order.
+        self._lightning_forms = self._rng.sample(
+            prompts.LIGHTNING_FORMS, len(prompts.LIGHTNING_FORMS)
+        )
         self._tonight = tonight or Tonight()  # shared by every date's writer tonight
         self._names = {pair.left.first_name, pair.right.first_name}
         if next_pair is not None:
@@ -245,16 +267,21 @@ class LineWriter:
         return Attempt(text, self._check(say, text), _ms_since(started), None)
 
     def _check(self, say: Say, text: str) -> tuple[Violation, ...]:
-        """The guardrails for this cue. What a dater or listener said for it (a reply or an
+        """The guardrails for this cue. Names and places on the blind cards of the daters
+        it's about may be said; what a dater or listener said for it (a reply or an
         audience question) is passed in so no proper noun from it is repeated."""
         rules = rules_for(say.moment)
         said = [say.detail] if say.moment in (Moment.REPLY, Moment.FROM_THE_ROOM) else []
+        cards = cards_for(say.moment, self._pair, self._next_pair)
         return check(
             text,
             names=names_for(say.moment, self._pair, self._next_pair),
             max_chars=rules.max_chars,
             max_sentences=rules.max_sentences,
             echo_from=[s for s in said if s],
+            card_words=card_words(" ".join(p.text for p in card.prompts) for card in cards),
+            questions=rules.questions,
+            open_with_names=rules.open_with_names,
         )
 
     def _settle(self, say: Say, attempt: Attempt, success: Source) -> Line:
@@ -319,7 +346,9 @@ class LineWriter:
             case Moment.FIRST_QUESTION:
                 return prompts.first_question(pair, _seat(say), tonight=tonight)
             case Moment.LIGHTNING_QUESTION:
-                return prompts.lightning_question(pair, _lightning_number(say), tonight=tonight)
+                n = _lightning_number(say)
+                form = self._lightning_forms[(n - 1) % len(self._lightning_forms)]
+                return prompts.lightning_question(pair, n, form=form, tonight=tonight)
             case Moment.LAST_WORD:
                 return prompts.last_word(pair, _seat(say), tonight=tonight)
             case Moment.OUTRO:
