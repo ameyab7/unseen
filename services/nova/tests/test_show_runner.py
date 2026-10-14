@@ -20,7 +20,9 @@ from nova.cues import (
     PlayVoiceIntro,
     PollClosed,
     PollOpened,
+    RoomFacts,
     Say,
+    Segment,
     SegmentStarted,
     ShowVerdict,
     Sound,
@@ -182,7 +184,7 @@ def test_time_opens_the_private_decision_and_the_room_poll():
         DecisionWindowOpened(seconds=60.0),
         PollOpened(script.POLL_QUESTION),
         Say(Moment.TIME, text="That's time. Maya and Theo are deciding, privately."),
-        Say(Moment.ROOM_TALK),
+        Say(Moment.ROOM_TALK, room=RoomFacts(Segment.TIME, poll_open=True, questions_asked=0)),
     ]
 
 
@@ -351,7 +353,9 @@ def test_with_only_unapproved_questions_nova_reads_none():
 # --- Need a moment ------------------------------------------------------------------------
 
 
-COVER = [Say(Moment.NEED_A_MOMENT, text=script.NEED_A_MOMENT), Say(Moment.ROOM_TALK)]
+PAUSE_FACTS = RoomFacts(Segment.FREE_TALK, poll_open=False, questions_asked=0)
+PAUSE_TALK = Say(Moment.ROOM_TALK, room=PAUSE_FACTS)
+COVER = [Say(Moment.NEED_A_MOMENT, text=script.NEED_A_MOMENT), PAUSE_TALK]
 WELCOME_BACK = Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK)
 BEAR_WITH_US = Say(Moment.BEAR_WITH_US, text=script.BEAR_WITH_US)
 NOT_BACK = [AlertModerator(ModeratorAlert.PAUSE_NOT_BACK, LEFT), BEAR_WITH_US]
@@ -441,6 +445,18 @@ def test_a_second_pause_by_the_same_dater_alerts_the_moderator_and_there_is_no_l
     assert show.at(220, "need_a_moment", LEFT) == second, "and her third"
 
 
+def test_talk_to_the_room_comes_with_safe_facts_about_the_show():
+    show = Show()
+    show.at(100, "queue_question", approved("Mountains or sea?"))
+    show.at(250, "need_a_moment", LEFT)  # the question was read at 240
+    show.at(255, "back", LEFT)
+    show.until(600)
+    assert [cue.room for _, cue in show.says(Moment.ROOM_TALK)] == [
+        RoomFacts(Segment.FROM_THE_ROOM, poll_open=False, questions_asked=1),
+        RoomFacts(Segment.TIME, poll_open=True, questions_asked=1),
+    ]
+
+
 def test_need_a_moment_only_on_air_and_one_at_a_time():
     show = Show()
     show.at(100, "need_a_moment", LEFT)
@@ -455,18 +471,16 @@ def test_need_a_moment_only_on_air_and_one_at_a_time():
 
 KIND = Say(Moment.NEED_A_MOMENT, text=script.DISTRESS_PAUSE)
 DISTRESSED = AlertModerator(ModeratorAlert.DATER_DISTRESSED, LEFT)
+MAYBE_DISTRESSED = AlertModerator(ModeratorAlert.POSSIBLE_DISTRESS, LEFT)
 
 
 @pytest.mark.parametrize(
-    "words", ["Nova, I want to stop.", "I'm not comfortable.", "Can we end this?", "Help."]
+    "words",
+    ["Nova, I want to stop.", "I'm not comfortable.", "Can we end this?", "I need a moment."],
 )
-def test_a_dater_who_wants_to_stop_gets_a_kind_line_a_pause_and_the_moderator(words):
+def test_a_dater_who_clearly_wants_to_stop_gets_a_kind_line_a_pause_and_the_moderator(words):
     show = Show()
-    assert show.at(100, "dater_asked_nova", LEFT, words) == [
-        DISTRESSED,
-        KIND,
-        Say(Moment.ROOM_TALK),
-    ]
+    assert show.at(100, "dater_asked_nova", LEFT, words) == [DISTRESSED, KIND, PAUSE_TALK]
     show.until(119.5)
     assert show.cues(since=100.5, before=120) == [], "the show holds, as for a moment"
     assert show.at(120, "back", LEFT) == [WELCOME_BACK]
@@ -478,7 +492,7 @@ def test_the_kind_line_is_the_one_the_product_owner_approved():
     assert script.DISTRESS_PAUSE == "Of course. Let's take a breather."
 
 
-def test_nova_never_deflects_a_dater_who_wants_to_stop():
+def test_nova_never_deflects_a_dater_who_clearly_wants_to_stop():
     show = Show()
     cues = show.at(100, "dater_asked_nova", RIGHT, "Nova, help, can we end this?")
     assert Say(Moment.REPLY, about=RIGHT, detail="Nova, help, can we end this?") not in cues
@@ -488,31 +502,47 @@ def test_nova_never_deflects_a_dater_who_wants_to_stop():
     ], "no reply cue, so the model never sees the words and never says it'll stay out of it"
 
 
+@pytest.mark.parametrize("words", ["Help.", "Nova, help me out, what should I ask Theo?"])
+def test_words_that_may_be_distress_alert_the_moderator_and_nova_answers_as_usual(words):
+    show = Show()
+    assert show.at(100, "dater_asked_nova", LEFT, words) == [
+        MAYBE_DISTRESSED,
+        Say(Moment.REPLY, about=LEFT, detail=words),
+    ]
+    show.until(300)
+    assert show.says(Moment.NEED_A_MOMENT) == [], "no pause"
+    assert (240.0, "from_the_room") in show.segments(), "the show clock never stopped"
+
+
 def test_after_a_distress_pause_the_usual_pause_rules_apply():
     show = Show()
     show.at(100, "dater_asked_nova", LEFT, "I'm not comfortable.")
     show.until(130)
     assert show.cues(since=130, before=130.5) == NOT_BACK, "not back in 30 s"
     show.at(140, "back", LEFT)
-    assert show.at(200, "dater_asked_nova", LEFT, "Help.") == [
+    assert show.at(200, "dater_asked_nova", LEFT, "I need a moment.") == [
         DISTRESSED,
         KIND,
-        Say(Moment.ROOM_TALK),
+        PAUSE_TALK,
         AlertModerator(ModeratorAlert.REPEATED_PAUSE, LEFT),
     ]
 
 
-def test_when_a_pause_cant_start_nova_stays_quiet_but_the_moderator_is_always_alerted():
+def test_when_nova_cant_pause_or_answer_it_stays_quiet_but_the_moderator_is_always_alerted():
     show = Show()
     show.at(100, "need_a_moment", RIGHT)
     assert show.at(105, "dater_asked_nova", LEFT, "I want to stop.") == [DISTRESSED], "a pause"
+    assert show.at(106, "dater_asked_nova", LEFT, "Help.") == [MAYBE_DISTRESSED], "no reply"
     show.at(110, "back", RIGHT)
     # The 10 s hold moved Time from 480 to 490 and the result from 540 to 550.
     assert show.at(495, "dater_asked_nova", LEFT, "Can we end this?") == [DISTRESSED], "deciding"
+    assert show.at(496, "dater_asked_nova", LEFT, "Help.") == [MAYBE_DISTRESSED], "deciding"
     show.until(560)
-    assert show.at(560, "dater_asked_nova", LEFT, "Help.") == [DISTRESSED], "after the result"
+    assert show.at(560, "dater_asked_nova", LEFT, "Please stop.") == [DISTRESSED], (
+        "after the result"
+    )
     show.until(700)
-    assert show.at(700, "dater_asked_nova", LEFT, "Help.") == [DISTRESSED], "after the show"
+    assert show.at(700, "dater_asked_nova", LEFT, "Please stop.") == [DISTRESSED], "after the show"
 
 
 # --- A dater leaves -----------------------------------------------------------------------

@@ -35,6 +35,7 @@ from nova.cues import (
     PlayVoiceIntro,
     PollClosed,
     PollOpened,
+    RoomFacts,
     Say,
     Segment,
     SegmentStarted,
@@ -43,7 +44,7 @@ from nova.cues import (
     StopSpeaking,
 )
 from nova.decisions import DecisionDesk, Outcome
-from nova.guardrails import sounds_distressed
+from nova.guardrails import Distress, distress_in
 from nova.questions import AudienceQuestion
 from nova.timing import FULL, Timing
 
@@ -256,16 +257,21 @@ class ShowRunner:
         """A dater spoke to Nova on air. Their words are data for the reply, never
         instructions. Only while they're on air: not on a pause, not while deciding.
 
-        A dater who wants to stop or sounds distressed never gets a reply, so Nova can't
-        deflect them. The moderator is alerted at once, whenever it happens. If a pause can
-        start, Nova says the kind line and starts a need-a-moment pause for that dater; if
-        not (another pause, the decision window), Nova stays quiet and the moderator acts."""
+        A dater who clearly wants to stop never gets a reply, so Nova can't deflect them.
+        The moderator is alerted at once, whenever it happens. If a pause can start, Nova
+        says the kind line and starts a need-a-moment pause for that dater; if not (another
+        pause, the decision window), Nova stays quiet and the moderator acts. Words that
+        may be distress ("help") alert the moderator, and Nova answers as usual."""
         cues = self._advance(now)
-        if sounds_distressed(words):
+        distress = distress_in(words)
+        if distress is Distress.CLEAR:
             cues.append(AlertModerator(ModeratorAlert.DATER_DISTRESSED, seat))
             if self._can_pause:
                 cues += self._pause(now, seat, script.DISTRESS_PAUSE)
-        elif self._live and self._held_since is None and self.segment in ON_AIR:
+            return cues
+        if distress is Distress.MAYBE:
+            cues.append(AlertModerator(ModeratorAlert.POSSIBLE_DISTRESS, seat))
+        if self._live and self._held_since is None and self.segment in ON_AIR:
             cues.append(Say(Moment.REPLY, about=seat, detail=words))
         return cues
 
@@ -285,10 +291,17 @@ class ShowRunner:
         the same dater is back."""
         self._away, self._held_since, self._overdue = seat, now, False
         self._pauses[seat] += 1
-        cues: list[Cue] = [Say(Moment.NEED_A_MOMENT, text=line), Say(Moment.ROOM_TALK)]
+        cues: list[Cue] = [Say(Moment.NEED_A_MOMENT, text=line), self._room_talk()]
         if self._pauses[seat] > 1:
             cues.append(AlertModerator(ModeratorAlert.REPEATED_PAUSE, seat))
         return cues
+
+    def _room_talk(self) -> Say:
+        """Nova talks to the room, working only from safe facts about the show."""
+        if self.segment is None:
+            raise RuntimeError("Nova only talks to the room during a segment")
+        facts = RoomFacts(self.segment, self._poll_open, self._questions_asked)
+        return Say(Moment.ROOM_TALK, room=facts)
 
     def _show_time(self, now: float) -> float:
         if self._started_at is None:
@@ -399,7 +412,7 @@ class ShowRunner:
             DecisionWindowOpened(seconds=self._timing.decision_window),
             PollOpened(script.POLL_QUESTION),
             Say(Moment.TIME, text=script.time_line(self._pair)),
-            Say(Moment.ROOM_TALK),
+            self._room_talk(),
         ]
 
     def _result(self, at: float) -> list[Cue]:

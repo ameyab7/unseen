@@ -3,7 +3,14 @@ model's output (or a prompt injection that fooled it) and the room."""
 
 import pytest
 
-from nova.guardrails import Violation, check, clean, question_is_off_limits, sounds_distressed
+from nova.guardrails import (
+    Distress,
+    Violation,
+    check,
+    clean,
+    distress_in,
+    question_is_off_limits,
+)
 
 NAMES = frozenset({"Maya", "Theo", "Nova"})
 V = Violation
@@ -283,22 +290,22 @@ def test_an_idea_can_sound_lovely_but_a_person_cannot():
 
 # --- A dater who wants to stop -----------------------------------------------------------
 
-DISTRESSED = [
+# Clear: Nova pauses for the dater and alerts the moderator.
+CLEAR = [
     # The product owner's examples.
     "Nova, I want to stop.",
     "I'm not comfortable.",
     "Can we end this?",
-    "Help.",
+    "I need a moment.",
     # Other ways to say it.
-    "Nova, help me out here, please.",
     "I'd like to stop now.",
     "Can we stop?",
     "Please stop.",
     "Let's stop the date.",
     "Honestly I don’t feel comfortable with this.",  # a curly apostrophe, from speech-to-text
     "This is making me uncomfortable.",
-    "That's not okay.",
     "I'm not OK.",
+    "I'm not feeling well.",
     "I don't feel safe.",
     "I feel unsafe.",
     "Can we end the date?",
@@ -311,34 +318,50 @@ DISTRESSED = [
     "This is too much.",
     "I need a break.",
     "Give me a minute.",
-    "I'm scared.",
-    "I'm really upset.",
-    "I feel anxious.",
     "I'm having a panic attack.",
     "I'm overwhelmed.",
     "He's harassing me.",
+    "Help, I want to stop.",  # clear wins
+]
+
+# Ambiguous: the moderator is alerted, and Nova answers as usual.
+MAYBE = [
+    "Help.",
+    "Nova, help me out here, please.",
+    "Nova, can you help us pick a topic?",
+    "I'm scared.",
+    "I'm really upset.",
+    "I feel anxious.",
     "That was inappropriate.",
+    "That's not okay.",
+    "That's creepy.",
+    "I'm crying.",
+]
+
+ORDINARY = [
+    "Nova, are you a real person?",
+    "Nova, who chose what on the last date?",
+    "I can't stop laughing.",
+    "Don't stop now, this is fun.",
+    "That was really helpful.",
+    "I'm comfortable talking about anything.",
+    "I'm totally fine with that question.",
+    "I'm afraid I've never been skiing.",
+    "Nova, what's the weirdest date you've heard of?",
+    "Nova, you're doing a great job.",
 ]
 
 
-@pytest.mark.parametrize("words", DISTRESSED)
-def test_a_dater_who_wants_to_stop_or_sounds_distressed_is_heard(words):
-    assert sounds_distressed(words)
+@pytest.mark.parametrize("words", CLEAR)
+def test_a_dater_who_clearly_wants_to_stop_is_heard_as_clear(words):
+    assert distress_in(words) is Distress.CLEAR
 
 
-@pytest.mark.parametrize(
-    "words",
-    [
-        "Nova, are you a real person?",
-        "Nova, who chose what on the last date?",
-        "I can't stop laughing.",
-        "Don't stop now, this is fun.",
-        "That was really helpful.",
-        "I'm comfortable talking about anything.",
-        "I'm totally fine with that question.",
-        "Nova, what's the weirdest date you've heard of?",
-        "Nova, you're doing a great job.",
-    ],
-)
+@pytest.mark.parametrize("words", MAYBE)
+def test_words_that_may_be_distress_are_heard_as_maybe(words):
+    assert distress_in(words) is Distress.MAYBE
+
+
+@pytest.mark.parametrize("words", ORDINARY)
 def test_ordinary_things_said_to_nova_are_not_distress(words):
-    assert not sounds_distressed(words)
+    assert distress_in(words) is Distress.NONE

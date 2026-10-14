@@ -11,7 +11,7 @@ import json
 from collections.abc import Mapping, Sequence
 
 from nova.cards import BlindCard, Pair, Seat
-from nova.cues import Segment
+from nova.cues import RoomFacts, Segment
 
 SYSTEM_PROMPT = """\
 You are Nova, the AI host of Unseen, a live, audio-only dating show. Two strangers talk on \
@@ -128,10 +128,22 @@ def outro(pair: Pair) -> str:
     )
 
 
-def next_up(pair: Pair) -> str:
+# Each line is written on its own, so "vary it" can't work: the writer picks a shape or an
+# opening at random instead, and the lines vary from date to date.
+NEXT_UP_SHAPES = (
+    "Open with a detail from one of their blind cards.",
+    "Open with their first names and ages.",
+    "Open by asking the room to stay for the next date.",
+    "Give each of them a short detail of their own.",
+)
+
+
+def next_up(pair: Pair, *, shape: str) -> str:
     return _task(
         "tease the next pair of daters to keep the room listening: first names and ages, "
-        "and one light detail from their blind cards. One or two sentences.",
+        f"and one light detail from their blind cards. {shape} Each is their own person: "
+        "don't compare them, pair them up, set them against each other or wonder how "
+        "they'll get on. One or two sentences.",
         _seats(pair),
     )
 
@@ -156,18 +168,38 @@ def from_the_room(pair: Pair, question: str) -> str:
     )
 
 
-def room_talk(pair: Pair, segment: Segment | None) -> str:
-    if segment is Segment.TIME:
-        instruction = (
+ROOM_TALK_OPENINGS = (
+    "Open by speaking straight to the listeners.",
+    "Open with a short question for the room.",
+    "Open with a word about the room's part tonight: the chat or the questions.",
+    "Open with a thank-you to the room.",
+)
+
+
+def room_talk(facts: RoomFacts, *, opening: str, previous: Sequence[str]) -> str:
+    if facts.segment is Segment.TIME:
+        situation = (
             "the daters are deciding privately, off air. Talk to the room for one or two "
             "sentences while they decide. Don't guess or hint at what they'll choose."
         )
     else:
-        instruction = (
+        situation = (
             "one of the daters is taking a short moment off air. Talk to the room for one or "
             "two sentences. Don't say who stepped away or why."
         )
-    return _task(instruction, {})
+    return _task(
+        f"{situation} Work only from the facts about the show in the data; don't describe a "
+        "place, lights or music. Never mention the outcome, spending or anyone's looks. "
+        f"{opening} Open differently from your earlier lines.",
+        {
+            "show": {
+                "segment": facts.segment.replace("_", " "),
+                "poll_open": facts.poll_open,
+                "audience_questions_so_far": facts.questions_asked,
+            },
+            "earlier_lines": list(previous),
+        },
+    )
 
 
 def reply(pair: Pair, seat: Seat, words: str) -> str:
