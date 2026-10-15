@@ -34,14 +34,16 @@ Date: 2026-10-13. Status: accepted.
   - **Clear** ("I want to stop", "I'm not comfortable", "can we end this", "I need a
     moment"): the show runner alerts the moderator at once (`dater_distressed`), and if a
     pause can start, Nova stops mid-line, drops anything it had queued, says "Of course.
-    Let's take a breather." at once and starts a need-a-moment pause for that dater, with the usual rules (back, 30 s alert, moderator
-    decides). If a pause can't start (another dater is on one, or the daters are
-    deciding), Nova says nothing and the moderator acts. The model never sees those words,
-    so "I'll stay out of that one" is never the answer.
+    Let's take a breather." at once and starts a need-a-moment pause for that dater, with
+    the usual rules (back, 30 s alert, moderator decides). If a pause can't start (another
+    dater is on one, or the daters are deciding), Nova says nothing and the moderator
+    acts. The model never sees those words, so "I'll stay out of that one" is never the
+    answer.
   - **Maybe** ("help", "I'm scared", "that's not okay"): the moderator is alerted
     (`possible_distress`) and, if the dater spoke to Nova, Nova answers as usual, so "can
-    you help us pick a topic?" gets a normal reply. If the model fails, Nova says "Take all the time you need.",
-    never "I'll stay out of that one" (signed off by the product owner on 2026-10-13).
+    you help us pick a topic?" gets a normal reply. If the model fails, Nova says "Take
+    all the time you need.", never "I'll stay out of that one" (signed off by the product
+    owner on 2026-10-13).
 
   Both lean towards hearing distress: a false alarm costs a breather or a look from the
   moderator. Hearing everything, not only words to Nova, makes false alarms likelier ("I
@@ -51,15 +53,15 @@ Date: 2026-10-13. Status: accepted.
   already said for its moment (daters' names masked, so no earlier dater's name reaches a
   later date) and is told not to repeat or echo them. Audience-question lines and replies
   are never remembered: they carry what a listener or dater said, and the memory reaches
-  every later date's prompts. Each set piece gets three candidates
-  during prep; Nova keeps the one that passes the guardrails and is least similar to
-  tonight's lines. The line writer also picks a shape for Next up and an opening for talk
-  to the room at random, and gives each date's three lightning questions one of each
-  format (either/or, finish the sentence, one-word answer) in a random order; each is one
-  sentence. The model's outro is one sentence with no question. Next up never compares
-  or pairs up the next daters. Room talk works only from safe facts about the show (the
-  segment, whether the poll is open, how many audience questions so far), and never
-  mentions the outcome, spending or anyone's looks.
+  every later date's prompts. Each set piece gets three candidates during prep; Nova
+  keeps the one that passes the guardrails and is least similar to tonight's lines. The
+  line writer also picks a shape for Next up and an opening for talk to the room at
+  random, and gives each date's three lightning questions one of each format (either/or,
+  finish the sentence, one-word answer) in a random order; each is one sentence. The
+  model's outro is one sentence with no question. Next up never compares or pairs up the
+  next daters. Room talk works only from safe facts about the show (the segment, whether
+  the poll is open, how many audience questions so far), and never mentions the outcome,
+  spending or anyone's looks.
 - **Fixed fallbacks take turns across the night.** Silence, lightning and outro
   fallbacks each use the option least like what Nova has said tonight, so a night
   doesn't hear the same fallback twice while another is unused. "Last quick one" only
@@ -131,7 +133,10 @@ right-hand column above). Before the first real show, Nova needs both of these:
 
 - The show runner gained an outro slot after the verdict, and a reply cue when a dater
   speaks to Nova on air (`dater_asked_nova`), which pauses for a dater who wants to stop.
-  Its talk-to-the-room cues carry the safe show facts (`RoomFacts`).
+  What a dater says to anyone else goes to `dater_said`, which hears distress the same way
+  and never replies. Its talk-to-the-room cues carry the safe show facts (`RoomFacts`).
+- The agent for real shows hears every dater's final transcripts as the rehearsal does
+  (`nova/rehearsal.py`, `transcript`): joined over five seconds, distress first.
 - Each model change runs the evaluation first; a failing case blocks the change.
 - The blind card schema in `packages/shared` must apply the same first-name and age rules,
   so the app never accepts a card Nova can't put on air.
