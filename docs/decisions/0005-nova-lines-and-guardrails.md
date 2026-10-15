@@ -68,9 +68,11 @@ Date: 2026-10-13. Status: accepted.
   allows for them.
 - **Timeouts are settings.** `NOVA_LIVE_TIMEOUT_SECONDS` (default 2) for live reactions:
   measured on the development PC, warm Gemma's live lines took a median of 321-342 ms and
-  at most 565 ms over 60 runs, so 2 s is about 3.5x the worst case and caps dead air at
-  2 s. `NOVA_PREP_TIMEOUT_SECONDS` (default 60) for set pieces: a cold model load took
-  20-28 s.
+  at most 565 ms over 60 runs, so 2 s is about 3.5x the worst case. It caps the wait for
+  the model, not the silence the room hears: the voice's first audio adds about 0.2 to
+  0.5 s, and a reply also waits for the end of the dater's sentence and its transcript
+  (`docs/spike-results.md`). `NOVA_PREP_TIMEOUT_SECONDS` (default 60) for set pieces: a
+  cold model load took 20-28 s.
 - **Logs carry events and timings only.** `nova/events.py` accepts codes, numbers and
   flags; free text raises before anything is written.
 - **The evaluation script is the gate for a model change:** `uv run python -m

@@ -54,8 +54,9 @@ class Settings:
     anthropic_api_key: str | None = field(default=None, repr=False)
     ollama_base_url: str = "http://localhost:11434"
     # How long a live reaction may take before Nova uses a fallback line instead. Measured:
-    # warm Gemma writes a line in about 0.4 s, so 2 s is roughly 4x that, short enough that
-    # the room never hears more than 2 s of dead air before Nova speaks.
+    # warm Gemma writes a line in about 0.4 s, so 2 s is roughly 4x that. It caps the wait
+    # for the model, not the silence the room hears: the voice's first audio adds about 0.2
+    # to 0.5 s, and a reply also waits for the end of the dater's sentence and its transcript.
     live_timeout: float = 2.0
     # How long a set piece may take before the date. Loading Gemma cold took 28 s, so 60 s
     # covers a cold start plus the line; the date only starts once these are ready.
