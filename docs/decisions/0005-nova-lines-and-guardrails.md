@@ -21,6 +21,10 @@ Date: 2026-10-13. Status: accepted.
   approved lines built only from first names and ages, never from free text, so injected
   text can't reach the room through them. The product owner signed them all off on
   2026-10-13.
+- **A blind card is checked when it's made** (`nova/cards.py`), because its first name and
+  age go into fixed and fallback lines that no guardrail checks: a first name is letters,
+  with single spaces, hyphens or apostrophes between them, at most 30 characters; an age
+  is a whole number from 18 to 99.
 - **A dater who wants to stop is never deflected.** Before any reply, `distress_in` hears
   everything a dater says on air, to Nova or to the other dater, at one of two levels.
   Speech-to-text often splits a sentence at a pause ("Nova," then "I want to stop."), so
@@ -124,3 +128,5 @@ right-hand column above). Before the first real show, Nova needs both of these:
   speaks to Nova on air (`dater_asked_nova`), which pauses for a dater who wants to stop.
   Its talk-to-the-room cues carry the safe show facts (`RoomFacts`).
 - Each model change runs the evaluation first; a failing case blocks the change.
+- The blind card schema in `packages/shared` must apply the same first-name and age rules,
+  so the app never accepts a card Nova can't put on air.
