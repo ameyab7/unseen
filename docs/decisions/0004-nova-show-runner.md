@@ -33,6 +33,21 @@ Date: 2026-10-13. Status: accepted.
   nothing), or end the date. There is no limit on how often a dater can pause, but the
   moderator is also alerted when the same dater pauses a second time (counted per dater).
   Alerts go to the moderator console only, never to the room.
+- **A report pauses the date** until the moderator resumes or ends it (the prototype's
+  report sheet: "Nova pauses the date and a live moderator listens in", "Pause and
+  report"). The moderator is alerted first (`dater_reported`); then, if a pause can start,
+  Nova stops mid-line and covers with the need-a-moment line and talk to the room, never
+  naming the reporter or the report. The show clock holds as for a need a moment, with the
+  usual 30-second alert and "Bear with us", but the reporter's own return doesn't end it,
+  since their date ends in the app: only resume or end does. A report never counts as a
+  repeated pause. If a pause can't start (off air, deciding, the other dater already on a
+  pause, before the date or after it), the alert is all.
+- **Alerts never depend on the show clock.** Daters, the moderator and the room can act at
+  any moment of the night, before a date starts and after it ends, and nothing they do
+  raises. Off air, a distress check or a report still reaches the moderator, and nothing
+  else happens; an approved question or a lightning unlock that comes in before the date
+  starts is kept for it (the unlock is announced after the doors intro, so a paid unlock
+  is never lost).
 - **The lightning unlock meter closes at 5:30**, or as soon as the round is unlocked, or
   when the date ends early (the runner's `LightningMeterClosed` cue). No listener can pay
   toward an unlock that will be ignored. The gesture work must follow this: once the meter
@@ -53,9 +68,10 @@ Date: 2026-10-13. Status: accepted.
 - The end reasons (`completed`, `dater_left`, `moderator_ended`) are the values for the
   `dates.end_reason` column when the schema is written.
 - The questions table needs a moderator-approved status distinct from the automatic screen.
-- The moderator console needs the two pause alerts ("not back after 30 seconds" and
-  "second pause by the same dater"), the three distress alerts ("a dater wants to stop",
-  "a dater may be distressed" and "couldn't check what a dater said: listen in", decision
-  0005), and for a dater who isn't back, three controls: keep
-  waiting, resume without them, and end the date (the runner's `moderator_keep_waiting`,
+- The moderator console shows `dater_reported` as its most urgent alert. It also needs the
+  two pause alerts ("not back after 30 seconds" and "second pause by the same dater"), the
+  three distress alerts ("a dater wants to stop", "a dater may be distressed" and
+  "couldn't check what a dater said: listen in", decision 0005), and for a dater who isn't
+  back or who reported, three controls: keep waiting,
+  resume without them, and end the date (the runner's `moderator_keep_waiting`,
   `moderator_resume` and `moderator_end`). It also needs a control to stop the fallback.

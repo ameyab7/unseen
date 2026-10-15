@@ -6,8 +6,10 @@ Then open agents-playground.livekit.io, choose the project and connect. Nova pre
 set pieces, waits for you, and runs one rehearsal date (about three minutes) as the host
 of Maya and Theo. You play both daters: speak, start with "Nova, ..." to talk to Nova, and
 type commands in the chat box (nova/rehearsal.py, Command): maya, theo, moment, back,
-unlock, ask <question>, reveal, unseen, keep, resume, end, leave. At the end the report
-(codes and numbers only) is logged and saved in services/nova/rehearsals/.
+unlock, ask <question>, reveal, unseen, keep, resume, end, leave, report. What daters say
+and type is heard from the moment the session starts, before the date does, and never
+raises. At the end the report (codes and numbers only) is logged and saved in
+services/nova/rehearsals/.
 
 Privacy (CLAUDE.md): daters' audio goes to speech recognition and no other LiveKit service;
 recording is off, so LiveKit Cloud keeps no audio, transcripts or traces; no one in the
