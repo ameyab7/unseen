@@ -33,7 +33,7 @@ async def test_daters_audio_goes_to_speech_recognition_and_no_other_livekit_serv
 def test_recording_is_off_so_nothing_reaches_livekit_cloud_observability():
     """LiveKit Cloud can keep a session's audio, transcripts and traces. CLAUDE.md: never
     send transcripts anywhere, so every session starts with recording off."""
-    assert START_OPTIONS == {"record": False}
+    assert START_OPTIONS["record"] is False
 
 
 def test_what_people_said_or_typed_is_redacted_from_every_log_record():
@@ -164,3 +164,9 @@ async def test_daters_transcripts_are_never_published_to_the_room(monkeypatch, t
     options = (await rehearse(monkeypatch, tmp_path)).started["room_options"]
     assert options.get_text_output_options() is None
     assert options.get_text_input_options() is not None, "chat commands still come in"
+
+
+async def test_no_one_in_the_room_can_query_the_session(monkeypatch, tmp_path):
+    """LiveKit lets any participant in the room ask a hosted session for its details and
+    history, with no identity check. The session isn't hosted."""
+    assert (await rehearse(monkeypatch, tmp_path)).started["session_host"] is False

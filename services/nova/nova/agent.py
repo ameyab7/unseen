@@ -10,9 +10,10 @@ unlock, ask <question>, reveal, unseen, keep, resume, end, leave. At the end the
 (codes and numbers only) is logged and saved in services/nova/rehearsals/.
 
 Privacy (CLAUDE.md): daters' audio goes to speech recognition and no other LiveKit service;
-recording is off, so LiveKit Cloud keeps no audio, transcripts or traces; LiveKit's own log
-fields that carry what people said (lk.pii.*) are redacted; what daters say is never
-published to the room as text; and what they say or type stays in memory.
+recording is off, so LiveKit Cloud keeps no audio, transcripts or traces; no one in the
+room can query the session for its history; LiveKit's own log fields that carry what
+people said (lk.pii.*) are redacted; what daters say is never published to the room as
+text; and what they say or type stays in memory.
 """
 
 import asyncio
@@ -44,7 +45,9 @@ from nova.timing import REHEARSAL
 
 logger = logging.getLogger("nova.agent")
 
-START_OPTIONS: dict[str, Any] = {"record": False}
+# Recording off: LiveKit Cloud keeps no audio, transcripts or traces. Not a session host:
+# otherwise any participant in the room can ask the session for its details and history.
+START_OPTIONS: dict[str, Any] = {"record": False, "session_host": False}
 # Daters' audio goes to speech recognition and nothing else. In dev mode LiveKit's defaults
 # would also stream it to its cloud turn detector and its adaptive barge-in service. Nova
 # never takes turns from speech and can't be talked over, so the local voice detector
