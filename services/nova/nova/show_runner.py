@@ -84,6 +84,13 @@ class RoomPoll(Protocol):
         ...
 
 
+class NoVotes:
+    """A poll nobody has voted in: rehearsals and the evaluation have no room."""
+
+    def tally(self) -> PollTally:
+        return PollTally(yes=0, no=0)
+
+
 @dataclass(order=True)
 class _Beat:
     at: float  # show time

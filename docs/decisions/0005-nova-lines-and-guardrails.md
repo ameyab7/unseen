@@ -178,9 +178,9 @@ right-hand column above). Before the first real show, Nova needs both of these:
   What a dater says to anyone else goes to `dater_said`, which hears unmistakable distress
   the same way and never replies, and the meaning layer's verdict comes back through
   `distress_check`. Its talk-to-the-room cues carry the safe show facts (`RoomFacts`).
-- The agent for real shows hears every dater's final transcripts as the rehearsal does
-  (`nova/distress.py`, `Listener`, and `nova/rehearsal.py`, `transcript`): distress
-  first, and a reply to Nova held until the check's verdict.
+- The agent for real shows hears every dater's final transcripts through the same
+  `OnAirListener` (`nova/on_air.py`) as the rehearsal and the evaluation, not a copy of
+  it: distress first, and a reply to Nova held until the check's verdict.
 - The moderator console needs a third distress alert, `distress_unchecked`: the check
   failed or was too slow, so listen in (decision 0004).
 - The distress check sends everything daters say to the model in `NOVA_LLM`, about 120 to

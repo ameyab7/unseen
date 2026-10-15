@@ -35,16 +35,17 @@ from enum import StrEnum
 from nova import script
 from nova.cards import BlindCard, Pair, Prompt, Seat
 from nova.config import load_settings
-from nova.cues import AlertModerator, Moment, RoomFacts, Say, Segment
+from nova.cues import AlertModerator, Cue, Moment, RoomFacts, Say, Segment
 from nova.decisions import InMemoryDecisionDesk
-from nova.distress import DistressCheck, Listener, Verdict
+from nova.distress import DistressCheck, Verdict
 from nova.distress_set import DISTRESS_SET, Sample
 from nova.events import EventLog
 from nova.fixtures import MAYA, NEXT_PAIR, NIGHT, REHEARSAL_PAIR, THEO
 from nova.lines import CANDIDATES, ErrorKind, LineWriter, Source
 from nova.models import LineModel, build_model
-from nova.rehearsal import ADDRESSES_NOVA
-from nova.show_runner import PollTally, ShowRunner
+from nova.on_air import OnAirCues, OnAirListener
+from nova.rehearsal import ms_text
+from nova.show_runner import NoVotes, ShowRunner
 from nova.timing import FULL
 from nova.tonight import Tonight, mask, similarity, words
 
@@ -239,11 +240,6 @@ class CaseResult:
         return not self.problems
 
 
-class _NoVotes:
-    def tally(self) -> PollTally:
-        return PollTally(yes=0, no=0)
-
-
 class Layer(StrEnum):
     """Which layer of the distress check heard it (nova/distress.py)."""
 
@@ -262,6 +258,7 @@ class Heard:
     reply: bool  # Nova would answer (only for words to Nova)
     verdict: Verdict | None = None  # the meaning layer's, if it ran
     ms: int | None = None  # how long the meaning layer took
+    cues: tuple[Cue, ...] = ()  # everything the show did, in order
 
 
 async def hear_on_air(
@@ -273,45 +270,38 @@ async def hear_on_air(
     seat: Seat = Seat.LEFT,
 ) -> Heard:
     """What the show does when a dater says this in free talk, after saying earlier a few
-    seconds before: the real listener, distress check and show runner, so the evaluation
-    measures what the show does rather than checking the words again itself."""
-    runner = ShowRunner(pair, desk=InMemoryDecisionDesk(), poll=_NoVotes(), first_up=Seat.LEFT)
-    listener = Listener(check)
+    seconds before. The same on-air listener as the rehearsal (nova/on_air.py) hears it, on
+    a fixed clock, so the evaluation measures what runs rather than a copy of it."""
     now = FULL.free_talk + 20.0
+    runner = ShowRunner(pair, desk=InMemoryDecisionDesk(), poll=NoVotes(), first_up=Seat.LEFT)
     runner.start(0.0)
+    runner.tick(now)  # the date so far
+    delivered: list[OnAirCues] = []
+    on_air = OnAirListener(runner, check, deliver=delivered.append, clock=lambda: now)
     for k, said in enumerate(earlier):
-        listener.remember(now - 2.0 * (len(earlier) - k), seat, said)
-    runner.tick(now)
-    hearing = listener.hear(now, seat, words)
-    to_nova = bool(ADDRESSES_NOVA.search(words))
-    if hearing.unmistakable is not None:
-        heard = hearing.unmistakable
-        if to_nova:
-            cues = runner.dater_asked_nova(now, seat, heard)
-        else:
-            cues = runner.dater_said(now, seat, heard)
-        return _heard(Layer.INSTANT, cues)
-    if hearing.check is None:
-        cues = runner.dater_asked_nova(now, seat, words) if to_nova else []
-        return _heard(Layer.NONE, cues)
-    checked = await hearing.check
-    cues = runner.distress_check(now, seat, checked.verdict)
-    if to_nova and checked.verdict is not Verdict.YES:  # a held reply goes ahead
-        cues += runner.dater_asked_nova(now, seat, words)
-    return _heard(Layer.MEANING, cues, checked.verdict, checked.ms)
+        on_air.remember(seat, said, at=now - 2.0 * (len(earlier) - k))
+    hearing = on_air.hear(seat, words)
+    await on_air.heard()
 
-
-def _heard(
-    layer: Layer, cues: list, verdict: Verdict | None = None, ms: int | None = None
-) -> Heard:
+    cues = [cue for on_air_cues in delivered for cue in on_air_cues.cues]
     said = [cue for cue in cues if isinstance(cue, Say)]
+    holds = [d.hold for d in delivered if d.hold is not None]
+    held_back = any(hold.result() is Verdict.YES for hold in holds)  # the reply is dropped
+    if hearing.unmistakable is not None:
+        layer = Layer.INSTANT
+    elif hearing.check is not None:
+        layer = Layer.MEANING
+    else:
+        layer = Layer.NONE
+    checked = on_air.checks[-1] if layer is Layer.MEANING else None
     return Heard(
         layer,
         paused=any(say.text == script.DISTRESS_PAUSE for say in said),
         alerted=any(isinstance(cue, AlertModerator) for cue in cues),
-        reply=any(say.moment is Moment.REPLY for say in said),
-        verdict=verdict,
-        ms=ms,
+        reply=any(say.moment is Moment.REPLY for say in said) and not held_back,
+        verdict=checked.verdict if checked else None,
+        ms=checked.ms if checked else None,
+        cues=tuple(cues),
     )
 
 
@@ -522,8 +512,8 @@ def render_distress(results: list[DistressResult], *, model_name: str) -> str:
         f"{t.plain_alerted_only} alerted the moderator only, {t.plain_missed} missed",
         f"Ordinary talk: {t.quiet} left alone, {t.false_alerts} false alerts, "
         f"{t.false_pauses} false pauses",
-        f"The check: {t.checks} sentences, median {_ms_text(t.median_ms)}, 90th percentile "
-        f"{_ms_text(t.p90_ms)}, worst {_ms_text(t.worst_ms)}; {t.unchecked} unchecked "
+        f"The check: {t.checks} sentences, median {ms_text(t.median_ms)}, 90th percentile "
+        f"{ms_text(t.p90_ms)}, worst {ms_text(t.worst_ms)}; {t.unchecked} unchecked "
         "(failed or too slow, so the moderator was alerted)",
         "",
         "Targets",
@@ -542,10 +532,6 @@ def render_distress(results: list[DistressResult], *, model_name: str) -> str:
         before = f"  (after: {' '.join(r.sample.earlier)})" if r.sample.earlier else ""
         lines.append(f"  {what:<12}[{layer}]  {r.sample.sentence}{before}")
     return "\n".join(lines)
-
-
-def _ms_text(ms: int | None) -> str:
-    return "-" if ms is None else f"{ms} ms"
 
 
 # --- Does Nova sound canned? --------------------------------------------------------------
