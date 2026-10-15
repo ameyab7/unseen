@@ -11,8 +11,8 @@ unlock, ask <question>, reveal, unseen, keep, resume, end, leave. At the end the
 
 Privacy (CLAUDE.md): daters' audio goes to speech recognition and no other LiveKit service;
 recording is off, so LiveKit Cloud keeps no audio, transcripts or traces; LiveKit's own log
-fields that carry what people said (lk.pii.*) are redacted; and what daters say or type
-stays in memory.
+fields that carry what people said (lk.pii.*) are redacted; what daters say is never
+published to the room as text; and what they say or type stays in memory.
 """
 
 import asyncio
@@ -159,7 +159,9 @@ async def rehearse(ctx: JobContext) -> None:
         agent=Agent(instructions="Nova's lines come from the show runner; no replies here."),
         room=ctx.room,
         room_options=room_io.RoomOptions(
-            text_input=room_io.TextInputOptions(text_input_cb=on_chat)
+            text_input=room_io.TextInputOptions(text_input_cb=on_chat),
+            # Otherwise LiveKit publishes what daters say, as text, to everyone in the room.
+            text_output=False,
         ),
         **START_OPTIONS,
     )

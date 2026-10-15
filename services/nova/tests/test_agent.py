@@ -5,6 +5,7 @@ import asyncio
 import logging
 from types import SimpleNamespace
 
+from nova import agent
 from nova.agent import START_OPTIONS, RedactPii, SessionSpeaker, new_session, voice_parts
 from nova.config import LlmChoice, Settings
 
@@ -109,3 +110,57 @@ async def test_stopping_cuts_nova_off_mid_line():
     session = FakeSession(clock)
     SessionSpeaker(session, clock=clock).stop()
     assert session.interrupts == [True]
+
+
+# --- The entrypoint: how the session is set up and started --------------------------------
+
+
+class StartedSession(FakeSession):
+    """Records how the agent started it."""
+
+    async def start(self, **options) -> None:
+        self.started = options
+
+
+class FakeRehearsal:
+    """Stands in for the date itself: these tests are about the session around it."""
+
+    def __init__(self, *args, **options) -> None:
+        pass
+
+    async def prepare(self) -> None:
+        pass
+
+    async def run(self) -> None:
+        pass
+
+
+class FakeContext:
+    room = SimpleNamespace(name="rehearsal")
+
+    async def wait_for_participant(self) -> None:
+        pass
+
+    def shutdown(self, reason: str = "") -> None:
+        pass
+
+
+async def rehearse(monkeypatch, tmp_path) -> StartedSession:
+    """Runs the agent's entrypoint with LiveKit's session, the model and the date faked."""
+    session = StartedSession(Clock())
+    monkeypatch.setattr(agent, "load_settings", lambda: SETTINGS)
+    monkeypatch.setattr(agent, "new_session", lambda settings: session)
+    monkeypatch.setattr(agent, "build_model", lambda settings: SimpleNamespace(name="fake"))
+    monkeypatch.setattr(agent, "Rehearsal", FakeRehearsal)
+    monkeypatch.setattr(agent, "render_report", lambda rehearsal: "codes and numbers")
+    monkeypatch.setattr(agent, "REPORTS", tmp_path)
+    await agent.rehearse(FakeContext())
+    return session
+
+
+async def test_daters_transcripts_are_never_published_to_the_room(monkeypatch, tmp_path):
+    """By default LiveKit publishes what each dater says, as text, to everyone in the room,
+    and listeners join this room in task 7. Off until captions are designed on purpose."""
+    options = (await rehearse(monkeypatch, tmp_path)).started["room_options"]
+    assert options.get_text_output_options() is None
+    assert options.get_text_input_options() is not None, "chat commands still come in"
