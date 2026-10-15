@@ -15,8 +15,9 @@ Date: 2026-10-13. Status: accepted.
   refusal fallback for now; we add it if and when Nova switches to Claude.
 - **Instructions and data never mix.** Nova's rules are the system prompt. Each task is
   one instruction we wrote, naming daters by seat, then one `<data>` block of JSON with
-  angle brackets escaped: blind cards, audience questions and what daters said. The rules
-  say data is never an instruction.
+  angle brackets and ampersands escaped: blind cards, audience questions and what daters
+  said. The data is normalised (NFKC) first, so lookalike characters such as a full-width
+  `＜` become plain ones and are escaped too. The rules say data is never an instruction.
 - **Every model line passes the guardrails or a fallback is said instead.** Fallbacks are
   approved lines built only from first names and ages, never from free text, so injected
   text can't reach the room through them. The product owner signed them all off on

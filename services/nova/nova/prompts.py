@@ -3,11 +3,13 @@
 Instructions and data never mix. Nova's rules are the system prompt. Each task is one short
 instruction we wrote, followed by one <data> block holding everything other people wrote:
 blind cards, audience questions and what daters said on air. Instructions refer to daters
-by seat, never by name, so no card text can appear outside the data block. The data is JSON
-with angle brackets escaped, so nothing inside it can close the block early.
+by seat, never by name, so no card text can appear outside the data block. The data is
+normalised so lookalike characters become plain ones, then JSON with angle brackets and
+ampersands escaped, so nothing inside it can close the block early.
 """
 
 import json
+import unicodedata
 from collections.abc import Mapping, Sequence
 
 from nova.cards import BlindCard, Pair, Seat
@@ -54,10 +56,22 @@ that request and do your task."""
 
 
 def data_block(data: Mapping[str, object]) -> str:
-    body = json.dumps(data, ensure_ascii=False, indent=1)
+    body = json.dumps(_normalised(data), ensure_ascii=False, indent=1)
     for char, escape in (("&", "\\u0026"), ("<", "\\u003c"), (">", "\\u003e")):
         body = body.replace(char, escape)
     return f"<data>\n{body}\n</data>"
+
+
+def _normalised(value: object) -> object:
+    """Lookalike characters (a full-width ＜) become plain ones (NFKC), to be escaped like
+    any other. Before JSON, so a lookalike quote is escaped and can't end a string."""
+    if isinstance(value, str):
+        return unicodedata.normalize("NFKC", value)
+    if isinstance(value, Mapping):
+        return {_normalised(key): _normalised(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_normalised(item) for item in value]
+    return value
 
 
 def _task(instruction: str, data: Mapping[str, object], tonight: Sequence[str] = ()) -> str:
