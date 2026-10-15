@@ -83,6 +83,8 @@ class TestLoadSettings:
     def test_environment_overrides_the_file(self, tmp_path, monkeypatch):
         env_file = tmp_path / ".env"
         env_file.write_text("\n".join(f"{k}={v}" for k, v in GOOD.items()), encoding="utf-8")
+        for name in GOOD:  # whatever this machine has set (Docker passes the real .env in)
+            monkeypatch.delenv(name, raising=False)
         monkeypatch.setenv("NOVA_LLM", "anthropic/claude-opus-5-5")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
         settings = load_settings(env_file)

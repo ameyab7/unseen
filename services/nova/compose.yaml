@@ -1,0 +1,22 @@
+# Nova in Docker, for Windows (CLAUDE.md, Smart App Control). From the repository root:
+#
+#   docker compose -f services/nova/compose.yaml up --build
+#
+# runs one measured rehearsal date: then open the Agents Playground as usual. It uses
+# LiveKit credit like any rehearsal. Reports land in services/nova/rehearsals. Other
+# commands run in the same container, for example:
+#
+#   docker compose -f services/nova/compose.yaml run --rm --build nova uv run pytest
+#   docker compose -f services/nova/compose.yaml run --rm --build nova uv run python -m nova.evaluation
+services:
+  nova:
+    build: .
+    # The keys stay on this PC: Docker hands them to the container when it starts.
+    env_file: .env
+    environment:
+      # Ollama runs on Windows; inside Docker the host is host.docker.internal.
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    volumes:
+      - ./rehearsals:/app/rehearsals
+      - ./voice-samples:/app/voice-samples
+    tty: true
