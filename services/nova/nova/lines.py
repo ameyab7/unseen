@@ -9,8 +9,9 @@
   call the model during the date, within live_timeout.
 
 Every model line passes the guardrails or is replaced by a fallback line. Every prompt
-sees what Nova has said tonight for that moment, across dates (nova/tonight.py). The log
-records events and timings only, never text.
+sees what Nova has said tonight for that moment, across dates (nova/tonight.py), except
+audience questions and replies, which are never remembered. The log records events and
+timings only, never text.
 """
 
 import asyncio
@@ -47,6 +48,9 @@ SET_PIECES = frozenset(
     }
 )
 LIVE_REACTIONS = frozenset({Moment.SILENCE, Moment.FROM_THE_ROOM, Moment.ROOM_TALK, Moment.REPLY})
+# Live reactions kept in tonight's memory. Not audience questions or replies: their lines
+# carry what a listener or dater said, and the memory reaches every later date's prompts.
+REMEMBERED_LIVE = frozenset({Moment.SILENCE, Moment.ROOM_TALK})
 CANDIDATES = 3  # model lines written for each set piece; the best one is kept
 
 
@@ -196,7 +200,7 @@ class LineWriter:
 
     async def line_for(self, say: Say) -> Line:
         line = await self._line_for(say)
-        if line.source is not Source.FIXED and line.moment in LIVE_REACTIONS:
+        if line.source is not Source.FIXED and line.moment in REMEMBERED_LIVE:
             self._tonight.remember(line.moment, line.text, names=self._names)
         self._events.emit(
             Event.LINE,

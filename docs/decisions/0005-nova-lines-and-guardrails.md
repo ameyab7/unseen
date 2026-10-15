@@ -45,10 +45,12 @@ Date: 2026-10-13. Status: accepted.
   Both lean towards hearing distress: a false alarm costs a breather or a look from the
   moderator. Hearing everything, not only words to Nova, makes false alarms likelier ("I
   want to stop eating sugar" is heard as clear); the first rehearsals will show how often.
-- **Lines vary across the night.** Listeners hear every date, so Nova remembers every line
+- **Lines vary across the night.** Listeners hear every date, so Nova remembers the lines
   it has used tonight, across dates (`nova/tonight.py`). Every prompt sees the lines
   already said for its moment (daters' names masked, so no earlier dater's name reaches a
-  later date) and is told not to repeat or echo them. Each set piece gets three candidates
+  later date) and is told not to repeat or echo them. Audience-question lines and replies
+  are never remembered: they carry what a listener or dater said, and the memory reaches
+  every later date's prompts. Each set piece gets three candidates
   during prep; Nova keeps the one that passes the guardrails and is least similar to
   tonight's lines. The line writer also picks a shape for Next up and an opening for talk
   to the room at random, and gives each date's three lightning questions one of each

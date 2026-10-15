@@ -2,7 +2,8 @@
 
 One Tonight is shared by every date's line writer. Lines are kept per moment with the
 daters' first names masked, so lines from different dates compare fairly and no earlier
-dater's name ever reaches a later date's prompt.
+dater's name ever reaches a later date's prompt. Lines that carry what a listener or dater
+said (audience questions, replies) are never kept (nova/lines.py, REMEMBERED_LIVE).
 """
 
 import re

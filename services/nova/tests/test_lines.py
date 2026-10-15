@@ -236,6 +236,18 @@ async def test_tonight_is_shared_across_dates_and_earlier_daters_names_never_rea
         assert "Maya" not in prompt and "Theo" not in prompt
 
 
+async def test_audience_questions_and_replies_are_never_remembered_for_later_dates():
+    """Those lines carry what a listener or dater said, and tonight's memory goes into
+    every later date's prompts."""
+    tonight = Tonight()
+    w = writer(FakeModel("Maya, Theo, over to you."), tonight=tonight)
+    await w.line_for(Say(Moment.FROM_THE_ROOM, detail="Sing or dance?"))
+    await w.line_for(Say(Moment.REPLY, about=LEFT, detail="Nova, are you human?"))
+    await w.line_for(Say(Moment.SILENCE))
+    assert tonight.said(Moment.FROM_THE_ROOM) == tonight.said(Moment.REPLY) == []
+    assert tonight.said(Moment.SILENCE) == [f"{NAME}, {NAME}, over to you."], "other lines are"
+
+
 # --- Fixed lines and live reactions -------------------------------------------------------
 
 
