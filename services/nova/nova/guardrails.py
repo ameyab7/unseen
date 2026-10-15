@@ -284,9 +284,9 @@ def check(
     if not text.strip():
         return (Violation.EMPTY,)
     found: set[Violation] = set()
-    allowed = _allowed_words(names)
-    echoes = _proper_nouns(echo_from, allowed)
-    allowed |= set(card_words)
+    known = _allowed_words(names)  # names and fixed words, never anything a dater wrote
+    echoes = _proper_nouns(echo_from, known)
+    allowed = known | set(card_words)
 
     if len(text) > max_chars or len(SENTENCE_END.findall(text)) > max_sentences:
         found.add(Violation.TOO_LONG)
@@ -294,7 +294,7 @@ def check(
         found.add(Violation.EXCLAMATION)
     if _has_formatting(text):
         found.add(Violation.FORMATTING)
-    found |= _name_problems(text, names, allowed)
+    found |= _name_problems(text, names, allowed, known)
     if not questions and "?" in text:
         found.add(Violation.QUESTION)
     if not open_with_names and _opens_with_both_names(text, names):
@@ -414,9 +414,13 @@ def _proper_nouns(texts: Iterable[str], allowed: set[str]) -> set[str]:
     return nouns
 
 
-def _name_problems(text: str, names: Collection[str], allowed: set[str]) -> set[Violation]:
+def _name_problems(
+    text: str, names: Collection[str], allowed: set[str], known: set[str]
+) -> set[Violation]:
     """Only the daters' first names (and Nova) may appear: any other capitalised word in
-    the middle of a sentence is treated as a possible surname, place, workplace or school."""
+    the middle of a sentence is treated as a possible surname, place, workplace or school.
+    allowed adds words from the cards; right after a first name, only known words (names
+    and fixed words) may follow, so a card word is never said as a surname."""
     problems: set[Violation] = set()
 
     for name in names:
@@ -438,7 +442,7 @@ def _name_problems(text: str, names: Collection[str], allowed: set[str]) -> set[
                 and following is not None
                 and between == " "
                 and following.group(0)[:1].isupper()
-                and following.group(0).split("'")[0] not in allowed
+                and following.group(0).split("'")[0] not in known
             ):
                 problems.add(Violation.PERSONAL_DETAIL)  # "Maya Lopez": a surname
             continue

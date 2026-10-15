@@ -406,6 +406,18 @@ def test_names_and_places_a_dater_wrote_on_their_own_card_may_be_used():
     )
 
 
+def test_a_word_from_a_card_is_never_said_as_a_surname():
+    """A card word may be said on its own; right after a first name it reads as a surname."""
+    words = card_words(["Ask me about the Lopez family bakery."])
+    assert words == {"Lopez"}
+    assert V.PERSONAL_DETAIL in set(
+        check("Maya Lopez, tell us more.", names=NAMES, card_words=words)
+    )
+    assert (
+        check("Maya, tell us about the Lopez family bakery.", names=NAMES, card_words=words) == ()
+    )
+
+
 def test_a_place_from_live_speech_is_still_blocked_even_if_it_is_on_the_card():
     said = ["Nova, I just moved back to Lisbon, come visit."]
     line = "Lisbon it is, Sam. Back to you two."
