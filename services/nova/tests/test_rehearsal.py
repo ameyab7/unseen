@@ -342,6 +342,17 @@ async def test_chat_commands_drive_the_show():
     assert r.finished
 
 
+async def test_when_the_moderator_ends_the_date_nothing_already_queued_is_said():
+    clock = Clock()
+    r = await started(clock)
+    clock.now = 40.0
+    r.tick()  # the first questions, queued and not yet spoken
+    r.command("end")
+    await r.speak_queued()
+    assert lines(r, Moment.FIRST_QUESTION) == []
+    assert r.speaker.texts[-1] == script.MODERATOR_END and r.speaker.stops == 1
+
+
 async def test_decisions_come_from_chat_and_only_count_while_the_window_is_open():
     clock = Clock()
     r = await started(clock)

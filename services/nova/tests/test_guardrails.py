@@ -159,6 +159,15 @@ def test_voice_and_format_rules():
     assert V.NAME_CASE in found("maya, tell us more.")
 
 
+@pytest.mark.parametrize(
+    "char", ["\t", "\n", "\x1f", "\x85", "\x00", "\u200b", "\u200d", "\u2060", "\ufeff"]
+)
+def test_control_and_zero_width_characters_are_formatting(char):
+    """Characters nobody hears can hide text from these checks. clean() collapses whitespace
+    first, so this is the check on the line exactly as given."""
+    assert V.FORMATTING in set(check(f"Maya,{char} over to you.", names=NAMES))
+
+
 def test_clean_removes_wrapping_the_model_adds():
     assert clean('"Nova: Maya, tell us more."') == "Maya, tell us more."
     assert clean("  Theo,\n  over to you.  ") == "Theo, over to you."

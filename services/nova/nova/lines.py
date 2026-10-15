@@ -213,7 +213,10 @@ class LineWriter:
         return line
 
     async def attempt_for(self, say: Say) -> Attempt:
-        """One model attempt for a cue, with no fallback: for the evaluation script."""
+        """One model attempt for a cue, with no fallback: for the evaluation script. An
+        audience question Nova declines never reaches the model, as in line_for."""
+        if self._declines(say):
+            return Attempt(None, (), 0, ErrorKind.DECLINED)
         timeout = self._prep_timeout if say.moment in SET_PIECES else self._live_timeout
         return await self._attempt(say, self._prompt_for(say), timeout)
 
@@ -228,7 +231,7 @@ class LineWriter:
         if say.moment not in LIVE_REACTIONS:
             raise ValueError(f"No line for {say.moment}: it needs approved text")
 
-        if say.moment is Moment.FROM_THE_ROOM and question_is_off_limits(say.detail or ""):
+        if self._declines(say):
             return Line(
                 script.DECLINE_QUESTION, Source.FALLBACK, say.moment, error=ErrorKind.DECLINED
             )
@@ -237,6 +240,11 @@ class LineWriter:
         return self._settle(say, attempt, Source.MODEL)
 
     # --- Internals ------------------------------------------------------------------------
+
+    def _declines(self, say: Say) -> bool:
+        """Audience questions about personal details or looks, or that try to instruct Nova,
+        are declined with a fixed line before the model sees them."""
+        return say.moment is Moment.FROM_THE_ROOM and question_is_off_limits(say.detail or "")
 
     async def _prepare_one(self, say: Say) -> Line:
         """Three candidates at once; keeps the one that passes the guardrails and is least

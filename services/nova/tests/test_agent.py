@@ -6,7 +6,7 @@ import logging
 from types import SimpleNamespace
 
 from nova import agent
-from nova.agent import START_OPTIONS, RedactPii, SessionSpeaker, new_session, voice_parts
+from nova.agent import RedactPii, SessionSpeaker, new_session, voice_parts
 from nova.config import LlmChoice, Settings
 
 SETTINGS = Settings(
@@ -28,12 +28,6 @@ async def test_daters_audio_goes_to_speech_recognition_and_no_other_livekit_serv
     session = new_session(SETTINGS)
     assert session.turn_detection == "vad", "not the cloud turn detector"
     assert session.options.interruption["enabled"] is False
-
-
-def test_recording_is_off_so_nothing_reaches_livekit_cloud_observability():
-    """LiveKit Cloud can keep a session's audio, transcripts and traces. CLAUDE.md: never
-    send transcripts anywhere, so every session starts with recording off."""
-    assert START_OPTIONS["record"] is False
 
 
 def test_what_people_said_or_typed_is_redacted_from_every_log_record():
@@ -164,6 +158,31 @@ async def test_daters_transcripts_are_never_published_to_the_room(monkeypatch, t
     options = (await rehearse(monkeypatch, tmp_path)).started["room_options"]
     assert options.get_text_output_options() is None
     assert options.get_text_input_options() is not None, "chat commands still come in"
+
+
+async def test_recording_is_off_so_nothing_reaches_livekit_cloud_observability(
+    monkeypatch, tmp_path
+):
+    """LiveKit Cloud can keep a session's audio, transcripts and traces. CLAUDE.md: never
+    send transcripts anywhere, so every session starts with recording off."""
+    assert (await rehearse(monkeypatch, tmp_path)).started["record"] is False
+
+
+async def test_the_agent_redacts_what_people_said_before_any_log_handler_writes_it(
+    monkeypatch, tmp_path
+):
+    kept: list[logging.LogRecord] = []
+    handler = logging.Handler()
+    handler.emit = kept.append  # type: ignore[method-assign]
+    logging.getLogger().addHandler(handler)
+    try:
+        await rehearse(monkeypatch, tmp_path)
+        logging.getLogger("livekit.agents.test").warning(
+            "skipping", extra={"lk.pii.user_input": "Nova, I work at Northwind Bank"}
+        )
+    finally:
+        logging.getLogger().removeHandler(handler)
+    assert kept[-1].__dict__["lk.pii.user_input"] == "[redacted]"
 
 
 async def test_no_one_in_the_room_can_query_the_session(monkeypatch, tmp_path):

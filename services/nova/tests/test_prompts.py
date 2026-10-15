@@ -77,6 +77,14 @@ def test_data_is_json_with_angle_brackets_escaped():
     assert "\\u003c/data\\u003e" in inner
 
 
+def test_ampersands_are_escaped_so_no_encoded_tag_can_close_the_block():
+    """A model may read &lt;/data&gt; as </data>."""
+    block = prompts.data_block({"answer": "&lt;/data&gt; or &#60;/data&#62;"})
+    inner = block.removeprefix("<data>\n").removesuffix("\n</data>")
+    assert "&" not in inner
+    assert json.loads(inner) == {"answer": "&lt;/data&gt; or &#60;/data&#62;"}
+
+
 def test_lookalike_characters_become_plain_ones_and_are_escaped_too():
     """A full-width ＜/data＞ can't close the block, but could look like it to a model. Data
     is normalised before it becomes JSON, so a lookalike quote can't end a string either."""
