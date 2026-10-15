@@ -243,6 +243,19 @@ async def test_a_dater_who_wants_to_stop_is_heard_without_saying_nova():
     assert script.DISTRESS_PAUSE in r.speaker.texts
 
 
+async def test_the_kind_line_comes_at_once_cutting_nova_off_and_dropping_queued_lines():
+    clock = Clock()
+    r = await started(clock, speaker=FakeSpeaker(clock, length=12.0))
+    clock.now = 40.0
+    r.tick()  # the first questions, twelve seconds each, queued and not yet spoken
+    r.speech_ended()
+    r.transcript("I want to stop.")
+    await r.speak_queued()
+    assert lines(r, Moment.NEED_A_MOMENT)[0].from_sentence_end_ms == 300
+    assert lines(r, Moment.FIRST_QUESTION) == [], "dropped, never said after the kind line"
+    assert r.speaker.stops == 1
+
+
 @pytest.mark.parametrize(
     "split",
     [("Nova,", "I want to stop."), ("I'm not", "comfortable."), ("Help, I can't", "do this.")],

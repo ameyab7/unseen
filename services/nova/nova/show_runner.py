@@ -259,9 +259,10 @@ class ShowRunner:
 
         A dater who clearly wants to stop never gets a reply, so Nova can't deflect them.
         The moderator is alerted at once, whenever it happens. If a pause can start, Nova
-        says the kind line and starts a need-a-moment pause for that dater; if not (another
-        pause, the decision window), Nova stays quiet and the moderator acts. Words that
-        may be distress ("help") alert the moderator, and Nova answers as usual."""
+        stops mid-line, says the kind line and starts a need-a-moment pause for that dater;
+        if not (another pause, the decision window), Nova stays quiet and the moderator
+        acts. Words that may be distress ("help") alert the moderator, and Nova answers as
+        usual."""
         cues = self._advance(now)
         distress = distress_in(words)
         cues += self._distress(now, seat, distress)
@@ -300,12 +301,13 @@ class ShowRunner:
         return cues
 
     def _distress(self, now: float, seat: Seat, distress: Distress) -> list[Cue]:
-        """Clear: the moderator is alerted, and if a pause can start, Nova says the kind line
-        and pauses for the dater. Maybe: the moderator is alerted."""
+        """Clear: the moderator is alerted, and if a pause can start, Nova stops mid-line,
+        drops whatever it had queued, says the kind line at once and pauses for the dater.
+        Maybe: the moderator is alerted."""
         if distress is Distress.CLEAR:
             cues: list[Cue] = [AlertModerator(ModeratorAlert.DATER_DISTRESSED, seat)]
             if self._can_pause:
-                cues += self._pause(now, seat, script.DISTRESS_PAUSE)
+                cues += [StopSpeaking(), *self._pause(now, seat, script.DISTRESS_PAUSE)]
             return cues
         if distress is Distress.MAYBE:
             return [AlertModerator(ModeratorAlert.POSSIBLE_DISTRESS, seat)]

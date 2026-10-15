@@ -28,8 +28,8 @@ Date: 2026-10-13. Status: accepted.
   raised only when the joined words sound worse than they did before:
   - **Clear** ("I want to stop", "I'm not comfortable", "can we end this", "I need a
     moment"): the show runner alerts the moderator at once (`dater_distressed`), and if a
-    pause can start, Nova says "Of course. Let's take a breather." and starts a
-    need-a-moment pause for that dater, with the usual rules (back, 30 s alert, moderator
+    pause can start, Nova stops mid-line, drops anything it had queued, says "Of course.
+    Let's take a breather." at once and starts a need-a-moment pause for that dater, with the usual rules (back, 30 s alert, moderator
     decides). If a pause can't start (another dater is on one, or the daters are
     deciding), Nova says nothing and the moderator acts. The model never sees those words,
     so "I'll stay out of that one" is never the answer.

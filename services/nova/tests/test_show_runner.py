@@ -479,8 +479,15 @@ MAYBE_DISTRESSED = AlertModerator(ModeratorAlert.POSSIBLE_DISTRESS, LEFT)
     ["Nova, I want to stop.", "I'm not comfortable.", "Can we end this?", "I need a moment."],
 )
 def test_a_dater_who_clearly_wants_to_stop_gets_a_kind_line_a_pause_and_the_moderator(words):
+    """Nova stops mid-line first and nothing already queued is said: the kind line comes
+    at once, never after whatever Nova was saying."""
     show = Show()
-    assert show.at(100, "dater_asked_nova", LEFT, words) == [DISTRESSED, KIND, PAUSE_TALK]
+    assert show.at(100, "dater_asked_nova", LEFT, words) == [
+        DISTRESSED,
+        StopSpeaking(),
+        KIND,
+        PAUSE_TALK,
+    ]
     show.until(119.5)
     assert show.cues(since=100.5, before=120) == [], "the show holds, as for a moment"
     assert show.at(120, "back", LEFT) == [WELCOME_BACK]
@@ -517,7 +524,7 @@ def test_words_that_may_be_distress_alert_the_moderator_and_nova_answers_as_usua
 @pytest.mark.parametrize("words", ["I want to stop.", "Theo, I'm not comfortable."])
 def test_a_dater_who_wants_to_stop_is_heard_even_when_not_talking_to_nova(words):
     show = Show()
-    assert show.at(100, "dater_said", LEFT, words) == [DISTRESSED, KIND, PAUSE_TALK]
+    assert show.at(100, "dater_said", LEFT, words) == [DISTRESSED, StopSpeaking(), KIND, PAUSE_TALK]
     show.until(119.5)
     assert show.cues(since=100.5, before=120) == [], "the show holds, as for a moment"
 
@@ -542,6 +549,7 @@ def test_after_a_distress_pause_the_usual_pause_rules_apply():
     show.at(140, "back", LEFT)
     assert show.at(200, "dater_asked_nova", LEFT, "I need a moment.") == [
         DISTRESSED,
+        StopSpeaking(),
         KIND,
         PAUSE_TALK,
         AlertModerator(ModeratorAlert.REPEATED_PAUSE, LEFT),
