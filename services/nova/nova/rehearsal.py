@@ -23,8 +23,8 @@ from typing import Protocol
 from nova.cards import Pair, Seat
 from nova.cues import AlertModerator, Cue, Moment, Say, StopSpeaking
 from nova.decisions import Choice, DecisionError, InMemoryDecisionDesk
+from nova.distress import Checked, DistressCheck, Listener, Verdict
 from nova.events import Event, EventLog
-from nova.guardrails import Distress, distress_in
 from nova.lines import LIVE_REACTIONS, Line, LineWriter, Source
 from nova.models import LineModel
 from nova.questions import AudienceQuestion, QuestionStatus
@@ -35,10 +35,6 @@ from nova.tonight import Tonight
 ADDRESSES_NOVA = re.compile(r"\bnova\b", re.IGNORECASE)
 # A sentence end older than this isn't the one a transcript belongs to.
 SENTENCE_END_MAX_AGE = 5.0
-# Speech-to-text often splits a sentence at a pause ("Nova," then "I want to stop."), so a
-# dater's transcripts from the last few seconds are heard together for distress.
-HEARD_TOGETHER = 5.0
-_LEVEL = {Distress.NONE: 0, Distress.MAYBE: 1, Distress.CLEAR: 2}
 # The lines left when the show finishes (the result, the outro, Next up) take well under
 # this. If Nova's voice is stuck mid-line, the date still ends and the report is written.
 FINAL_WAIT = 30.0
@@ -117,6 +113,7 @@ class _Pending:
     cue_at: float
     sentence_end_at: float | None
     line: asyncio.Task[Line]
+    hold: asyncio.Future[bool] | None = None  # a reply waiting for the distress check
 
 
 class Rehearsal:
@@ -134,6 +131,7 @@ class Rehearsal:
         first_up: Seat | None = None,
         live_timeout: float = 2.0,
         prep_timeout: float = 60.0,
+        distress_timeout: float = 2.0,
         events: EventLog | None = None,
     ) -> None:
         self.speaker = speaker
@@ -158,15 +156,19 @@ class Rehearsal:
             events=self._events,
             tonight=Tonight(),
         )
+        self._listener = Listener(
+            DistressCheck(model, timeout=distress_timeout, events=self._events)
+        )
+        self._checks: set[asyncio.Task[None]] = set()
         self._queue: asyncio.Queue[_Pending] = asyncio.Queue()
         self._last_sentence_end: float | None = None
-        self._recent: list[tuple[float, Seat, str]] = []  # the last few seconds of transcripts
         self._started_at: float | None = None
         self._ended_at: float | None = None
 
         self.seat = Seat.LEFT
         self.cues: list[Cue] = []  # in memory only
         self.spoken: list[Spoken] = []
+        self.checks: list[Checked] = []  # distress checks: verdict and time only
         self.alerts = 0
         self.characters_spoken = 0
         self.prep_ms = 0
@@ -210,6 +212,8 @@ class Rehearsal:
                 await asyncio.wait_for(self._queue.join(), final_wait)
         finally:
             speaking.cancel()
+            for check in self._checks:
+                check.cancel()
             self._ended_at = self._clock()
 
     async def speak_queued(self) -> None:
@@ -264,42 +268,74 @@ class Rehearsal:
 
     def transcript(self, text: str) -> None:
         """A final transcript of what the speaking dater said, to Nova or not. Held in memory
-        for a few seconds, never stored or logged.
+        for 15 seconds, never stored or logged.
 
-        Distress comes first and is heard in everything a dater says, joined with their own
-        last few seconds so a sentence split across transcripts is heard whole. It's raised
-        only when the words sound worse than they did, so joining never repeats an alert.
-        Then words that address Nova get a reply. Nova's first line either way is measured
-        from the end of their sentence."""
+        Distress comes first, in two layers (nova/distress.py). An unmistakable request to
+        stop pauses the dater at once and is never answered. Anything else with a warning
+        word goes to the distress check; if it was said to Nova, the reply is written at
+        the same time but held until the verdict, and dropped if the dater wants to stop.
+        Nova's first line after the dater spoke is measured from the end of their sentence,
+        so a kind line after the check counts the check's time."""
         now, seat = self._clock(), self.seat
         self._queue_cues(self._runner.tick(now))  # beats already due aren't replies
-        before = distress_in(self._recent_words(now, seat))
-        self._recent.append((now, seat, text))
-        # Joined first; the transcript alone only if it sounds worse on its own.
-        words = max((self._recent_words(now, seat), text), key=lambda w: _LEVEL[distress_in(w)])
-        distress = distress_in(words)
-        rose = _LEVEL[distress] > _LEVEL[before]
-        if ADDRESSES_NOVA.search(text):
-            cues = self._runner.dater_asked_nova(now, seat, words if rose else text)
-        elif rose:
-            cues = self._runner.dater_said(now, seat, words)
-        else:
-            return
-        if distress is Distress.CLEAR:  # heard and acted on: what they say next is new
-            self._recent = [r for r in self._recent if r[1] is not seat]
         ended = self._last_sentence_end
         if ended is None or now - ended > SENTENCE_END_MAX_AGE:
             ended = now
-        self._queue_cues(cues, sentence_end=ended)
+        hearing = self._listener.hear(now, seat, text)
+        to_nova = bool(ADDRESSES_NOVA.search(text))
+        if hearing.unmistakable is not None:
+            words = hearing.unmistakable
+            runner = self._runner
+            cues = (
+                runner.dater_asked_nova(now, seat, words)
+                if to_nova
+                else runner.dater_said(now, seat, words)
+            )
+            self._queue_cues(cues, sentence_end=ended)
+            return
+        hold: asyncio.Future[bool] | None = None
+        if hearing.check is not None:
+            hold = asyncio.get_running_loop().create_future()
+            task = asyncio.ensure_future(self._act_on(hearing.check, seat, ended, hold))
+            self._checks.add(task)
+            task.add_done_callback(self._checks.discard)
+        if to_nova:
+            self._queue_cues(self._runner.dater_asked_nova(now, seat, text), ended, hold)
+
+    async def heard(self) -> None:
+        """Waits for every distress check in flight, and what the show does with it."""
+        while self._checks:
+            await asyncio.gather(*self._checks)
 
     # --- Internals --------------------------------------------------------------------------
 
-    def _recent_words(self, now: float, seat: Seat) -> str:
-        """What this dater said in the last few seconds, oldest first."""
-        self._recent = [r for r in self._recent if now - r[0] <= HEARD_TOGETHER]
-        return " ".join(text for _, said_by, text in self._recent if said_by is seat)
+    async def _act_on(
+        self,
+        check: asyncio.Task[Checked],
+        seat: Seat,
+        sentence_end: float,
+        hold: asyncio.Future[bool],
+    ) -> None:
+        """The distress check's verdict reaches the show runner. A reply held for it is
+        spoken unless the dater wants to stop."""
+        verdict = Verdict.UNCHECKED
+        try:
+            checked = await check
+            verdict = checked.verdict
+            self.checks.append(checked)
+            cues = self._runner.distress_check(self._clock(), seat, verdict)
+            self._queue_cues(cues, sentence_end)
+        finally:
+            if not hold.done():
+                hold.set_result(verdict is not Verdict.YES)
 
-    def _queue_cues(self, cues: Iterable[Cue], *, sentence_end: float | None = None) -> None:
+    def _queue_cues(
+        self,
+        cues: Iterable[Cue],
+        sentence_end: float | None = None,
+        hold: asyncio.Future[bool] | None = None,
+    ) -> None:
+        """hold: a reply waits for it, and is dropped if it comes back False."""
         now = self._clock()
         reply_due = sentence_end is not None
         for cue in cues:
@@ -319,7 +355,8 @@ class Rehearsal:
                 kind = Kind.PREPARED
             line = asyncio.ensure_future(self._writer.line_for(cue))
             ends = sentence_end if kind is Kind.REPLY else None
-            self._queue.put_nowait(_Pending(cue, kind, now, ends, line))
+            held = hold if cue.moment is Moment.REPLY else None
+            self._queue.put_nowait(_Pending(cue, kind, now, ends, line, held))
 
     def _stop(self) -> None:
         """Nova stops mid-line, and nothing already queued is said."""
@@ -335,6 +372,9 @@ class Rehearsal:
     async def _speak(self, item: _Pending) -> None:
         try:
             picked = self._clock()
+            if item.hold is not None and not await item.hold:
+                item.line.cancel()  # the dater wants to stop: never answer them
+                return
             line = await item.line
             try:
                 started = await self.speaker.speak(line.text)
@@ -472,6 +512,15 @@ def render_report(rehearsal: Rehearsal) -> str:
     lines += [_target_row(t) for t in targets(r.spoken)]
     lines += ["", "The same from when Nova was free (suggestion 1; not how targets are judged)"]
     lines += [_target_row(t) for t in targets(r.spoken, from_free=True)]
+    if r.checks:
+        verdicts = Counter(c.verdict for c in r.checks)
+        ms = [c.ms for c in r.checks]
+        lines += [
+            "",
+            f"Distress checks: {len(ms)} ("
+            + ", ".join(f"{v} {verdicts[v]}" for v in Verdict if verdicts[v])
+            + f"), median {round(statistics.median(ms))} ms, worst {max(ms)} ms",
+        ]
     lines += ["", "Fallback rate per moment"]
     tried = Counter(s.moment for s in r.spoken)
     fell_back = Counter(s.moment for s in r.spoken if s.source is Source.FALLBACK)

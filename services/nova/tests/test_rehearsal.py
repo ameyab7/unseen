@@ -88,19 +88,46 @@ class TickingClock(Clock):
 
 
 class FakeModel:
+    """Writes every line the same way. For the distress check, answers per sentence from
+    labels ("no" by default, "error" to fail), taking check_takes on the clock."""
+
     name = "fake/model"
 
-    def __init__(self, reply: str = "Here we go, Maya and Theo.") -> None:
+    def __init__(
+        self,
+        reply: str = "Here we go, Maya and Theo.",
+        *,
+        labels: dict[str, str] | None = None,
+        clock: Clock | None = None,
+        check_takes: float = 0.0,
+        gate: asyncio.Event | None = None,
+    ) -> None:
         self.reply = reply
+        self.labels = labels or {}
+        self.clock, self.check_takes = clock, check_takes
+        self.gate = gate  # when set, the check answers only once it's set
+        self.checked: list[str] = []  # the sentences the distress check saw
 
     async def write(self, *, system: str, prompt: str) -> str:
         return self.reply
 
+    async def label(self, *, system: str, prompt: str) -> str:
+        sentence = prompt.split('"sentence": "')[1].split('"')[0]
+        self.checked.append(sentence)
+        if self.gate is not None:
+            await self.gate.wait()
+        if self.clock is not None:
+            self.clock.now += self.check_takes
+        answer = self.labels.get(sentence, "no")
+        if answer == "error":
+            raise RuntimeError("the model is down")
+        return answer
 
-def rehearsal(clock: Clock, speaker=None, *, reply: str = "Here we go, Maya and Theo."):
+
+def rehearsal(clock: Clock, speaker=None, *, model=None, reply: str = "Here we go, Maya and Theo."):
     return Rehearsal(
         REHEARSAL_PAIR,
-        model=FakeModel(reply),
+        model=model or FakeModel(reply),
         speaker=speaker or FakeSpeaker(clock),
         clock=clock,
         timing=REHEARSAL,
@@ -224,19 +251,21 @@ async def test_a_dater_who_wants_to_stop_gets_the_kind_line_measured_as_a_reply(
     assert r.alerts == 1
 
 
-async def heard(r: Rehearsal, clock: Clock, *transcripts: tuple[float, str]) -> None:
-    """Final transcripts from the speaking dater, each at its time, then Nova speaks."""
-    for at, text in transcripts:
+async def transcripts(r: Rehearsal, clock: Clock, *said: tuple[float, str]) -> None:
+    """Final transcripts from the speaking dater, each at its time. After each, any distress
+    check finishes and Nova speaks."""
+    for at, text in said:
         clock.now = at
         r.speech_ended()
         r.transcript(text)
+        await r.heard()
         await r.speak_queued()
 
 
 async def test_a_dater_who_wants_to_stop_is_heard_without_saying_nova():
     clock = Clock()
     r = await started(clock)
-    await heard(r, clock, (40.0, "I want to stop. I'm not comfortable."))
+    await transcripts(r, clock, (40.0, "I want to stop. I'm not comfortable."))
     assert r.alerts == 1
     kind = lines(r, Moment.NEED_A_MOMENT)[0]
     assert kind.kind is Kind.REPLY, "Nova's first line after the dater spoke"
@@ -263,7 +292,7 @@ async def test_the_kind_line_comes_at_once_cutting_nova_off_and_dropping_queued_
 async def test_a_sentence_split_across_transcripts_is_heard_whole(split):
     clock = Clock()
     r = await started(clock)
-    await heard(r, clock, (40.0, split[0]), (41.5, split[1]))
+    await transcripts(r, clock, (40.0, split[0]), (41.5, split[1]))
     assert script.DISTRESS_PAUSE in r.speaker.texts
     assert ModeratorAlert.DATER_DISTRESSED in alerts(r)
 
@@ -271,24 +300,97 @@ async def test_a_sentence_split_across_transcripts_is_heard_whole(split):
 async def test_only_the_same_daters_last_few_seconds_are_joined():
     clock = Clock()
     r = await started(clock)
-    await heard(r, clock, (40.0, "I'm not"), (50.0, "comfortable."))
+    await transcripts(r, clock, (40.0, "I'm not"), (50.0, "comfortable."))
     r.command("theo")
-    await heard(r, clock, (60.0, "I'm not"))
+    await transcripts(r, clock, (60.0, "I'm not"))
     r.command("maya")
-    await heard(r, clock, (61.0, "comfortable."))
+    await transcripts(r, clock, (61.0, "comfortable."))
     assert alerts(r) == []
     assert script.DISTRESS_PAUSE not in r.speaker.texts
 
 
-async def test_distress_already_heard_is_not_raised_again_when_more_words_join_it():
+async def test_words_already_checked_are_not_checked_again_when_more_words_join_them():
     clock = Clock()
-    r = await started(clock)
-    await heard(r, clock, (40.0, "Help."), (41.0, "With the dishes, I mean."))
+    model = FakeModel(labels={"Help.": "maybe"})
+    r = await started(clock, model=model)
+    await transcripts(r, clock, (40.0, "Help."), (41.0, "With the dishes, I mean."))
     assert alerts(r) == [ModeratorAlert.POSSIBLE_DISTRESS]
-    await heard(r, clock, (42.0, "Actually, I want to stop."))
+    await transcripts(r, clock, (42.0, "Actually, I want to stop."))
     assert alerts(r) == [ModeratorAlert.POSSIBLE_DISTRESS, ModeratorAlert.DATER_DISTRESSED]
-    await heard(r, clock, (43.0, "Sorry."))
+    await transcripts(r, clock, (43.0, "Sorry."))
     assert len(alerts(r)) == 2, "heard and acted on: not raised again"
+    assert model.checked == ["Help."], "the instant layer needed no check"
+
+
+# --- The meaning layer: anything else with a warning word ----------------------------------
+
+
+async def test_a_yes_pauses_the_dater_and_the_kind_line_counts_the_checks_time():
+    clock = Clock()
+    words = "I want to stop talking to him."
+    model = FakeModel(labels={words: "yes"}, clock=clock, check_takes=0.4)
+    r = await started(clock, model=model)
+    await transcripts(r, clock, (40.0, words))
+    assert alerts(r) == [ModeratorAlert.DATER_DISTRESSED]
+    kind = lines(r, Moment.NEED_A_MOMENT)[0]
+    assert kind.kind is Kind.REPLY and kind.from_sentence_end_ms == 700
+    assert "Distress checks: 1 (yes 1)" in render_report(r)
+
+
+async def test_a_reply_to_nova_waits_for_the_check_and_is_never_said_if_the_dater_wants_to_stop():
+    clock = Clock()
+    words = "Nova, I want to stop talking to him."
+    r = await started(clock, model=FakeModel(labels={words: "yes"}))
+    await transcripts(r, clock, (40.0, words))
+    assert lines(r, Moment.REPLY) == [], "the reply written alongside the check is dropped"
+    assert r.speaker.texts[-2] == script.DISTRESS_PAUSE
+
+
+async def test_nova_free_to_speak_still_waits_for_the_verdict_before_a_reply():
+    """Nova picks the reply up as soon as it's free, while the check is still running; it
+    must not say it until the verdict, and never on a yes."""
+    clock = Clock()
+    words = "Nova, I want to stop talking to him."
+    verdict_due = asyncio.Event()
+    r = await started(clock, model=FakeModel(labels={words: "yes"}, gate=verdict_due))
+    clock.now = 40.0
+    r.speech_ended()
+    r.transcript(words)
+    speaking = asyncio.ensure_future(r.speak_queued())
+    await asyncio.sleep(0.05)
+    assert lines(r, Moment.REPLY) == [], "not a word before the verdict"
+    verdict_due.set()
+    await r.heard()
+    await speaking
+    await r.speak_queued()
+    assert lines(r, Moment.REPLY) == []
+    assert script.DISTRESS_PAUSE in r.speaker.texts
+
+
+async def test_a_reply_to_nova_goes_ahead_after_a_no_or_a_maybe():
+    clock = Clock()
+    topic, lost = "Nova, can you help us pick a topic?", "Nova, help, I'm a bit lost."
+    r = await started(clock, model=FakeModel(labels={topic: "no", lost: "maybe"}))
+    await transcripts(r, clock, (40.0, topic), (45.0, lost))
+    assert len(lines(r, Moment.REPLY)) == 2
+    assert alerts(r) == [ModeratorAlert.POSSIBLE_DISTRESS]
+
+
+async def test_if_the_check_fails_the_moderator_listens_in_and_nova_still_answers():
+    clock = Clock()
+    words = "Nova, help me out here."
+    r = await started(clock, model=FakeModel(labels={words: "error"}))
+    await transcripts(r, clock, (40.0, words))
+    assert alerts(r) == [ModeratorAlert.DISTRESS_UNCHECKED]
+    assert len(lines(r, Moment.REPLY)) == 1
+
+
+async def test_ordinary_talk_never_reaches_the_distress_check():
+    clock = Clock()
+    model = FakeModel()
+    r = await started(clock, model=model)
+    await transcripts(r, clock, (40.0, "I think tea, honestly."), (41.0, "Nova, tea or coffee?"))
+    assert model.checked == [] and alerts(r) == []
 
 
 async def test_a_line_that_never_plays_fails_its_target():

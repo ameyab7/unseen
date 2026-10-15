@@ -139,6 +139,7 @@ async def rehearse(ctx: JobContext) -> None:
         next_pair=NEXT_PAIR,
         live_timeout=settings.live_timeout,
         prep_timeout=settings.prep_timeout,
+        distress_timeout=settings.distress_timeout,
     )
 
     def on_user_state(event: Any) -> None:

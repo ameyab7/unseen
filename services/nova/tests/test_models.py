@@ -47,6 +47,17 @@ def fake_anthropic(response):
     return client, messages, beta
 
 
+async def test_ollama_labels_are_short_and_repeatable_with_thinking_off():
+    """The distress check: temperature 0, so the same words get the same label."""
+    client, completions = fake_openai("yes")
+    model = OllamaModel("gemma4:26b", client=client)
+    assert await model.label(system="RULES", prompt="TASK <data>{}</data>") == "yes"
+    call = completions.calls[0]
+    assert (call["temperature"], call["reasoning_effort"]) == (0.0, "none")
+    assert call["max_tokens"] <= 8
+    assert call["messages"][0] == {"role": "system", "content": "RULES"}
+
+
 async def test_ollama_turns_thinking_off_and_keeps_rules_apart_from_the_task():
     client, completions = fake_openai("Maya, over to you.")
     model = OllamaModel("gemma4:26b", client=client)

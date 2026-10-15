@@ -29,6 +29,7 @@ from nova.cues import (
     StopSpeaking,
 )
 from nova.decisions import Choice, InMemoryDecisionDesk, Outcome
+from nova.distress import Verdict
 from nova.fixtures import MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
 from nova.questions import AudienceQuestion, QuestionStatus
 from nova.show_runner import PollTally, ShowRunner
@@ -510,15 +511,45 @@ def test_nova_never_deflects_a_dater_who_clearly_wants_to_stop():
 
 
 @pytest.mark.parametrize("words", ["Help.", "Nova, help me out, what should I ask Theo?"])
-def test_words_that_may_be_distress_alert_the_moderator_and_nova_answers_as_usual(words):
+def test_words_the_instant_layer_doesnt_know_get_a_reply_cue(words):
+    """The meaning layer checks them outside the runner; the verdict comes back through
+    distress_check, and whoever runs the show holds the reply until then."""
     show = Show()
     assert show.at(100, "dater_asked_nova", LEFT, words) == [
-        MAYBE_DISTRESSED,
-        Say(Moment.REPLY, about=LEFT, detail=words),
+        Say(Moment.REPLY, about=LEFT, detail=words)
     ]
+
+
+def test_a_yes_from_the_distress_check_pauses_as_for_an_unmistakable_request():
+    show = Show()
+    assert show.at(100, "distress_check", LEFT, Verdict.YES) == [
+        DISTRESSED,
+        StopSpeaking(),
+        KIND,
+        PAUSE_TALK,
+    ]
+    show.until(119.5)
+    assert show.cues(since=100.5, before=120) == [], "the show holds, as for a moment"
+
+
+def test_a_maybe_alerts_the_moderator_and_nothing_else():
+    show = Show()
+    assert show.at(100, "distress_check", LEFT, Verdict.MAYBE) == [MAYBE_DISTRESSED]
     show.until(300)
     assert show.says(Moment.NEED_A_MOMENT) == [], "no pause"
     assert (240.0, "from_the_room") in show.segments(), "the show clock never stopped"
+
+
+def test_a_check_that_failed_or_was_too_slow_alerts_the_moderator_to_listen_in():
+    show = Show()
+    assert show.at(100, "distress_check", LEFT, Verdict.UNCHECKED) == [
+        AlertModerator(ModeratorAlert.DISTRESS_UNCHECKED, LEFT)
+    ]
+
+
+def test_a_no_changes_nothing():
+    show = Show()
+    assert show.at(100, "distress_check", LEFT, Verdict.NO) == []
 
 
 @pytest.mark.parametrize("words", ["I want to stop.", "Theo, I'm not comfortable."])
@@ -529,9 +560,9 @@ def test_a_dater_who_wants_to_stop_is_heard_even_when_not_talking_to_nova(words)
     assert show.cues(since=100.5, before=120) == [], "the show holds, as for a moment"
 
 
-def test_words_not_to_nova_that_may_be_distress_alert_the_moderator_and_get_no_reply():
+def test_words_not_to_nova_that_the_instant_layer_doesnt_know_are_left_to_the_meaning_layer():
     show = Show()
-    assert show.at(100, "dater_said", LEFT, "Honestly I'm scared.") == [MAYBE_DISTRESSED]
+    assert show.at(100, "dater_said", LEFT, "Honestly I'm scared.") == []
 
 
 def test_ordinary_words_not_to_nova_change_nothing():
@@ -560,11 +591,13 @@ def test_when_nova_cant_pause_or_answer_it_stays_quiet_but_the_moderator_is_alwa
     show = Show()
     show.at(100, "need_a_moment", RIGHT)
     assert show.at(105, "dater_asked_nova", LEFT, "I want to stop.") == [DISTRESSED], "a pause"
-    assert show.at(106, "dater_asked_nova", LEFT, "Help.") == [MAYBE_DISTRESSED], "no reply"
+    assert show.at(106, "distress_check", LEFT, Verdict.YES) == [DISTRESSED], "a pause"
+    assert show.at(107, "distress_check", LEFT, Verdict.MAYBE) == [MAYBE_DISTRESSED]
+    assert show.at(108, "dater_asked_nova", LEFT, "Help.") == [], "no reply on a pause"
     show.at(110, "back", RIGHT)
     # The 10 s hold moved Time from 480 to 490 and the result from 540 to 550.
     assert show.at(495, "dater_asked_nova", LEFT, "Can we end this?") == [DISTRESSED], "deciding"
-    assert show.at(496, "dater_asked_nova", LEFT, "Help.") == [MAYBE_DISTRESSED], "deciding"
+    assert show.at(496, "distress_check", LEFT, Verdict.YES) == [DISTRESSED], "deciding"
     show.until(560)
     assert show.at(560, "dater_asked_nova", LEFT, "Please stop.") == [DISTRESSED], (
         "after the result"

@@ -33,7 +33,9 @@ and passed or failed.
   question, talk to the room.
 - **Reply:** Nova's first line after a dater speaks: a reply when they speak to Nova, or
   the kind line when they want to stop, whoever they say it to. **End of their sentence**
-  is when the voice detector hears them stop, not when the transcript arrives.
+  is when the voice detector hears them stop, not when the transcript arrives. When the
+  distress check decides (decision 0005, the meaning layer), its time counts too, and a
+  reply to Nova waits for it.
 
 ### What the rehearsal leaves out
 

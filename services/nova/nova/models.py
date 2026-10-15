@@ -23,7 +23,14 @@ class ModelRefused(ModelError):
 class LineModel(Protocol):
     name: str
 
-    async def write(self, *, system: str, prompt: str) -> str: ...
+    async def write(self, *, system: str, prompt: str) -> str:
+        """A line for Nova to say."""
+        ...
+
+    async def label(self, *, system: str, prompt: str) -> str:
+        """One word from a fixed set (the distress check): short and as repeatable as the
+        model allows."""
+        ...
 
 
 class OllamaModel:
@@ -34,6 +41,7 @@ class OllamaModel:
     """
 
     MAX_TOKENS = 160
+    LABEL_TOKENS = 4
 
     def __init__(
         self, model: str, *, base_url: str = "http://localhost:11434", client: Any = None
@@ -45,15 +53,24 @@ class OllamaModel:
         )
 
     async def write(self, *, system: str, prompt: str) -> str:
+        return await self._complete(system, prompt, max_tokens=self.MAX_TOKENS, temperature=0.8)
+
+    async def label(self, *, system: str, prompt: str) -> str:
+        """Temperature 0, so the same words get the same label."""
+        return await self._complete(system, prompt, max_tokens=self.LABEL_TOKENS, temperature=0.0)
+
+    async def _complete(
+        self, system: str, prompt: str, *, max_tokens: int, temperature: float
+    ) -> str:
         response = await self._client.chat.completions.create(
             model=self._model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=self.MAX_TOKENS,
+            max_tokens=max_tokens,
             reasoning_effort="none",
-            temperature=0.8,
+            temperature=temperature,
         )
         content = response.choices[0].message.content
         if not content or not content.strip():
@@ -93,6 +110,11 @@ class AnthropicModel:
         if not text.strip():
             raise ModelError("empty reply")
         return text
+
+    async def label(self, *, system: str, prompt: str) -> str:
+        """The same request as a line: Claude takes no sampling settings to make it more
+        repeatable, and its rules for a label go in their own cached system block."""
+        return await self.write(system=system, prompt=prompt)
 
 
 def build_model(settings: Settings) -> LineModel:

@@ -37,10 +37,11 @@ components and say so in the pull request.
 - supabase start: local stack; pnpm db:test: pgTAP tests; pnpm db:types: regenerate types
 - services/nova (Python 3.14, uv): uv sync; uv run pytest; uv run ruff check;
   uv run ruff format. Settings come from services/nova/.env (see .env.example)
-- services/nova: uv run python -m nova.evaluation [--repeat N] runs Nova's show moments
-  and attacks against the real model in NOVA_LLM; --night runs a full night of eight dates
-  and reports repetition across it (the number we track). On demand only, never in CI;
-  run it before any model change (docs/decisions/0005-nova-lines-and-guardrails.md)
+- services/nova: uv run python -m nova.evaluation [--repeat N] runs Nova's show moments,
+  attacks and the distress test set against the real model in NOVA_LLM; --distress runs
+  only the distress set; --night runs a full night of eight dates and reports repetition
+  across it (the number we track). On demand only, never in CI; run it before any model
+  change (docs/decisions/0005-nova-lines-and-guardrails.md)
 - services/nova: uv run python -m nova.agent dev runs Nova in LiveKit for one measured
   rehearsal date in the Agents Playground; uv run python -m nova.voices writes voice
   samples. Both use LiveKit credit (docs/spike-results.md)

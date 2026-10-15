@@ -24,16 +24,9 @@ from enum import StrEnum
 from nova import prompts, script
 from nova.cards import BlindCard, Pair, Seat
 from nova.cues import Moment, RoomFacts, Say
+from nova.distress import has_warning, is_unmistakable
 from nova.events import Event, EventLog
-from nova.guardrails import (
-    Distress,
-    Violation,
-    card_words,
-    check,
-    clean,
-    distress_in,
-    question_is_off_limits,
-)
+from nova.guardrails import Violation, card_words, check, clean, question_is_off_limits
 from nova.models import LineModel, ModelRefused
 from nova.tonight import Tonight
 
@@ -339,7 +332,8 @@ class LineWriter:
             case Moment.ROOM_TALK:
                 return script.ROOM_TALK_FALLBACK
             case Moment.REPLY:
-                if distress_in(say.detail or "") is not Distress.NONE:
+                words = say.detail or ""
+                if is_unmistakable(words) or has_warning(words):
                     return script.TAKE_YOUR_TIME  # never "I'll stay out of that one"
                 return script.REPLY_FALLBACK
         raise ValueError(f"No fallback for {say.moment}")

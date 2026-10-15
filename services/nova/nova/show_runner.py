@@ -44,7 +44,7 @@ from nova.cues import (
     StopSpeaking,
 )
 from nova.decisions import DecisionDesk, Outcome
-from nova.guardrails import Distress, distress_in
+from nova.distress import Verdict, is_unmistakable
 from nova.questions import AudienceQuestion
 from nova.timing import FULL, Timing
 
@@ -257,27 +257,42 @@ class ShowRunner:
         """A dater spoke to Nova on air. Their words are data for the reply, never
         instructions. Only while they're on air: not on a pause, not while deciding.
 
-        A dater who clearly wants to stop never gets a reply, so Nova can't deflect them.
-        The moderator is alerted at once, whenever it happens. If a pause can start, Nova
-        stops mid-line, says the kind line and starts a need-a-moment pause for that dater;
-        if not (another pause, the decision window), Nova stays quiet and the moderator
-        acts. Words that may be distress ("help") alert the moderator, and Nova answers as
-        usual."""
+        A dater who unmistakably wants to stop (the instant layer, nova/distress.py) never
+        gets a reply, so Nova can't deflect them: the moderator is alerted at once, whenever
+        it happens, and if a pause can start, Nova stops mid-line, says the kind line and
+        starts a need-a-moment pause for that dater; if not (another pause, the decision
+        window), Nova stays quiet and the moderator acts. Anything else that needs a closer
+        listen is checked for meaning outside the runner, and the verdict comes back through
+        distress_check; whoever runs the show holds the reply until then."""
         cues = self._advance(now)
-        distress = distress_in(words)
-        cues += self._distress(now, seat, distress)
-        if distress is Distress.CLEAR:
-            return cues
+        if is_unmistakable(words):
+            return cues + self._wants_to_stop(now, seat)
         if self._live and self._held_since is None and self.segment in ON_AIR:
             cues.append(Say(Moment.REPLY, about=seat, detail=words))
         return cues
 
     def dater_said(self, now: float, seat: Seat, words: str) -> list[Cue]:
         """What a dater said on air that wasn't to Nova: to the other dater, or to nobody.
-        Nova doesn't answer, but distress is heard in it just as in dater_asked_nova, since a
-        dater who wants to stop won't always say so to Nova."""
+        Nova doesn't answer, but the instant layer hears it just as in dater_asked_nova,
+        since a dater who wants to stop won't always say so to Nova."""
         cues = self._advance(now)
-        return cues + self._distress(now, seat, distress_in(words))
+        if is_unmistakable(words):
+            cues += self._wants_to_stop(now, seat)
+        return cues
+
+    def distress_check(self, now: float, seat: Seat, verdict: Verdict) -> list[Cue]:
+        """The meaning layer's verdict on what a dater said. Yes: as for an unmistakable
+        request to stop. Maybe: the moderator is alerted. The check failed or was too slow:
+        the moderator is alerted to listen in. No: nothing."""
+        cues = self._advance(now)
+        match verdict:
+            case Verdict.YES:
+                cues += self._wants_to_stop(now, seat)
+            case Verdict.MAYBE:
+                cues.append(AlertModerator(ModeratorAlert.POSSIBLE_DISTRESS, seat))
+            case Verdict.UNCHECKED:
+                cues.append(AlertModerator(ModeratorAlert.DISTRESS_UNCHECKED, seat))
+        return cues
 
     # --- Internals ------------------------------------------------------------------------
 
@@ -300,18 +315,13 @@ class ShowRunner:
             cues.append(AlertModerator(ModeratorAlert.REPEATED_PAUSE, seat))
         return cues
 
-    def _distress(self, now: float, seat: Seat, distress: Distress) -> list[Cue]:
-        """Clear: the moderator is alerted, and if a pause can start, Nova stops mid-line,
-        drops whatever it had queued, says the kind line at once and pauses for the dater.
-        Maybe: the moderator is alerted."""
-        if distress is Distress.CLEAR:
-            cues: list[Cue] = [AlertModerator(ModeratorAlert.DATER_DISTRESSED, seat)]
-            if self._can_pause:
-                cues += [StopSpeaking(), *self._pause(now, seat, script.DISTRESS_PAUSE)]
-            return cues
-        if distress is Distress.MAYBE:
-            return [AlertModerator(ModeratorAlert.POSSIBLE_DISTRESS, seat)]
-        return []
+    def _wants_to_stop(self, now: float, seat: Seat) -> list[Cue]:
+        """The moderator is alerted, and if a pause can start, Nova stops mid-line, drops
+        whatever it had queued, says the kind line at once and pauses for the dater."""
+        cues: list[Cue] = [AlertModerator(ModeratorAlert.DATER_DISTRESSED, seat)]
+        if self._can_pause:
+            cues += [StopSpeaking(), *self._pause(now, seat, script.DISTRESS_PAUSE)]
+        return cues
 
     def _room_talk(self) -> Say:
         """Nova talks to the room, working only from safe facts about the show."""

@@ -61,6 +61,10 @@ class Settings:
     # How long a set piece may take before the date. Loading Gemma cold took 28 s, so 60 s
     # covers a cold start plus the line; the date only starts once these are ready.
     prep_timeout: float = 60.0
+    # How long the distress check (decision 0005, the meaning layer) may take before the
+    # moderator is alerted instead. A "yes" pauses the dater only once it arrives, so this
+    # also bounds how late the kind line can come.
+    distress_timeout: float = 2.0
     # Nova's voice as "provider/model:voice", and the speech recognition that hears daters.
     voice: str = DEFAULT_VOICE
     stt: str = DEFAULT_STT
@@ -77,6 +81,7 @@ class Settings:
         "OLLAMA_BASE_URL",
         "NOVA_LIVE_TIMEOUT_SECONDS",
         "NOVA_PREP_TIMEOUT_SECONDS",
+        "NOVA_DISTRESS_TIMEOUT_SECONDS",
         "NOVA_VOICE",
         "NOVA_STT",
     )
@@ -101,6 +106,7 @@ class Settings:
             ollama_base_url=env.get("OLLAMA_BASE_URL", "").strip() or cls.ollama_base_url,
             live_timeout=_seconds(env, "NOVA_LIVE_TIMEOUT_SECONDS", cls.live_timeout),
             prep_timeout=_seconds(env, "NOVA_PREP_TIMEOUT_SECONDS", cls.prep_timeout),
+            distress_timeout=_seconds(env, "NOVA_DISTRESS_TIMEOUT_SECONDS", cls.distress_timeout),
             voice=_voice(env.get("NOVA_VOICE", "").strip() or cls.voice),
             stt=env.get("NOVA_STT", "").strip() or cls.stt,
         )
