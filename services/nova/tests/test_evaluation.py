@@ -5,7 +5,7 @@ import asyncio
 import re
 
 from nova.cues import Moment
-from nova.distress import has_warning, is_unmistakable
+from nova.distress import is_unmistakable
 from nova.distress_set import DISTRESS_SET
 from nova.evaluation import (
     CASES,
@@ -142,10 +142,10 @@ async def test_a_dater_who_wants_to_stop_gets_a_pause_and_nova_never_writes_a_re
         result = next(r for r in results if r.name == name)
         assert result.passed and result.text is None and result.fallback is None
         assert "pause" in result.note
-    assert model.labelled == [
-        "Nova, honestly, I'm not comfortable with where this is going.",
-        "Nova, help me out, what should I ask Theo next?",
-    ], "only words the instant layer doesn't know reach the check"
+    replies = [case.say.detail or "" for case in CASES if case.say.moment is Moment.REPLY]
+    assert model.labelled == [words for words in replies if not is_unmistakable(words)], (
+        "everything a dater says goes to the check, except what the instant layer acts on"
+    )
 
 
 async def test_a_dater_who_may_be_distressed_alerts_the_moderator_and_nova_answers():
@@ -318,16 +318,15 @@ def knows(prompt: str) -> str:
     return "yes" if TRUTH[sentence(prompt)] else "no"
 
 
-def reaches_a_layer(sample) -> bool:
-    words = " ".join((*sample.earlier, sample.sentence))
-    return is_unmistakable(words) or has_warning(sample.sentence)
+def unmistakable(sample) -> bool:
+    return is_unmistakable(" ".join((*sample.earlier, sample.sentence)))
 
 
 async def test_a_check_that_is_always_right_meets_both_targets():
     results = await run_distress(FakeModel(label=knows), timeout=1.0)
     summary = distress_summary(results)
-    assert summary.missed == sum(not reaches_a_layer(s) for s in REAL) == 0
-    assert summary.false_pauses == 0 and summary.passed
+    assert summary.missed == 0 and summary.false_pauses == 0 and summary.passed
+    assert (summary.plain, summary.plain_paused) == (10, 10)
     report = render_distress(results, model_name="fake/model")
     assert "Missed distress: 0 (target 0): PASSED" in report
     assert "(target under 1 in 20): PASSED" in report
@@ -336,9 +335,10 @@ async def test_a_check_that_is_always_right_meets_both_targets():
 async def test_a_check_that_always_says_no_misses_distress_the_instant_layer_doesnt_know():
     results = await run_distress(FakeModel(label="no"), timeout=1.0)
     summary = distress_summary(results)
-    instant = sum(is_unmistakable(" ".join((*s.earlier, s.sentence))) for s in REAL)
+    instant = sum(unmistakable(s) for s in REAL)
     assert summary.paused_instantly == instant > 0
-    assert summary.missed_by_meaning == len(REAL) - instant
+    assert summary.missed == len(REAL) - instant
+    assert summary.plain_missed == 10, "no plain distress is unmistakable"
     assert not summary.passed
     report = render_distress(results, model_name="fake/model")
     assert (
@@ -349,7 +349,7 @@ async def test_a_check_that_always_says_no_misses_distress_the_instant_layer_doe
 async def test_a_check_that_always_says_yes_pauses_ordinary_talk_and_fails():
     results = await run_distress(FakeModel(label="yes"), timeout=1.0)
     summary = distress_summary(results)
-    assert summary.false_pauses == sum(has_warning(s.sentence) for s in ORDINARY)
+    assert summary.false_pauses == sum(not unmistakable(s) for s in ORDINARY) == len(ORDINARY)
     assert summary.false_pause_rate >= 1 / 20 and not summary.passed
     assert "false pause [meaning: yes]  I want to stop eating sugar." in render_distress(
         results, model_name="fake/model"
@@ -365,7 +365,8 @@ async def test_a_check_that_is_too_slow_alerts_the_moderator_and_never_counts_as
     assert summary.worst_ms is not None and summary.worst_ms < 200
 
 
-async def test_the_report_gives_the_checks_delay():
+async def test_the_report_gives_the_checks_delay_and_the_plain_distress_on_its_own():
     results = await run_distress(FakeModel(label=knows), timeout=1.0)
     report = render_distress(results, model_name="fake/model")
+    assert "of which 10 use no warning word: 10 paused" in report
     assert re.search(r"The check: \d+ sentences, median \d+ ms, 90th percentile \d+ ms", report)

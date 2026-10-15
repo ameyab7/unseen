@@ -101,14 +101,18 @@ class FakeModel:
         clock: Clock | None = None,
         check_takes: float = 0.0,
         gate: asyncio.Event | None = None,
+        write_error: Exception | None = None,
     ) -> None:
         self.reply = reply
+        self.write_error = write_error
         self.labels = labels or {}
         self.clock, self.check_takes = clock, check_takes
         self.gate = gate  # when set, the check answers only once it's set
         self.checked: list[str] = []  # the sentences the distress check saw
 
     async def write(self, *, system: str, prompt: str) -> str:
+        if self.write_error:
+            raise self.write_error
         return self.reply
 
     async def label(self, *, system: str, prompt: str) -> str:
@@ -309,7 +313,7 @@ async def test_only_the_same_daters_last_few_seconds_are_joined():
     assert script.DISTRESS_PAUSE not in r.speaker.texts
 
 
-async def test_words_already_checked_are_not_checked_again_when_more_words_join_them():
+async def test_every_transcript_is_checked_once_and_what_follows_doesnt_repeat_an_alert():
     clock = Clock()
     model = FakeModel(labels={"Help.": "maybe"})
     r = await started(clock, model=model)
@@ -318,8 +322,10 @@ async def test_words_already_checked_are_not_checked_again_when_more_words_join_
     await transcripts(r, clock, (42.0, "Actually, I want to stop."))
     assert alerts(r) == [ModeratorAlert.POSSIBLE_DISTRESS, ModeratorAlert.DATER_DISTRESSED]
     await transcripts(r, clock, (43.0, "Sorry."))
-    assert len(alerts(r)) == 2, "heard and acted on: not raised again"
-    assert model.checked == ["Help."], "the instant layer needed no check"
+    assert len(alerts(r)) == 2
+    assert model.checked == ["Help.", "With the dishes, I mean.", "Sorry."], (
+        "everything but the unmistakable request, which needed no check"
+    )
 
 
 # --- The meaning layer: anything else with a warning word ----------------------------------
@@ -385,12 +391,31 @@ async def test_if_the_check_fails_the_moderator_listens_in_and_nova_still_answer
     assert len(lines(r, Moment.REPLY)) == 1
 
 
-async def test_ordinary_talk_never_reaches_the_distress_check():
+async def test_ordinary_talk_is_checked_too_and_a_no_changes_nothing():
     clock = Clock()
     model = FakeModel()
     r = await started(clock, model=model)
     await transcripts(r, clock, (40.0, "I think tea, honestly."), (41.0, "Nova, tea or coffee?"))
-    assert model.checked == [] and alerts(r) == []
+    assert model.checked == ["I think tea, honestly.", "Nova, tea or coffee?"]
+    assert alerts(r) == [] and len(lines(r, Moment.REPLY)) == 1
+
+
+@pytest.mark.parametrize(
+    ("label", "fallback"),
+    [("maybe", script.TAKE_YOUR_TIME), ("error", script.TAKE_YOUR_TIME), ("no", None)],
+)
+async def test_after_a_maybe_or_a_failed_check_a_failed_reply_is_never_nova_staying_out_of_it(
+    label, fallback
+):
+    clock = Clock()
+    words = "Nova, he keeps asking where I live."
+    model = FakeModel(labels={words: label}, write_error=RuntimeError("down"))
+    r = await started(clock, model=model)
+    await transcripts(r, clock, (40.0, words))
+    [reply] = lines(r, Moment.REPLY)
+    said = r.speaker.texts[-1]
+    assert reply.source is Source.FALLBACK
+    assert said == (fallback or script.REPLY_FALLBACK)
 
 
 async def test_a_line_that_never_plays_fails_its_target():

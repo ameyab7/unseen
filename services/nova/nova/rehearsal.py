@@ -16,10 +16,11 @@ import statistics
 import time
 from collections import Counter
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Protocol
 
+from nova import script
 from nova.cards import Pair, Seat
 from nova.cues import AlertModerator, Cue, Moment, Say, StopSpeaking
 from nova.decisions import Choice, DecisionError, InMemoryDecisionDesk
@@ -113,7 +114,7 @@ class _Pending:
     cue_at: float
     sentence_end_at: float | None
     line: asyncio.Task[Line]
-    hold: asyncio.Future[bool] | None = None  # a reply waiting for the distress check
+    hold: asyncio.Future[Verdict] | None = None  # a reply waiting for the distress check
 
 
 class Rehearsal:
@@ -271,9 +272,9 @@ class Rehearsal:
         for 15 seconds, never stored or logged.
 
         Distress comes first, in two layers (nova/distress.py). An unmistakable request to
-        stop pauses the dater at once and is never answered. Anything else with a warning
-        word goes to the distress check; if it was said to Nova, the reply is written at
-        the same time but held until the verdict, and dropped if the dater wants to stop.
+        stop pauses the dater at once and is never answered. Everything else goes to the
+        distress check; if it was said to Nova, the reply is written at the same time but
+        held until the verdict, and dropped if the dater wants to stop.
         Nova's first line after the dater spoke is measured from the end of their sentence,
         so a kind line after the check counts the check's time."""
         now, seat = self._clock(), self.seat
@@ -293,7 +294,7 @@ class Rehearsal:
             )
             self._queue_cues(cues, sentence_end=ended)
             return
-        hold: asyncio.Future[bool] | None = None
+        hold: asyncio.Future[Verdict] | None = None
         if hearing.check is not None:
             hold = asyncio.get_running_loop().create_future()
             task = asyncio.ensure_future(self._act_on(hearing.check, seat, ended, hold))
@@ -314,10 +315,9 @@ class Rehearsal:
         check: asyncio.Task[Checked],
         seat: Seat,
         sentence_end: float,
-        hold: asyncio.Future[bool],
+        hold: asyncio.Future[Verdict],
     ) -> None:
-        """The distress check's verdict reaches the show runner. A reply held for it is
-        spoken unless the dater wants to stop."""
+        """The distress check's verdict reaches the show runner, and any reply held for it."""
         verdict = Verdict.UNCHECKED
         try:
             checked = await check
@@ -327,15 +327,15 @@ class Rehearsal:
             self._queue_cues(cues, sentence_end)
         finally:
             if not hold.done():
-                hold.set_result(verdict is not Verdict.YES)
+                hold.set_result(verdict)
 
     def _queue_cues(
         self,
         cues: Iterable[Cue],
         sentence_end: float | None = None,
-        hold: asyncio.Future[bool] | None = None,
+        hold: asyncio.Future[Verdict] | None = None,
     ) -> None:
-        """hold: a reply waits for it, and is dropped if it comes back False."""
+        """hold: the distress check's verdict, which a reply waits for."""
         now = self._clock()
         reply_due = sentence_end is not None
         for cue in cues:
@@ -372,10 +372,13 @@ class Rehearsal:
     async def _speak(self, item: _Pending) -> None:
         try:
             picked = self._clock()
-            if item.hold is not None and not await item.hold:
+            verdict = await item.hold if item.hold is not None else None
+            if verdict is Verdict.YES:
                 item.line.cancel()  # the dater wants to stop: never answer them
                 return
             line = await item.line
+            if verdict in (Verdict.MAYBE, Verdict.UNCHECKED) and line.source is Source.FALLBACK:
+                line = replace(line, text=script.TAKE_YOUR_TIME)  # never "I'll stay out of it"
             try:
                 started = await self.speaker.speak(line.text)
             except Exception:  # the voice failed: this line never played, the date goes on
@@ -519,7 +522,8 @@ def render_report(rehearsal: Rehearsal) -> str:
             "",
             f"Distress checks: {len(ms)} ("
             + ", ".join(f"{v} {verdicts[v]}" for v in Verdict if verdicts[v])
-            + f"), median {round(statistics.median(ms))} ms, worst {max(ms)} ms",
+            + f"), {_per_minute(len(ms), r.listened_seconds)} a minute, median "
+            f"{round(statistics.median(ms))} ms, worst {max(ms)} ms",
         ]
     lines += ["", "Fallback rate per moment"]
     tried = Counter(s.moment for s in r.spoken)
@@ -551,3 +555,7 @@ def _ms(seconds: float) -> int:
 
 def _ms_text(ms: int | None) -> str:
     return "-" if ms is None else f"{ms} ms"
+
+
+def _per_minute(count: int, seconds: float) -> str:
+    return f"{count / (seconds / 60):.1f}" if seconds > 0 else "-"

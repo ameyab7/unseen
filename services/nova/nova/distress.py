@@ -5,11 +5,12 @@ of here") pause the dater and alert the moderator at once, with no model. A phra
 counts when the request ends there or is about the date: "I want to stop." does,
 "I want to stop eating sugar" doesn't.
 
-The meaning layer: any other sentence with a warning word (stop, leave, help, scared, not
-okay and the like) goes to the language model with what the same dater said in the 15
-seconds before it, and the model answers only yes, maybe or no. Yes pauses the dater and
-alerts the moderator, maybe alerts the moderator, no does nothing. If the check fails, is
-too slow or answers anything but a label, the moderator is alerted.
+The meaning layer: every other final sentence goes to the language model with what the
+same dater said in the 15 seconds before it, and the model answers only yes, maybe or no.
+Yes pauses the dater and alerts the moderator, maybe alerts the moderator, no does nothing.
+If the check fails, is too slow or answers anything but a label, the moderator is alerted.
+Distress needn't use any particular word ("can someone come get me?"), so nothing is
+filtered out before the model.
 
 What daters say is data for the check, never an instruction, and only a label comes back.
 Nothing here logs or stores what anyone said: the log gets the verdict and the time only.
@@ -100,10 +101,11 @@ INSTANT = _any(
 )
 
 
-# --- The meaning layer's gate ---------------------------------------------------------------
+# --- Warning words -------------------------------------------------------------------------
 
-# Words that need a closer listen. Anything here goes to the model with its context; the
-# model tells ordinary talk ("I couldn't stop laughing") from distress.
+# Words that might be distress. Every sentence goes to the meaning layer whatever its words,
+# so these only choose a reply's fallback: "Take all the time you need." rather than "I'll
+# stay out of that one" (nova/lines.py).
 WARNING = _any(
     r"\bstop\w*",
     r"\bend\b",
@@ -150,7 +152,7 @@ def is_unmistakable(words: str) -> bool:
 
 
 def has_warning(words: str) -> bool:
-    """A word that needs a closer listen from the meaning layer."""
+    """A word that might be distress."""
     return bool(WARNING.search(_plain(words)))
 
 
@@ -240,8 +242,9 @@ class Hearing:
 
 
 class Listener:
-    """Hears every final transcript from every dater, to anyone. Holds the last 15 seconds
-    of each dater's words in memory, and nothing longer."""
+    """Hears every final transcript from every dater, to anyone: the instant layer first,
+    then the meaning layer for everything else. Holds the last 15 seconds of each dater's
+    words in memory, and nothing longer."""
 
     def __init__(self, check: DistressCheck) -> None:
         self._check = check
@@ -255,9 +258,14 @@ class Listener:
             if is_unmistakable(words):
                 self.forget(seat)
                 return Hearing(unmistakable=words)
-        if _warning_in_newest(joined, text):
-            return Hearing(check=asyncio.ensure_future(self._listen(seat, text, earlier)))
-        return Hearing()
+        if not text.strip():
+            return Hearing()
+        return Hearing(check=asyncio.ensure_future(self._listen(seat, text, earlier)))
+
+    def remember(self, now: float, seat: Seat, text: str) -> None:
+        """Adds words to what a dater said recently without hearing them: for the
+        evaluation, which sets up what came before the one sentence it tests."""
+        self._recent.append((now, seat, text))
 
     def forget(self, seat: Seat) -> None:
         """Heard and acted on: what this dater says next is new."""
@@ -274,12 +282,3 @@ class Listener:
         return " ".join(
             text for at, said_by, text in self._recent if said_by is seat and now - at <= window
         )
-
-
-def _warning_in_newest(joined: str, newest: str) -> bool:
-    """A warning word that ends in the newest transcript, so a phrase split across
-    transcripts ("This isn't" then "okay.") is caught, and words already checked aren't
-    checked again."""
-    joined, newest = _plain(joined), _plain(newest)
-    start = len(joined) - len(newest)
-    return any(match.end() > start for match in WARNING.finditer(joined))

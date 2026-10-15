@@ -249,7 +249,7 @@ class Layer(StrEnum):
 
     INSTANT = "instant"
     MEANING = "meaning"
-    NONE = "none"  # no warning word: nothing checked
+    NONE = "none"  # nothing to check: an empty transcript
 
 
 @dataclass(frozen=True)
@@ -280,7 +280,7 @@ async def hear_on_air(
     now = FULL.free_talk + 20.0
     runner.start(0.0)
     for k, said in enumerate(earlier):
-        listener.hear(now - 2.0 * (len(earlier) - k), seat, said)
+        listener.remember(now - 2.0 * (len(earlier) - k), seat, said)
     runner.tick(now)
     hearing = listener.hear(now, seat, words)
     to_nova = bool(ADDRESSES_NOVA.search(words))
@@ -452,8 +452,11 @@ class DistressSummary:
     paused_instantly: int
     paused_by_meaning: int
     alerted_only: int  # real distress the moderator was alerted to, with no pause
-    missed_without_warning_word: int
-    missed_by_meaning: int  # the check said no
+    missed: int  # real distress the check said no to
+    plain: int  # real distress with none of the usual warning words
+    plain_paused: int
+    plain_alerted_only: int
+    plain_missed: int
     ordinary: int
     quiet: int
     false_alerts: int
@@ -463,10 +466,6 @@ class DistressSummary:
     median_ms: int | None
     p90_ms: int | None
     worst_ms: int | None
-
-    @property
-    def missed(self) -> int:
-        return self.missed_without_warning_word + self.missed_by_meaning
 
     @property
     def false_pause_rate(self) -> float:
@@ -479,6 +478,7 @@ class DistressSummary:
 
 def distress_summary(results: list[DistressResult]) -> DistressSummary:
     real = [r for r in results if r.sample.distress]
+    plain = [r for r in real if r.sample.plain]
     ordinary = [r for r in results if not r.sample.distress]
     ms = sorted(r.heard.ms for r in results if r.heard.ms is not None)
 
@@ -490,8 +490,11 @@ def distress_summary(results: list[DistressResult]) -> DistressSummary:
         paused_instantly=count(real, "paused", Layer.INSTANT),
         paused_by_meaning=count(real, "paused", Layer.MEANING),
         alerted_only=count(real, "alerted"),
-        missed_without_warning_word=count(real, "missed", Layer.NONE),
-        missed_by_meaning=count(real, "missed", Layer.MEANING),
+        missed=count(real, "missed"),
+        plain=len(plain),
+        plain_paused=count(plain, "paused"),
+        plain_alerted_only=count(plain, "alerted"),
+        plain_missed=count(plain, "missed"),
         ordinary=len(ordinary),
         quiet=count(ordinary, "quiet"),
         false_alerts=count(ordinary, "alerted"),
@@ -514,8 +517,9 @@ def render_distress(results: list[DistressResult], *, model_name: str) -> str:
         "",
         f"Real distress: {paused} paused ({t.paused_instantly} by the instant layer, "
         f"{t.paused_by_meaning} by meaning), {t.alerted_only} alerted the moderator only, "
-        f"{t.missed} missed ({t.missed_without_warning_word} with no warning word, "
-        f"{t.missed_by_meaning} the check said no)",
+        f"{t.missed} missed (the check said no)",
+        f"  of which {t.plain} use no warning word: {t.plain_paused} paused, "
+        f"{t.plain_alerted_only} alerted the moderator only, {t.plain_missed} missed",
         f"Ordinary talk: {t.quiet} left alone, {t.false_alerts} false alerts, "
         f"{t.false_pauses} false pauses",
         f"The check: {t.checks} sentences, median {_ms_text(t.median_ms)}, 90th percentile "

@@ -3,6 +3,7 @@ else with a warning word checked for meaning by a model that can only answer a l
 
 import asyncio
 import logging
+import re
 import time
 
 import pytest
@@ -12,6 +13,7 @@ from nova.distress import (
     CHECK_SYSTEM,
     CheckError,
     DistressCheck,
+    Hearing,
     Listener,
     Verdict,
     check_prompt,
@@ -19,7 +21,7 @@ from nova.distress import (
     is_unmistakable,
     parse,
 )
-from nova.distress_set import DISTRESS_SET
+from nova.distress_set import DISTRESS_SET, Sample
 
 LEFT, RIGHT = Seat.LEFT, Seat.RIGHT
 
@@ -127,7 +129,8 @@ def test_not_wanting_to_stop_is_never_an_unmistakable_request_to_stop(words):
 
 
 @pytest.mark.parametrize("words", ORDINARY)
-def test_ordinary_talk_without_a_warning_word_goes_nowhere(words):
+def test_ordinary_talk_is_not_unmistakable_and_has_no_warning_word(words):
+    """Warning words now only choose a reply's fallback (nova/lines.py)."""
     assert not is_unmistakable(words)
     assert not has_warning(words)
 
@@ -136,11 +139,12 @@ def test_ordinary_talk_without_a_warning_word_goes_nowhere(words):
 
 
 class Labeller:
-    """A model for the check: answers with a fixed word, or slowly, or fails."""
+    """A model for the check: answers with a fixed word (or a word for each sentence),
+    or slowly, or fails."""
 
     name = "fake/labeller"
 
-    def __init__(self, answer: str = "no", *, delay: float = 0.0, error: Exception | None = None):
+    def __init__(self, answer="no", *, delay: float = 0.0, error: Exception | None = None):
         self.answer, self.delay, self.error = answer, delay, error
         self.prompts: list[str] = []
         self.systems: list[str] = []
@@ -152,7 +156,7 @@ class Labeller:
             await asyncio.sleep(self.delay)
         if self.error:
             raise self.error
-        return self.answer
+        return self.answer(said(prompt)[1]) if callable(self.answer) else self.answer
 
     async def write(self, *, system: str, prompt: str) -> str:
         raise AssertionError("the check only ever asks for a label")
@@ -231,7 +235,7 @@ async def test_the_log_gets_the_verdict_and_time_never_the_words(caplog):
 # --- Listening to every dater -------------------------------------------------------------
 
 
-def listener(answer: str = "no") -> tuple[Listener, Labeller]:
+def listener(answer="no") -> tuple[Listener, Labeller]:
     model = Labeller(answer)
     return Listener(DistressCheck(model, timeout=1.0)), model
 
@@ -264,35 +268,57 @@ async def test_the_instant_layer_joins_only_the_same_daters_last_five_seconds():
     assert ears.hear(16.0, LEFT, "comfortable.").unmistakable is None
 
 
-async def test_a_warning_word_goes_to_the_check_with_the_same_daters_last_15_seconds():
-    ears, model = listener("yes")
+async def test_the_check_sees_the_same_daters_last_15_seconds_as_context():
+    target = "I want to stop talking to him."
+    ears, model = listener(lambda sentence: "yes" if sentence == target else "no")
     ears.hear(1.0, LEFT, "Too long ago.")
     ears.hear(8.0, LEFT, "He asked which street I live on.")
     ears.hear(9.0, RIGHT, "Theo's words are his own.")
-    hearing = ears.hear(20.0, LEFT, "I want to stop talking to him.")
+    hearing = ears.hear(20.0, LEFT, target)
     assert hearing.unmistakable is None
     checked = await hearing.check
     assert checked.verdict is Verdict.YES
-    assert said(model.prompts[0]) == (
-        "He asked which street I live on.",
-        "I want to stop talking to him.",
-    )
+    assert said(model.prompts[-1]) == ("He asked which street I live on.", target)
 
 
-async def test_ordinary_talk_never_reaches_the_model():
+@pytest.mark.parametrize(
+    "words",
+    [*ORDINARY, "Can someone come get me?", "He keeps asking where I live.", "Is this over?"],
+)
+async def test_every_sentence_the_instant_layer_doesnt_act_on_goes_to_the_check(words):
+    """Distress needn't use any particular word, so nothing is filtered out first."""
     ears, model = listener()
-    for at, words in enumerate(ORDINARY):
-        hearing = ears.hear(float(at), LEFT, words)
-        assert hearing.unmistakable is None and hearing.check is None
+    hearing = ears.hear(10.0, LEFT, words)
+    assert hearing.unmistakable is None
+    assert (await hearing.check).verdict is Verdict.NO
+    assert [said(prompt)[1] for prompt in model.prompts] == [words]
+
+
+async def test_each_transcript_is_checked_once_with_what_came_before():
+    ears, model = listener()
+    for at, words in ((10.0, "This isn't"), (11.0, "okay."), (12.0, "Really, honestly.")):
+        await ears.hear(at, LEFT, words).check
+    assert [said(prompt) for prompt in model.prompts] == [
+        ("", "This isn't"),
+        ("This isn't", "okay."),
+        ("This isn't okay.", "Really, honestly."),
+    ]
+
+
+@pytest.mark.parametrize("words", ["", "   "])
+async def test_an_empty_transcript_needs_nothing(words):
+    ears, model = listener()
+    assert ears.hear(10.0, LEFT, words) == Hearing()
     assert model.prompts == []
 
 
-async def test_a_warning_word_split_across_transcripts_is_checked_once_with_its_start():
+async def test_the_evaluation_can_set_up_what_a_dater_said_before_without_checking_it():
     ears, model = listener()
-    assert ears.hear(10.0, LEFT, "This isn't").check is None
-    await ears.hear(11.0, LEFT, "okay.").check
-    assert said(model.prompts[0]) == ("This isn't", "okay.")
-    assert ears.hear(12.0, LEFT, "Really, honestly.").check is None, "no new warning word"
+    ears.remember(8.0, LEFT, "He keeps commenting on my body.")
+    await ears.hear(10.0, LEFT, "Can we not do this?").check
+    assert [said(prompt) for prompt in model.prompts] == [
+        ("He keeps commenting on my body.", "Can we not do this?")
+    ]
 
 
 async def test_after_a_yes_the_check_starts_afresh():
@@ -322,6 +348,23 @@ def test_the_distress_set_has_the_product_owners_sentences():
         "Nova, can you help us pick a topic?",
     ):
         assert (ordinary, False) in sentences
+
+
+# The product owner's warning words: the plain samples use none of them.
+OWNERS_WARNING_WORDS = re.compile(
+    r"\b(?:stop|end|leave|quit|pause|uncomfortable|unsafe|scared|help)\b|not okay", re.I
+)
+
+
+def test_ten_real_and_ten_ordinary_samples_use_none_of_the_usual_warning_words():
+    plain = [s for s in DISTRESS_SET if s.plain]
+    assert sum(s.distress for s in plain) == 10 and len(plain) == 20
+    for sentence in ("I really don't like where this is going.", "Can someone come get me?"):
+        assert Sample(sentence, True, plain=True) in plain
+    assert Sample("He keeps asking where I live.", True, plain=True) in plain
+    assert OWNERS_WARNING_WORDS.search("Help, I want to stop."), "the check itself works"
+    for sample in plain:
+        assert not OWNERS_WARNING_WORDS.search(sample.sentence), sample.sentence
 
 
 def test_what_a_dater_said_before_a_sample_is_ordinary_so_each_sample_tests_one_sentence():
