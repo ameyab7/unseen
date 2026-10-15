@@ -8,6 +8,7 @@ import pytest
 
 from nova import script
 from nova.cards import Seat
+from nova.config import Settings
 from nova.cues import AlertModerator, ModeratorAlert, Moment
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
 from nova.lines import Source
@@ -25,6 +26,10 @@ from nova.timing import REHEARSAL
 
 # REHEARSAL timing: first question at 13.5 s, free talk 27 s, from the room 72 s,
 # lightning 99 s, last word 126 s, time 144 s, result 162 s, next up 171 s.
+
+# Nova acts on what a dater said once their utterance closes: the grace after they stopped
+# and the last transcript arrived (nova/on_air.py).
+GRACE = Settings.utterance_grace
 
 
 class Clock:
@@ -150,6 +155,12 @@ async def started(clock: Clock, **options) -> Rehearsal:
     return r
 
 
+def close(r: Rehearsal, clock: Clock) -> None:
+    """The dater stays quiet for the grace, so Nova acts on what they said."""
+    clock.now += GRACE
+    r.tick()
+
+
 def lines(r: Rehearsal, moment: Moment) -> list[Spoken]:
     return [s for s in r.spoken if s.moment is moment]
 
@@ -188,6 +199,7 @@ async def test_the_seat_that_speaks_is_chosen_in_chat():
     r.transcript("Nova, are you a real person?")
     assert r.command("theo") is Command.THEO
     r.transcript("Nova, tea or coffee?")
+    close(r, clock)
     replies = [cue for cue in r.cues if getattr(cue, "moment", None) is Moment.REPLY]
     assert [cue.about for cue in replies] == [Seat.LEFT, Seat.RIGHT]
 
@@ -197,6 +209,7 @@ async def test_only_words_that_address_nova_get_a_reply():
     r = await started(clock)
     clock.now = 40
     r.transcript("I think tea, honestly.")
+    close(r, clock)
     assert not any(getattr(cue, "moment", None) is Moment.REPLY for cue in r.cues)
 
 
@@ -223,11 +236,56 @@ async def test_a_reply_is_measured_from_the_end_of_the_daters_sentence():
     r.speech_ended()
     clock.now = 51.8  # the transcript arrives
     r.transcript("Nova, are you a real person?")
+    clock.now = 52.3
+    r.tick()
+    assert not any(getattr(cue, "moment", None) is Moment.REPLY for cue in r.cues), "grace"
+    clock.now = 52.4  # the grace after the transcript: Nova acts
+    r.tick()
     await r.speak_queued()
     reply = lines(r, Moment.REPLY)[0]
     assert reply.kind is Kind.REPLY
-    assert reply.from_sentence_end_ms == 1100
+    assert reply.from_sentence_end_ms == 1700, "the transcript's wait and the grace count"
+    assert reply.grace_ms == 1400
     assert reply.from_cue_ms == 300
+
+
+async def test_a_question_split_across_transcripts_gets_one_reply_to_the_whole_of_it():
+    clock = Clock()
+    r = await started(clock)
+    clock.now = 40.0
+    r.tick()
+    await r.speak_queued()
+    clock.now = 50.0
+    r.speech_started()
+    clock.now = 50.5
+    r.transcript("Nova,")  # speech-to-text finalizes at the pause after "Nova,"
+    clock.now = 52.0
+    r.speech_ended()
+    clock.now = 52.3
+    r.transcript("what's your favourite film?")
+    clock.now = 52.9
+    r.tick()
+    await r.heard()
+    await r.speak_queued()
+    replies = [cue for cue in r.cues if getattr(cue, "moment", None) is Moment.REPLY]
+    assert [cue.detail for cue in replies] == ["Nova, what's your favourite film?"]
+    reply = lines(r, Moment.REPLY)[0]
+    assert (reply.grace_ms, reply.from_sentence_end_ms) == (900, 1200)
+
+
+async def test_speech_ends_for_the_dater_who_started_speaking():
+    """One browser plays both daters: if the chat picks the other seat mid-sentence, the
+    voice detector's end of speech still belongs to the one who was speaking."""
+    clock = Clock()
+    r = await started(clock)
+    clock.now = 40.0
+    r.speech_started()
+    r.transcript("Nova, tea or coffee?")
+    r.command("theo")
+    r.speech_ended()
+    close(r, clock)
+    replies = [cue for cue in r.cues if getattr(cue, "moment", None) is Moment.REPLY]
+    assert [cue.about for cue in replies] == [Seat.LEFT]
 
 
 async def test_a_line_queued_behind_another_is_also_measured_from_when_nova_was_free():
@@ -248,6 +306,7 @@ async def test_a_dater_who_wants_to_stop_gets_the_kind_line_measured_as_a_reply(
     clock.now = 40.0
     r.speech_ended()
     r.transcript("Nova, I want to stop.")
+    close(r, clock)
     await r.speak_queued()
     kind = lines(r, Moment.NEED_A_MOMENT)[0]
     assert kind.kind is Kind.REPLY and r.speaker.texts[-2] == script.DISTRESS_PAUSE
@@ -256,12 +315,14 @@ async def test_a_dater_who_wants_to_stop_gets_the_kind_line_measured_as_a_reply(
 
 
 async def transcripts(r: Rehearsal, clock: Clock, *said: tuple[float, str]) -> None:
-    """Final transcripts from the speaking dater, each at its time. After each, any distress
-    check finishes and Nova speaks."""
+    """Final transcripts from the speaking dater, each at its time and each a whole
+    utterance: the dater has stopped when it arrives and stays quiet for the grace. After
+    each, any distress check finishes and Nova speaks."""
     for at, text in said:
         clock.now = at
         r.speech_ended()
         r.transcript(text)
+        close(r, clock)
         await r.heard()
         await r.speak_queued()
 
@@ -283,8 +344,10 @@ async def test_the_kind_line_comes_at_once_cutting_nova_off_and_dropping_queued_
     r.tick()  # the first questions, twelve seconds each, queued and not yet spoken
     r.speech_ended()
     r.transcript("I want to stop.")
+    close(r, clock)
     await r.speak_queued()
-    assert lines(r, Moment.NEED_A_MOMENT)[0].from_sentence_end_ms == 300
+    kind = lines(r, Moment.NEED_A_MOMENT)[0]
+    assert (kind.from_sentence_end_ms, kind.grace_ms) == (900, 600)
     assert lines(r, Moment.FIRST_QUESTION) == [], "dropped, never said after the kind line"
     assert r.speaker.stops == 1
 
@@ -339,7 +402,7 @@ async def test_a_yes_pauses_the_dater_and_the_kind_line_counts_the_checks_time()
     await transcripts(r, clock, (40.0, words))
     assert alerts(r) == [ModeratorAlert.DATER_DISTRESSED]
     kind = lines(r, Moment.NEED_A_MOMENT)[0]
-    assert kind.kind is Kind.REPLY and kind.from_sentence_end_ms == 700
+    assert kind.kind is Kind.REPLY and kind.from_sentence_end_ms == 1300, "grace and check"
     assert "Distress checks: 1 (yes 1)" in render_report(r)
 
 
@@ -362,6 +425,7 @@ async def test_nova_free_to_speak_still_waits_for_the_verdict_before_a_reply():
     clock.now = 40.0
     r.speech_ended()
     r.transcript(words)
+    close(r, clock)
     speaking = asyncio.ensure_future(r.speak_queued())
     await asyncio.sleep(0.05)
     assert lines(r, Moment.REPLY) == [], "not a word before the verdict"
@@ -514,10 +578,12 @@ async def finished(clock: Clock) -> Rehearsal:
 
 
 async def test_a_dater_who_wants_to_stop_before_the_start_reaches_the_moderator():
-    r = rehearsal(Clock())
+    clock = Clock()
+    r = rehearsal(clock)
     r.speech_started()
     r.speech_ended()
     r.transcript("I want to stop.")
+    close(r, clock)  # nova/agent.py's listen() does this while set pieces are prepared
     await r.heard()
     await r.speak_queued()
     assert alerts(r) == [ModeratorAlert.DATER_DISTRESSED]
@@ -526,8 +592,10 @@ async def test_a_dater_who_wants_to_stop_before_the_start_reaches_the_moderator(
 
 async def test_a_yes_from_the_check_before_the_start_only_alerts():
     words = "I want to stop talking to him."
-    r = rehearsal(Clock(), model=FakeModel(labels={words: "yes"}))
+    clock = Clock()
+    r = rehearsal(clock, model=FakeModel(labels={words: "yes"}))
     r.transcript(words)
+    close(r, clock)
     await r.heard()
     await r.speak_queued()
     assert alerts(r) == [ModeratorAlert.DATER_DISTRESSED] and r.speaker.texts == []
@@ -550,6 +618,8 @@ async def test_after_the_date_ends_daters_and_commands_never_raise():
     r = await finished(clock)
     r.speech_started()
     r.transcript("I want to stop.")
+    r.speech_ended()
+    close(r, clock)
     await r.heard()
     for text in (*COMMANDS, "leave", "end"):
         r.command(text)
@@ -635,6 +705,12 @@ async def test_the_report_holds_codes_and_numbers_never_what_anyone_said_or_type
         r.tick()
         await r.speak_queued()
     report = render_report(r)
+    assert "Utterances: 1 (0 by the instant layer)" in report
+    assert "(grace 0.6 s after the last transcript, at most 1.5 s after the dater stopped)" in (
+        report
+    )
+    reply = next(row for row in report.splitlines() if row.lstrip().startswith("reply"))
+    assert "1000 ms" in reply, "the reply's grace: this date ticks once a second"
     for secret in ("OKAPI", "PANGOLIN", "555", "Maya", "Theo", "Here we go"):
         assert secret not in report, secret
         assert secret not in caplog.text, secret

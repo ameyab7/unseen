@@ -18,8 +18,10 @@ number we track.
 
 The distress test set (nova/distress_set.py) runs with the cases, or on its own with
 --distress: real distress and ordinary talk that uses the same words, each through the
-real two-layer distress check and show runner. It reports missed distress (target 0),
-false pauses (target under 1 in 20) and how long the check took. All data here is made up.
+real two-layer distress check and show runner, spoken the way speech reaches the on-air
+listener, some of it split across two final transcripts. It reports missed distress
+(target 0), false pauses (target under 1 in 20) and how long the check took. All data here
+is made up.
 """
 
 import argparse
@@ -29,12 +31,13 @@ import math
 import statistics
 import time
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 from nova import script
 from nova.cards import BlindCard, Pair, Prompt, Seat
-from nova.config import load_settings
+from nova.config import Settings, load_settings
 from nova.cues import AlertModerator, Cue, Moment, RoomFacts, Say, Segment
 from nova.decisions import InMemoryDecisionDesk
 from nova.distress import DistressCheck, Verdict
@@ -261,39 +264,102 @@ class Heard:
     cues: tuple[Cue, ...] = ()  # everything the show did, in order
 
 
+# How speech reaches the on-air listener here, as in a rehearsal: each final transcript
+# holds SPEAKING seconds of words and arrives FINAL_LAG after the dater stops saying them
+# (an assumption; the rehearsal report's grace column measures it); the voice detector
+# hears them stop VAD_SILENCE after (LiveKit's default Silero detector waits 0.25 s of
+# silence). Between the two parts of a split sentence the dater pauses for PAUSE: long
+# enough for the voice detector to end and start again, short enough to stay inside the
+# default grace.
+SPEAKING = 1.5
+FINAL_LAG = 0.3
+VAD_SILENCE = 0.25
+PAUSE = 0.6
+
+
+class Speech(StrEnum):
+    STARTED = "started"  # the voice detector heard the dater start speaking
+    FINAL = "final"  # a final transcript arrived
+    ENDED = "ended"  # the voice detector heard them stop
+
+
+def spoken(finals: Sequence[str], *, at: float) -> list[tuple[float, Speech, str]]:
+    """What the on-air listener hears, and when, as a dater says these finals from at."""
+    events = [(at, Speech.STARTED, "")]
+    for k, final in enumerate(finals):
+        stopped = at + SPEAKING
+        events += [
+            (stopped + FINAL_LAG, Speech.FINAL, final),
+            (stopped + VAD_SILENCE, Speech.ENDED, ""),
+        ]
+        at = stopped + PAUSE
+        if k < len(finals) - 1:
+            events.append((at, Speech.STARTED, ""))
+    return events
+
+
+class _Clock:
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
 async def hear_on_air(
     check: DistressCheck,
-    words: str,
-    *,
+    *finals: str,
     earlier: tuple[str, ...] = (),
     pair: Pair = REHEARSAL_PAIR,
     seat: Seat = Seat.LEFT,
+    grace: float = Settings.utterance_grace,
+    max_wait: float = Settings.utterance_max_wait,
 ) -> Heard:
-    """What the show does when a dater says this in free talk, after saying earlier a few
-    seconds before. The same on-air listener as the rehearsal (nova/on_air.py) hears it, on
-    a fixed clock, so the evaluation measures what runs rather than a copy of it."""
-    now = FULL.free_talk + 20.0
+    """What the show does when a dater says this in free talk, as one or more final
+    transcripts, after saying earlier a few seconds before. The same on-air listener as
+    the rehearsal (nova/on_air.py) hears it, spoken as in spoken() on a fake clock, so the
+    evaluation measures what runs rather than a copy of it."""
+    clock = _Clock(FULL.free_talk + 20.0)
     runner = ShowRunner(pair, desk=InMemoryDecisionDesk(), poll=NoVotes(), first_up=Seat.LEFT)
     runner.start(0.0)
-    runner.tick(now)  # the date so far
+    runner.tick(clock.now)  # the date so far
     delivered: list[OnAirCues] = []
-    on_air = OnAirListener(runner, check, deliver=delivered.append, clock=lambda: now)
+    on_air = OnAirListener(
+        runner, check, deliver=delivered.append, clock=clock, grace=grace, max_wait=max_wait
+    )
     for k, said in enumerate(earlier):
-        on_air.remember(seat, said, at=now - 2.0 * (len(earlier) - k))
-    hearing = on_air.hear(seat, words)
+        on_air.remember(seat, said, at=clock.now - 2.0 * (len(earlier) - k))
+
+    def tick_until(at: float) -> None:
+        """Ticks at each moment the listener has something due, up to at."""
+        while (due := on_air.next_due) is not None and due <= at:
+            clock.now = max(clock.now, due)
+            on_air.tick()
+
+    for at, speech, final in spoken(finals, at=clock.now):
+        tick_until(at)
+        clock.now = at
+        match speech:
+            case Speech.STARTED:
+                on_air.speech_started(seat)
+            case Speech.FINAL:
+                on_air.hear(seat, final)
+            case Speech.ENDED:
+                on_air.speech_ended(seat)
+    tick_until(math.inf)  # until what the dater said has been acted on
     await on_air.heard()
 
     cues = [cue for on_air_cues in delivered for cue in on_air_cues.cues]
     said = [cue for cue in cues if isinstance(cue, Say)]
     holds = [d.hold for d in delivered if d.hold is not None]
     held_back = any(hold.result() is Verdict.YES for hold in holds)  # the reply is dropped
-    if hearing.unmistakable is not None:
+    if any(closed.instant for closed in on_air.closed):
         layer = Layer.INSTANT
-    elif hearing.check is not None:
+    elif on_air.closed:
         layer = Layer.MEANING
     else:
         layer = Layer.NONE
-    checked = on_air.checks[-1] if layer is Layer.MEANING else None
+    checked = on_air.checks[-1] if layer is Layer.MEANING and on_air.checks else None
     return Heard(
         layer,
         paused=any(say.text == script.DISTRESS_PAUSE for say in said),
@@ -306,7 +372,14 @@ async def hear_on_air(
 
 
 async def run_case(
-    model: LineModel, case: Case, *, live: float, prep: float, distress: float = 2.0
+    model: LineModel,
+    case: Case,
+    *,
+    live: float,
+    prep: float,
+    distress: float = 2.0,
+    grace: float = Settings.utterance_grace,
+    max_wait: float = Settings.utterance_max_wait,
 ) -> CaseResult:
     moment = case.say.moment
 
@@ -320,7 +393,14 @@ async def run_case(
             model, timeout=distress, events=EventLog(logging.getLogger("nova.evaluation"))
         )
         words = case.say.detail or ""
-        heard = await hear_on_air(check, words, pair=case.pair, seat=case.say.about or Seat.LEFT)
+        heard = await hear_on_air(
+            check,
+            words,
+            pair=case.pair,
+            seat=case.say.about or Seat.LEFT,
+            grace=grace,
+            max_wait=max_wait,
+        )
         if case.wants_to_stop or heard.paused:
             if not case.wants_to_stop:
                 problems.append("paused a dater who didn't ask to stop")
@@ -379,6 +459,8 @@ async def run_cases(
     live_timeout: float,
     prep_timeout: float,
     distress_timeout: float = 2.0,
+    grace: float = Settings.utterance_grace,
+    max_wait: float = Settings.utterance_max_wait,
     repeat: int = 1,
 ) -> list[CaseResult]:
     results = []
@@ -386,7 +468,13 @@ async def run_cases(
         for _ in range(repeat):
             results.append(
                 await run_case(
-                    model, case, live=live_timeout, prep=prep_timeout, distress=distress_timeout
+                    model,
+                    case,
+                    live=live_timeout,
+                    prep=prep_timeout,
+                    distress=distress_timeout,
+                    grace=grace,
+                    max_wait=max_wait,
                 )
             )
     return results
@@ -422,6 +510,8 @@ async def run_distress(
     model: LineModel,
     *,
     timeout: float,
+    grace: float = Settings.utterance_grace,
+    max_wait: float = Settings.utterance_max_wait,
     repeat: int = 1,
     samples: tuple[Sample, ...] = DISTRESS_SET,
 ) -> list[DistressResult]:
@@ -431,7 +521,9 @@ async def run_distress(
     results = []
     for sample in samples:
         for _ in range(repeat):
-            heard = await hear_on_air(check, sample.sentence, earlier=sample.earlier)
+            heard = await hear_on_air(
+                check, *sample.finals, earlier=sample.earlier, grace=grace, max_wait=max_wait
+            )
             results.append(DistressResult(sample, heard))
     return results
 
@@ -447,6 +539,10 @@ class DistressSummary:
     plain_paused: int
     plain_alerted_only: int
     plain_missed: int
+    split: int  # real distress split across two final transcripts
+    split_paused: int
+    split_ordinary: int  # ordinary talk split across two final transcripts
+    split_quiet: int
     ordinary: int
     quiet: int
     false_alerts: int
@@ -470,6 +566,8 @@ def distress_summary(results: list[DistressResult]) -> DistressSummary:
     real = [r for r in results if r.sample.distress]
     plain = [r for r in real if r.sample.plain]
     ordinary = [r for r in results if not r.sample.distress]
+    split = [r for r in real if r.sample.split]
+    split_ordinary = [r for r in ordinary if r.sample.split]
     ms = sorted(r.heard.ms for r in results if r.heard.ms is not None)
 
     def count(rows: list[DistressResult], outcome: str, layer: Layer | None = None) -> int:
@@ -485,6 +583,10 @@ def distress_summary(results: list[DistressResult]) -> DistressSummary:
         plain_paused=count(plain, "paused"),
         plain_alerted_only=count(plain, "alerted"),
         plain_missed=count(plain, "missed"),
+        split=len(split),
+        split_paused=count(split, "paused"),
+        split_ordinary=len(split_ordinary),
+        split_quiet=count(split_ordinary, "quiet"),
         ordinary=len(ordinary),
         quiet=count(ordinary, "quiet"),
         false_alerts=count(ordinary, "alerted"),
@@ -512,6 +614,8 @@ def render_distress(results: list[DistressResult], *, model_name: str) -> str:
         f"{t.plain_alerted_only} alerted the moderator only, {t.plain_missed} missed",
         f"Ordinary talk: {t.quiet} left alone, {t.false_alerts} false alerts, "
         f"{t.false_pauses} false pauses",
+        f"Split across two transcripts: {t.split_paused} of {t.split} real distress paused, "
+        f"{t.split_quiet} of {t.split_ordinary} ordinary talk left alone",
         f"The check: {t.checks} sentences, median {ms_text(t.median_ms)}, 90th percentile "
         f"{ms_text(t.p90_ms)}, worst {ms_text(t.worst_ms)}; {t.unchecked} unchecked "
         "(failed or too slow, so the moderator was alerted)",
@@ -530,7 +634,7 @@ def render_distress(results: list[DistressResult], *, model_name: str) -> str:
             what = "false pause" if r.outcome == "paused" else "false alert"
         layer = str(r.heard.layer) if r.heard.verdict is None else f"meaning: {r.heard.verdict}"
         before = f"  (after: {' '.join(r.sample.earlier)})" if r.sample.earlier else ""
-        lines.append(f"  {what:<12}[{layer}]  {r.sample.sentence}{before}")
+        lines.append(f"  {what:<12}[{layer}]  {' / '.join(r.sample.finals)}{before}")
     return "\n".join(lines)
 
 
@@ -823,9 +927,17 @@ def main(argv: list[str] | None = None) -> int:
                 live_timeout=settings.live_timeout,
                 prep_timeout=settings.prep_timeout,
                 distress_timeout=settings.distress_timeout,
+                grace=settings.utterance_grace,
+                max_wait=settings.utterance_max_wait,
                 repeat=args.repeat,
             )
-        distress = await run_distress(model, timeout=settings.distress_timeout, repeat=args.repeat)
+        distress = await run_distress(
+            model,
+            timeout=settings.distress_timeout,
+            grace=settings.utterance_grace,
+            max_wait=settings.utterance_max_wait,
+            repeat=args.repeat,
+        )
         return results, distress
 
     results, distress = asyncio.run(evaluate())

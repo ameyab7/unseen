@@ -104,6 +104,7 @@ class TestTimeouts:
         assert settings.live_timeout == 2.0
         assert settings.prep_timeout == 60.0
         assert settings.distress_timeout == 2.0
+        assert (settings.utterance_grace, settings.utterance_max_wait) == (0.6, 1.5)
         assert settings.ollama_base_url == "http://localhost:11434"
 
     def test_can_be_set_in_the_env_file(self):
@@ -113,18 +114,35 @@ class TestTimeouts:
                 "NOVA_LIVE_TIMEOUT_SECONDS": "1.5",
                 "NOVA_PREP_TIMEOUT_SECONDS": "90",
                 "NOVA_DISTRESS_TIMEOUT_SECONDS": "0.8",
+                "NOVA_UTTERANCE_GRACE_SECONDS": "0.4",
+                "NOVA_UTTERANCE_MAX_WAIT_SECONDS": "1",
                 "OLLAMA_BASE_URL": "http://gpu-box:11434",
             }
         )
         assert (settings.live_timeout, settings.prep_timeout) == (1.5, 90.0)
         assert settings.distress_timeout == 0.8
+        assert (settings.utterance_grace, settings.utterance_max_wait) == (0.4, 1.0)
         assert settings.ollama_base_url == "http://gpu-box:11434"
 
-    @pytest.mark.parametrize("name", ["NOVA_LIVE_TIMEOUT_SECONDS", "NOVA_DISTRESS_TIMEOUT_SECONDS"])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "NOVA_LIVE_TIMEOUT_SECONDS",
+            "NOVA_DISTRESS_TIMEOUT_SECONDS",
+            "NOVA_UTTERANCE_GRACE_SECONDS",
+            "NOVA_UTTERANCE_MAX_WAIT_SECONDS",
+        ],
+    )
     @pytest.mark.parametrize("value", ["0", "-1", "soon", "nan", "inf"])
     def test_must_be_a_positive_number_of_seconds(self, name, value):
         with pytest.raises(ConfigError, match=f"{name} must be a positive"):
             Settings.from_env({**GOOD, name: value})
+
+    def test_the_most_nova_waits_for_an_utterance_is_never_less_than_the_grace(self):
+        env = {**GOOD, "NOVA_UTTERANCE_GRACE_SECONDS": "2", "NOVA_UTTERANCE_MAX_WAIT_SECONDS": "1"}
+        with pytest.raises(ConfigError, match="MAX_WAIT_SECONDS must be at least") as raised:
+            Settings.from_env(env)
+        assert "2" not in str(raised.value) and "1.0" not in str(raised.value)
 
 
 def test_env_example_lists_exactly_the_names_settings_reads():

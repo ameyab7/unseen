@@ -8,7 +8,8 @@ of Maya and Theo. You play both daters: speak, start with "Nova, ..." to talk to
 type commands in the chat box (nova/rehearsal.py, Command): maya, theo, moment, back,
 unlock, ask <question>, reveal, unseen, keep, resume, end, leave, report. What daters say
 and type is heard from the moment the session starts, before the date does, and never
-raises. At the end the report (codes and numbers only) is logged and saved in
+raises: Nova acts on each utterance once the dater has finished it (nova/on_air.py). At
+the end the report (codes and numbers only) is logged and saved in
 services/nova/rehearsals/.
 
 Privacy (CLAUDE.md): daters' audio goes to speech recognition and no other LiveKit service;
@@ -142,6 +143,8 @@ async def rehearse(ctx: JobContext) -> None:
         live_timeout=settings.live_timeout,
         prep_timeout=settings.prep_timeout,
         distress_timeout=settings.distress_timeout,
+        utterance_grace=settings.utterance_grace,
+        utterance_max_wait=settings.utterance_max_wait,
     )
 
     def on_user_state(event: Any) -> None:
@@ -160,20 +163,25 @@ async def rehearse(ctx: JobContext) -> None:
     session.on("user_state_changed", on_user_state)
     session.on("user_input_transcribed", on_transcript)
 
+    # Daters are heard on time from their first word, while set pieces are still written.
+    listening = asyncio.create_task(rehearsal.listen())
     preparing = asyncio.create_task(rehearsal.prepare())
-    await session.start(
-        agent=Agent(instructions="Nova's lines come from the show runner; no replies here."),
-        room=ctx.room,
-        room_options=room_io.RoomOptions(
-            text_input=room_io.TextInputOptions(text_input_cb=on_chat),
-            # Otherwise LiveKit publishes what daters say, as text, to everyone in the room.
-            text_output=False,
-        ),
-        **START_OPTIONS,
-    )
-    await ctx.wait_for_participant()
-    await preparing
-    await rehearsal.run()
+    try:
+        await session.start(
+            agent=Agent(instructions="Nova's lines come from the show runner; no replies here."),
+            room=ctx.room,
+            room_options=room_io.RoomOptions(
+                text_input=room_io.TextInputOptions(text_input_cb=on_chat),
+                # Otherwise LiveKit publishes what daters say, as text, to everyone in the room.
+                text_output=False,
+            ),
+            **START_OPTIONS,
+        )
+        await ctx.wait_for_participant()
+        await preparing
+        await rehearsal.run()
+    finally:
+        listening.cancel()
 
     report = render_report(rehearsal)
     REPORTS.mkdir(exist_ok=True)

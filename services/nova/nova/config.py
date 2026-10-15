@@ -65,6 +65,14 @@ class Settings:
     # moderator is alerted instead. A "yes" pauses the dater only once it arrives, so this
     # also bounds how late the kind line can come.
     distress_timeout: float = 2.0
+    # How long Nova waits, once a dater has stopped speaking and the last transcript is in,
+    # before acting on what they said (decision 0005, utterances). Speech recognition
+    # finalizes at almost every pause, so without it Nova would answer half a sentence
+    # ("Nova,") or pause a dater for a phrase they hadn't finished. It counts against the
+    # 2.5 s reply target (docs/spike-results.md).
+    utterance_grace: float = 0.6
+    # The most Nova waits after a dater stops speaking, however late transcripts keep coming.
+    utterance_max_wait: float = 1.5
     # Nova's voice as "provider/model:voice", and the speech recognition that hears daters.
     voice: str = DEFAULT_VOICE
     stt: str = DEFAULT_STT
@@ -82,6 +90,8 @@ class Settings:
         "NOVA_LIVE_TIMEOUT_SECONDS",
         "NOVA_PREP_TIMEOUT_SECONDS",
         "NOVA_DISTRESS_TIMEOUT_SECONDS",
+        "NOVA_UTTERANCE_GRACE_SECONDS",
+        "NOVA_UTTERANCE_MAX_WAIT_SECONDS",
         "NOVA_VOICE",
         "NOVA_STT",
     )
@@ -97,6 +107,13 @@ class Settings:
         if llm.provider == "anthropic" and anthropic_api_key is None:
             raise ConfigError("ANTHROPIC_API_KEY is required when NOVA_LLM uses anthropic")
 
+        grace = _seconds(env, "NOVA_UTTERANCE_GRACE_SECONDS", cls.utterance_grace)
+        max_wait = _seconds(env, "NOVA_UTTERANCE_MAX_WAIT_SECONDS", cls.utterance_max_wait)
+        if max_wait < grace:
+            raise ConfigError(
+                "NOVA_UTTERANCE_MAX_WAIT_SECONDS must be at least NOVA_UTTERANCE_GRACE_SECONDS"
+            )
+
         return cls(
             livekit_url=env["LIVEKIT_URL"].strip(),
             livekit_api_key=env["LIVEKIT_API_KEY"].strip(),
@@ -107,6 +124,8 @@ class Settings:
             live_timeout=_seconds(env, "NOVA_LIVE_TIMEOUT_SECONDS", cls.live_timeout),
             prep_timeout=_seconds(env, "NOVA_PREP_TIMEOUT_SECONDS", cls.prep_timeout),
             distress_timeout=_seconds(env, "NOVA_DISTRESS_TIMEOUT_SECONDS", cls.distress_timeout),
+            utterance_grace=grace,
+            utterance_max_wait=max_wait,
             voice=_voice(env.get("NOVA_VOICE", "").strip() or cls.voice),
             stt=env.get("NOVA_STT", "").strip() or cls.stt,
         )
