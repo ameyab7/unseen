@@ -42,7 +42,9 @@ FINAL_WAIT = 30.0
 
 
 class Command(StrEnum):
-    """Typed in the Playground's chat box."""
+    """Typed in the Playground's chat box, at any time: before the date starts, a command
+    that needs a running date does nothing, except a question or an unlock, which the
+    show runner keeps for the date."""
 
     MAYA = "maya"  # Maya is speaking from now on
     THEO = "theo"  # Theo is speaking from now on
@@ -56,6 +58,7 @@ class Command(StrEnum):
     RESUME = "resume"  # moderator: carry on without them
     END = "end"  # moderator: end the date
     LEAVE = "leave"  # the speaking dater leaves
+    REPORT = "report"  # the speaking dater presses Report
 
 
 def parse_command(text: str) -> tuple[Command, str] | None:
@@ -245,7 +248,8 @@ class Rehearsal:
                 question = AudienceQuestion(rest, QuestionStatus.APPROVED)
                 self._queue_cues(runner.queue_question(now, question))
             case Command.REVEAL | Command.UNSEEN:
-                self._queue_cues(runner.tick(now))
+                if runner.started:
+                    self._queue_cues(runner.tick(now))
                 with contextlib.suppress(DecisionError):  # outside the window, or decided
                     self._desk.choose(seat, Choice(command.value))
             case Command.KEEP:
@@ -256,6 +260,8 @@ class Rehearsal:
                 self._queue_cues(runner.moderator_end(now))
             case Command.LEAVE:
                 self._queue_cues(runner.dater_left(now, seat))
+            case Command.REPORT:
+                self._queue_cues(runner.dater_reported(now, seat))
         self._events.emit(Event.COMMAND, command=command, seat=self.seat)
         return command
 
@@ -278,7 +284,8 @@ class Rehearsal:
         Nova's first line after the dater spoke is measured from the end of their sentence,
         so a kind line after the check counts the check's time."""
         now, seat = self._clock(), self.seat
-        self._queue_cues(self._runner.tick(now))  # beats already due aren't replies
+        if self._runner.started:  # beats already due aren't replies
+            self._queue_cues(self._runner.tick(now))
         ended = self._last_sentence_end
         if ended is None or now - ended > SENTENCE_END_MAX_AGE:
             ended = now

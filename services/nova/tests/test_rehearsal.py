@@ -496,6 +496,90 @@ async def test_decisions_come_from_chat_and_only_count_while_the_window_is_open(
     assert r.finished
 
 
+# --- Before the date starts and after it ends ----------------------------------------------
+# nova/agent.py hears daters from the moment the session starts, while set pieces are still
+# being written, so nothing a dater or the chat does may raise before start().
+
+COMMANDS = ("moment", "back", "unlock", "ask Mountains or sea?", "reveal", "keep", "resume")
+
+
+async def finished(clock: Clock) -> Rehearsal:
+    r = await started(clock)
+    for t in range(1, 240):
+        clock.now = float(t)
+        r.tick()
+        await r.speak_queued()
+    assert r.finished
+    return r
+
+
+async def test_a_dater_who_wants_to_stop_before_the_start_reaches_the_moderator():
+    r = rehearsal(Clock())
+    r.speech_started()
+    r.speech_ended()
+    r.transcript("I want to stop.")
+    await r.heard()
+    await r.speak_queued()
+    assert alerts(r) == [ModeratorAlert.DATER_DISTRESSED]
+    assert r.speaker.texts == [], "nothing on air before the date"
+
+
+async def test_a_yes_from_the_check_before_the_start_only_alerts():
+    words = "I want to stop talking to him."
+    r = rehearsal(Clock(), model=FakeModel(labels={words: "yes"}))
+    r.transcript(words)
+    await r.heard()
+    await r.speak_queued()
+    assert alerts(r) == [ModeratorAlert.DATER_DISTRESSED] and r.speaker.texts == []
+
+
+async def test_commands_before_the_start_never_raise_and_are_logged(caplog):
+    caplog.set_level(logging.INFO, logger="nova")
+    r = rehearsal(Clock())
+    for text in (*COMMANDS, "leave", "end", "theo"):
+        assert r.command(text) is not None
+    assert caplog.text.count("command command=") == len(COMMANDS) + 3
+    assert r.seat is Seat.RIGHT, "choosing who speaks needs no date"
+    assert alerts(r) == []
+    r.start()
+    assert not r.finished, "an end before the date didn't end it"
+
+
+async def test_after_the_date_ends_daters_and_commands_never_raise():
+    clock = Clock()
+    r = await finished(clock)
+    r.speech_started()
+    r.transcript("I want to stop.")
+    await r.heard()
+    for text in (*COMMANDS, "leave", "end"):
+        r.command(text)
+    assert alerts(r)[-1] is ModeratorAlert.DATER_DISTRESSED
+
+
+async def test_a_report_on_air_pauses_the_date_after_alerting_the_moderator():
+    clock = Clock()
+    r = await started(clock)
+    clock.now = 40.0
+    r.tick()
+    await r.speak_queued()
+    said = len(r.speaker.texts)
+    assert r.command("report") is Command.REPORT
+    await r.speak_queued()
+    assert alerts(r) == [ModeratorAlert.DATER_REPORTED]
+    assert r.speaker.texts[said] == script.NEED_A_MOMENT and r.speaker.stops == 1
+
+
+@pytest.mark.parametrize("when", ["before the start", "after the end"])
+async def test_a_report_off_air_alerts_the_moderator_and_nothing_else(when):
+    clock = Clock()
+    r = rehearsal(clock) if when == "before the start" else await finished(clock)
+    said = len(r.speaker.texts)
+    r.command("report")
+    await r.speak_queued()
+    assert alerts(r)[-1] is ModeratorAlert.DATER_REPORTED
+    assert r.speaker.texts[said:] == []
+
+
 # --- Targets and the report ---------------------------------------------------------------
 
 
