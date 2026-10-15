@@ -1,6 +1,7 @@
 """One rehearsal date: the show runner, Nova's lines and a voice, on a fake clock, with the
 delay to Nova's first word measured for every line. No LiveKit, no network."""
 
+import asyncio
 import logging
 
 import pytest
@@ -57,6 +58,33 @@ class SilentSpeaker(FakeSpeaker):
     async def speak(self, text: str) -> float | None:
         self.texts.append(text)
         return None
+
+
+class BrokenVoice(FakeSpeaker):
+    """Fails on the second line, then works again."""
+
+    async def speak(self, text: str) -> float | None:
+        started = await super().speak(text)
+        if len(self.texts) == 2:
+            raise RuntimeError("the voice failed")
+        return started
+
+
+class StuckVoice(FakeSpeaker):
+    """Never finishes a line."""
+
+    async def speak(self, text: str) -> float | None:
+        self.texts.append(text)
+        await asyncio.Event().wait()
+        return None
+
+
+class TickingClock(Clock):
+    """Moves on a quarter of a second every time it's read, so run() gets through a date."""
+
+    def __call__(self) -> float:
+        self.now += 0.25
+        return self.now
 
 
 class FakeModel:
@@ -256,6 +284,27 @@ async def test_a_line_that_never_plays_fails_its_target():
     doors = lines(r, Moment.DOORS_INTRO)[0]
     assert doors.from_cue_ms is None
     assert targets(r.spoken)[0].passed is False
+
+
+async def test_a_voice_error_costs_one_line_never_the_rest_of_the_date():
+    clock = TickingClock()
+    r = rehearsal(clock, BrokenVoice(clock))
+    await r.prepare()
+    await asyncio.wait_for(r.run(every=0), 5)
+    assert r.finished
+    assert r.spoken[1].from_cue_ms is None, "the line the voice failed on never played"
+    assert len(r.spoken) == len(r.speaker.texts) > 10, "every other line was spoken"
+    assert script.RESULT_NOT_MUTUAL in r.speaker.texts, "including the result, at the end"
+    assert targets(r.spoken)[0].passed is False
+
+
+async def test_the_date_ends_and_is_reported_even_if_nova_is_stuck_mid_line():
+    clock = TickingClock()
+    r = rehearsal(clock, StuckVoice(clock))
+    await r.prepare()
+    await asyncio.wait_for(r.run(every=0, final_wait=0.05), 5)
+    assert r.finished
+    assert "Targets" in render_report(r)
 
 
 # --- Chat drives the show ------------------------------------------------------------------

@@ -13,6 +13,7 @@ class Event(StrEnum):
     LINE = "line"  # one line chosen: where it came from, how long it took, what it broke
     PREPARED = "prepared"  # set pieces written before the date
     SPOKEN = "spoken"  # one line played: the delay to Nova's first word (rehearsals)
+    VOICE_ERROR = "voice_error"  # Nova's voice failed on a line, which never played
     ALERT = "alert"  # an alert for the moderator console
     COMMAND = "command"  # a rehearsal chat command (the command only, never its text)
 

@@ -39,6 +39,9 @@ SENTENCE_END_MAX_AGE = 5.0
 # dater's transcripts from the last few seconds are heard together for distress.
 HEARD_TOGETHER = 5.0
 _LEVEL = {Distress.NONE: 0, Distress.MAYBE: 1, Distress.CLEAR: 2}
+# The lines left when the show finishes (the result, the outro, Next up) take well under
+# this. If Nova's voice is stuck mid-line, the date still ends and the report is written.
+FINAL_WAIT = 30.0
 
 
 class Command(StrEnum):
@@ -194,15 +197,17 @@ class Rehearsal:
     def tick(self) -> None:
         self._queue_cues(self._runner.tick(self._clock()))
 
-    async def run(self, *, every: float = 0.25) -> None:
-        """Runs the date to the end: ticks the show and speaks every line in order."""
+    async def run(self, *, every: float = 0.25, final_wait: float = FINAL_WAIT) -> None:
+        """Runs the date to the end: ticks the show and speaks every line in order. Once the
+        show has finished, the last lines get up to final_wait seconds to play."""
         self.start()
         speaking = asyncio.create_task(self._speak_forever())
         try:
             while not self.finished:
                 self.tick()
                 await asyncio.sleep(every)
-            await self._queue.join()
+            with contextlib.suppress(TimeoutError):  # Nova is stuck: the date ends anyway
+                await asyncio.wait_for(self._queue.join(), final_wait)
         finally:
             speaking.cancel()
             self._ended_at = self._clock()
@@ -331,7 +336,11 @@ class Rehearsal:
         try:
             picked = self._clock()
             line = await item.line
-            started = await self.speaker.speak(line.text)
+            try:
+                started = await self.speaker.speak(line.text)
+            except Exception:  # the voice failed: this line never played, the date goes on
+                started = None
+                self._events.emit(Event.VOICE_ERROR, moment=line.moment)
             self.characters_spoken += len(line.text)
             spoken = Spoken(
                 moment=line.moment,
