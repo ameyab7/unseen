@@ -31,9 +31,9 @@ and passed or failed.
   fallbacks.
 - **Live reaction:** a line the model writes during the date: a silence prompt, an audience
   question, talk to the room.
-- **Reply:** Nova's first line after a dater speaks to Nova: a reply, or the kind line
-  when they want to stop. **End of their sentence** is when the voice detector hears them
-  stop, not when the transcript arrives.
+- **Reply:** Nova's first line after a dater speaks: a reply when they speak to Nova, or
+  the kind line when they want to stop, whoever they say it to. **End of their sentence**
+  is when the voice detector hears them stop, not when the transcript arrives.
 
 ### Suggested changes, not applied
 

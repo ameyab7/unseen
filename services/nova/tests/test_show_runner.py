@@ -514,6 +514,26 @@ def test_words_that_may_be_distress_alert_the_moderator_and_nova_answers_as_usua
     assert (240.0, "from_the_room") in show.segments(), "the show clock never stopped"
 
 
+@pytest.mark.parametrize("words", ["I want to stop.", "Theo, I'm not comfortable."])
+def test_a_dater_who_wants_to_stop_is_heard_even_when_not_talking_to_nova(words):
+    show = Show()
+    assert show.at(100, "dater_said", LEFT, words) == [DISTRESSED, KIND, PAUSE_TALK]
+    show.until(119.5)
+    assert show.cues(since=100.5, before=120) == [], "the show holds, as for a moment"
+
+
+def test_words_not_to_nova_that_may_be_distress_alert_the_moderator_and_get_no_reply():
+    show = Show()
+    assert show.at(100, "dater_said", LEFT, "Honestly I'm scared.") == [MAYBE_DISTRESSED]
+
+
+def test_ordinary_words_not_to_nova_change_nothing():
+    show = Show()
+    assert show.at(100, "dater_said", LEFT, "I think tea, honestly.") == []
+    show.until(300)
+    assert (240.0, "from_the_room") in show.segments(), "the show clock never stopped"
+
+
 def test_after_a_distress_pause_the_usual_pause_rules_apply():
     show = Show()
     show.at(100, "dater_asked_nova", LEFT, "I'm not comfortable.")

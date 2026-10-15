@@ -264,16 +264,19 @@ class ShowRunner:
         may be distress ("help") alert the moderator, and Nova answers as usual."""
         cues = self._advance(now)
         distress = distress_in(words)
+        cues += self._distress(now, seat, distress)
         if distress is Distress.CLEAR:
-            cues.append(AlertModerator(ModeratorAlert.DATER_DISTRESSED, seat))
-            if self._can_pause:
-                cues += self._pause(now, seat, script.DISTRESS_PAUSE)
             return cues
-        if distress is Distress.MAYBE:
-            cues.append(AlertModerator(ModeratorAlert.POSSIBLE_DISTRESS, seat))
         if self._live and self._held_since is None and self.segment in ON_AIR:
             cues.append(Say(Moment.REPLY, about=seat, detail=words))
         return cues
+
+    def dater_said(self, now: float, seat: Seat, words: str) -> list[Cue]:
+        """What a dater said on air that wasn't to Nova: to the other dater, or to nobody.
+        Nova doesn't answer, but distress is heard in it just as in dater_asked_nova, since a
+        dater who wants to stop won't always say so to Nova."""
+        cues = self._advance(now)
+        return cues + self._distress(now, seat, distress_in(words))
 
     # --- Internals ------------------------------------------------------------------------
 
@@ -295,6 +298,18 @@ class ShowRunner:
         if self._pauses[seat] > 1:
             cues.append(AlertModerator(ModeratorAlert.REPEATED_PAUSE, seat))
         return cues
+
+    def _distress(self, now: float, seat: Seat, distress: Distress) -> list[Cue]:
+        """Clear: the moderator is alerted, and if a pause can start, Nova says the kind line
+        and pauses for the dater. Maybe: the moderator is alerted."""
+        if distress is Distress.CLEAR:
+            cues: list[Cue] = [AlertModerator(ModeratorAlert.DATER_DISTRESSED, seat)]
+            if self._can_pause:
+                cues += self._pause(now, seat, script.DISTRESS_PAUSE)
+            return cues
+        if distress is Distress.MAYBE:
+            return [AlertModerator(ModeratorAlert.POSSIBLE_DISTRESS, seat)]
+        return []
 
     def _room_talk(self) -> Say:
         """Nova talks to the room, working only from safe facts about the show."""

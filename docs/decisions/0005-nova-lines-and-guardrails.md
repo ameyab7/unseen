@@ -22,7 +22,10 @@ Date: 2026-10-13. Status: accepted.
   text can't reach the room through them. The product owner signed them all off on
   2026-10-13.
 - **A dater who wants to stop is never deflected.** Before any reply, `distress_in` hears
-  what a dater said to Nova at one of two levels:
+  everything a dater says on air, to Nova or to the other dater, at one of two levels.
+  Speech-to-text often splits a sentence at a pause ("Nova," then "I want to stop."), so
+  each final transcript is joined with the same dater's last five seconds, and an alert is
+  raised only when the joined words sound worse than they did before:
   - **Clear** ("I want to stop", "I'm not comfortable", "can we end this", "I need a
     moment"): the show runner alerts the moderator at once (`dater_distressed`), and if a
     pause can start, Nova says "Of course. Let's take a breather." and starts a
@@ -31,12 +34,13 @@ Date: 2026-10-13. Status: accepted.
     deciding), Nova says nothing and the moderator acts. The model never sees those words,
     so "I'll stay out of that one" is never the answer.
   - **Maybe** ("help", "I'm scared", "that's not okay"): the moderator is alerted
-    (`possible_distress`) and Nova answers as usual, so "can you help us pick a topic?"
-    gets a normal reply. If the model fails, Nova says "Take all the time you need.",
+    (`possible_distress`) and, if the dater spoke to Nova, Nova answers as usual, so "can
+    you help us pick a topic?" gets a normal reply. If the model fails, Nova says "Take all the time you need.",
     never "I'll stay out of that one" (signed off by the product owner on 2026-10-13).
 
   Both lean towards hearing distress: a false alarm costs a breather or a look from the
-  moderator.
+  moderator. Hearing everything, not only words to Nova, makes false alarms likelier ("I
+  want to stop eating sugar" is heard as clear); the first rehearsals will show how often.
 - **Lines vary across the night.** Listeners hear every date, so Nova remembers every line
   it has used tonight, across dates (`nova/tonight.py`). Every prompt sees the lines
   already said for its moment (daters' names masked, so no earlier dater's name reaches a
@@ -92,7 +96,7 @@ fallback line, never an unsafe one.
 | Unkind | A short list of insults (stupid, pathetic, desperate, creepy, shut up) | Sarcasm, tone, mockery without those words |
 | Instructions | Talk of instructions, rules, the system, data, prompts, angle brackets, "I was told"; Nova claiming any name but Nova ("I'm Kate", "call me Kate") | An injection that steers Nova into an ordinary-looking line, such as an untrue but harmless claim about a dater |
 | Voice and format | Exclamation marks, emoji, symbols, markdown, length (characters and sentences), names in the wrong case; the model's outro is one sentence with no question; a lightning question is one sentence and doesn't open with both daters' names | Tone, wrong pronouns, a question ending in a full stop (handled by the instructions only) |
-| A dater who wants to stop (what they say to Nova, not Nova's line) | Clear: wanting to stop, end or leave, needing a moment or a break, not comfortable, safe or well, overwhelmed, a panic attack, harassment. Maybe: "help", scared, upset, anxious, crying, creepy, inappropriate, "that's not okay" | Distress said to the other dater rather than to Nova, worded another way ("I'd rather be anywhere else"), or heard only in a voice |
+| A dater who wants to stop (what a dater says on air, not Nova's line) | Clear: wanting to stop, end or leave, needing a moment or a break, not comfortable, safe or well, overwhelmed, a panic attack, harassment. Maybe: "help", scared, upset, anxious, crying, creepy, inappropriate, "that's not okay" | Distress worded another way ("I'd rather be anywhere else"), heard only in a voice, or split across transcripts more than five seconds apart |
 
 Before the model, audience questions about personal details or looks, or that try to give
 Nova instructions, are declined with a fixed line. This can't catch cleverly worded ones

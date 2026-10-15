@@ -7,7 +7,7 @@ import pytest
 
 from nova import script
 from nova.cards import Seat
-from nova.cues import Moment
+from nova.cues import AlertModerator, ModeratorAlert, Moment
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
 from nova.lines import Source
 from nova.rehearsal import (
@@ -93,6 +93,10 @@ async def started(clock: Clock, **options) -> Rehearsal:
 
 def lines(r: Rehearsal, moment: Moment) -> list[Spoken]:
     return [s for s in r.spoken if s.moment is moment]
+
+
+def alerts(r: Rehearsal) -> list[ModeratorAlert]:
+    return [cue.alert for cue in r.cues if isinstance(cue, AlertModerator)]
 
 
 # --- Chat commands: one browser plays both daters ------------------------------------------
@@ -190,6 +194,60 @@ async def test_a_dater_who_wants_to_stop_gets_the_kind_line_measured_as_a_reply(
     assert kind.kind is Kind.REPLY and r.speaker.texts[-2] == script.DISTRESS_PAUSE
     assert lines(r, Moment.ROOM_TALK)[0].kind is Kind.LIVE
     assert r.alerts == 1
+
+
+async def heard(r: Rehearsal, clock: Clock, *transcripts: tuple[float, str]) -> None:
+    """Final transcripts from the speaking dater, each at its time, then Nova speaks."""
+    for at, text in transcripts:
+        clock.now = at
+        r.speech_ended()
+        r.transcript(text)
+        await r.speak_queued()
+
+
+async def test_a_dater_who_wants_to_stop_is_heard_without_saying_nova():
+    clock = Clock()
+    r = await started(clock)
+    await heard(r, clock, (40.0, "I want to stop. I'm not comfortable."))
+    assert r.alerts == 1
+    kind = lines(r, Moment.NEED_A_MOMENT)[0]
+    assert kind.kind is Kind.REPLY, "Nova's first line after the dater spoke"
+    assert script.DISTRESS_PAUSE in r.speaker.texts
+
+
+@pytest.mark.parametrize(
+    "split",
+    [("Nova,", "I want to stop."), ("I'm not", "comfortable."), ("Help, I can't", "do this.")],
+)
+async def test_a_sentence_split_across_transcripts_is_heard_whole(split):
+    clock = Clock()
+    r = await started(clock)
+    await heard(r, clock, (40.0, split[0]), (41.5, split[1]))
+    assert script.DISTRESS_PAUSE in r.speaker.texts
+    assert ModeratorAlert.DATER_DISTRESSED in alerts(r)
+
+
+async def test_only_the_same_daters_last_few_seconds_are_joined():
+    clock = Clock()
+    r = await started(clock)
+    await heard(r, clock, (40.0, "I'm not"), (50.0, "comfortable."))
+    r.command("theo")
+    await heard(r, clock, (60.0, "I'm not"))
+    r.command("maya")
+    await heard(r, clock, (61.0, "comfortable."))
+    assert alerts(r) == []
+    assert script.DISTRESS_PAUSE not in r.speaker.texts
+
+
+async def test_distress_already_heard_is_not_raised_again_when_more_words_join_it():
+    clock = Clock()
+    r = await started(clock)
+    await heard(r, clock, (40.0, "Help."), (41.0, "With the dishes, I mean."))
+    assert alerts(r) == [ModeratorAlert.POSSIBLE_DISTRESS]
+    await heard(r, clock, (42.0, "Actually, I want to stop."))
+    assert alerts(r) == [ModeratorAlert.POSSIBLE_DISTRESS, ModeratorAlert.DATER_DISTRESSED]
+    await heard(r, clock, (43.0, "Sorry."))
+    assert len(alerts(r)) == 2, "heard and acted on: not raised again"
 
 
 async def test_a_line_that_never_plays_fails_its_target():

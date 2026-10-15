@@ -24,6 +24,7 @@ from nova.cards import Pair, Seat
 from nova.cues import AlertModerator, Cue, Moment, Say, StopSpeaking
 from nova.decisions import Choice, DecisionError, InMemoryDecisionDesk
 from nova.events import Event, EventLog
+from nova.guardrails import Distress, distress_in
 from nova.lines import LIVE_REACTIONS, Line, LineWriter, Source
 from nova.models import LineModel
 from nova.questions import AudienceQuestion, QuestionStatus
@@ -34,6 +35,10 @@ from nova.tonight import Tonight
 ADDRESSES_NOVA = re.compile(r"\bnova\b", re.IGNORECASE)
 # A sentence end older than this isn't the one a transcript belongs to.
 SENTENCE_END_MAX_AGE = 5.0
+# Speech-to-text often splits a sentence at a pause ("Nova," then "I want to stop."), so a
+# dater's transcripts from the last few seconds are heard together for distress.
+HEARD_TOGETHER = 5.0
+_LEVEL = {Distress.NONE: 0, Distress.MAYBE: 1, Distress.CLEAR: 2}
 
 
 class Command(StrEnum):
@@ -152,6 +157,7 @@ class Rehearsal:
         )
         self._queue: asyncio.Queue[_Pending] = asyncio.Queue()
         self._last_sentence_end: float | None = None
+        self._recent: list[tuple[float, Seat, str]] = []  # the last few seconds of transcripts
         self._started_at: float | None = None
         self._ended_at: float | None = None
 
@@ -252,18 +258,41 @@ class Rehearsal:
         self._last_sentence_end = self._clock()
 
     def transcript(self, text: str) -> None:
-        """A final transcript of what the speaking dater said. Words that address Nova get a
-        reply, measured from the end of their sentence. Never stored or logged."""
-        if not ADDRESSES_NOVA.search(text):
-            return
-        now = self._clock()
+        """A final transcript of what the speaking dater said, to Nova or not. Held in memory
+        for a few seconds, never stored or logged.
+
+        Distress comes first and is heard in everything a dater says, joined with their own
+        last few seconds so a sentence split across transcripts is heard whole. It's raised
+        only when the words sound worse than they did, so joining never repeats an alert.
+        Then words that address Nova get a reply. Nova's first line either way is measured
+        from the end of their sentence."""
+        now, seat = self._clock(), self.seat
         self._queue_cues(self._runner.tick(now))  # beats already due aren't replies
+        before = distress_in(self._recent_words(now, seat))
+        self._recent.append((now, seat, text))
+        # Joined first; the transcript alone only if it sounds worse on its own.
+        words = max((self._recent_words(now, seat), text), key=lambda w: _LEVEL[distress_in(w)])
+        distress = distress_in(words)
+        rose = _LEVEL[distress] > _LEVEL[before]
+        if ADDRESSES_NOVA.search(text):
+            cues = self._runner.dater_asked_nova(now, seat, words if rose else text)
+        elif rose:
+            cues = self._runner.dater_said(now, seat, words)
+        else:
+            return
+        if distress is Distress.CLEAR:  # heard and acted on: what they say next is new
+            self._recent = [r for r in self._recent if r[1] is not seat]
         ended = self._last_sentence_end
         if ended is None or now - ended > SENTENCE_END_MAX_AGE:
             ended = now
-        self._queue_cues(self._runner.dater_asked_nova(now, self.seat, text), sentence_end=ended)
+        self._queue_cues(cues, sentence_end=ended)
 
     # --- Internals --------------------------------------------------------------------------
+
+    def _recent_words(self, now: float, seat: Seat) -> str:
+        """What this dater said in the last few seconds, oldest first."""
+        self._recent = [r for r in self._recent if now - r[0] <= HEARD_TOGETHER]
+        return " ".join(text for _, said_by, text in self._recent if said_by is seat)
 
     def _queue_cues(self, cues: Iterable[Cue], *, sentence_end: float | None = None) -> None:
         now = self._clock()
