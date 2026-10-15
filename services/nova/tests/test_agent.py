@@ -5,7 +5,28 @@ import asyncio
 import logging
 from types import SimpleNamespace
 
-from nova.agent import START_OPTIONS, RedactPii, SessionSpeaker, voice_parts
+from nova.agent import START_OPTIONS, RedactPii, SessionSpeaker, new_session, voice_parts
+from nova.config import LlmChoice, Settings
+
+SETTINGS = Settings(
+    livekit_url="wss://example.invalid",
+    livekit_api_key="test-key",
+    livekit_api_secret="test-secret",
+    llm=LlmChoice("ollama", "gemma"),
+)
+
+
+async def test_daters_audio_goes_to_speech_recognition_and_no_other_livekit_service(monkeypatch):
+    """Every rehearsal runs in dev mode, where LiveKit's defaults would also stream daters'
+    audio to its cloud turn detector and to its adaptive barge-in service. Nova never takes
+    turns from speech and can't be talked over, so the local voice detector decides turns
+    and interruptions are off, which means LiveKit never creates the barge-in detector."""
+    monkeypatch.setenv("LIVEKIT_DEV_MODE", "1")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "test-key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "test-secret")
+    session = new_session(SETTINGS)
+    assert session.turn_detection == "vad", "not the cloud turn detector"
+    assert session.options.interruption["enabled"] is False
 
 
 def test_recording_is_off_so_nothing_reaches_livekit_cloud_observability():

@@ -9,9 +9,10 @@ type commands in the chat box (nova/rehearsal.py, Command): maya, theo, moment, 
 unlock, ask <question>, reveal, unseen, keep, resume, end, leave. At the end the report
 (codes and numbers only) is logged and saved in services/nova/rehearsals/.
 
-Privacy (CLAUDE.md): recording is off, so LiveKit Cloud keeps no audio, transcripts or
-traces; LiveKit's own log fields that carry what people said (lk.pii.*) are redacted; and
-what daters say or type stays in memory.
+Privacy (CLAUDE.md): daters' audio goes to speech recognition and no other LiveKit service;
+recording is off, so LiveKit Cloud keeps no audio, transcripts or traces; LiveKit's own log
+fields that carry what people said (lk.pii.*) are redacted; and what daters say or type
+stays in memory.
 """
 
 import asyncio
@@ -24,9 +25,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference, room_io
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    TurnHandlingOptions,
+    cli,
+    inference,
+    room_io,
+)
 
-from nova.config import load_settings
+from nova.config import Settings, load_settings
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
 from nova.models import build_model
 from nova.rehearsal import Rehearsal, render_report
@@ -35,6 +45,11 @@ from nova.timing import REHEARSAL
 logger = logging.getLogger("nova.agent")
 
 START_OPTIONS: dict[str, Any] = {"record": False}
+# Daters' audio goes to speech recognition and nothing else. In dev mode LiveKit's defaults
+# would also stream it to its cloud turn detector and its adaptive barge-in service. Nova
+# never takes turns from speech and can't be talked over, so the local voice detector
+# decides turns, and with interruptions off LiveKit never creates the barge-in detector.
+TURN_HANDLING: TurnHandlingOptions = {"turn_detection": "vad", "interruption": {"enabled": False}}
 REPORTS = Path(__file__).parents[1] / "rehearsals"  # never committed
 REDACTED = "[redacted]"
 
@@ -94,6 +109,15 @@ class SessionSpeaker:
         self._session.interrupt(force=True)
 
 
+def new_session(settings: Settings) -> AgentSession:
+    model, voice = voice_parts(settings.voice)
+    return AgentSession(
+        stt=inference.STT(settings.stt, language="en"),
+        tts=inference.TTS(model, voice=voice) if voice else inference.TTS(model),
+        turn_handling=TURN_HANDLING,
+    )
+
+
 server = AgentServer()
 
 
@@ -101,11 +125,7 @@ server = AgentServer()
 async def rehearse(ctx: JobContext) -> None:
     redact_logs()
     settings = load_settings()
-    model, voice = voice_parts(settings.voice)
-    session = AgentSession(
-        stt=inference.STT(settings.stt, language="en"),
-        tts=inference.TTS(model, voice=voice) if voice else inference.TTS(model),
-    )
+    session = new_session(settings)
     rehearsal = Rehearsal(
         REHEARSAL_PAIR,
         model=build_model(settings),
