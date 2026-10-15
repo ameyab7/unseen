@@ -39,7 +39,9 @@ Date: 2026-10-13. Status: accepted.
   closes, gestures stop counting toward the unlock, and the app says so before anyone pays.
 - **After the moderator ends a date,** Nova says only the approved closing line, then the
   recorded fallback segment from the technical plan plays until the moderator chooses what
-  happens next. The room never sits in silence.
+  happens next. The room never sits in silence. (Not yet in the Agents Playground
+  rehearsal, which plays Nova's lines only: no sounds, voice intros or fallback segment;
+  see `docs/spike-results.md`.)
 - **Fairness:** who answers first (first question, last word) is chosen at random for each
   date, and the long-silence prompt is an open one to both daters, so nobody is singled out
   for being quiet.

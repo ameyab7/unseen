@@ -35,6 +35,14 @@ and passed or failed.
   the kind line when they want to stop, whoever they say it to. **End of their sentence**
   is when the voice detector hears them stop, not when the transcript arrives.
 
+### What the rehearsal leaves out
+
+The rehearsal plays Nova's lines and nothing else. It skips the show's sounds (the
+on-air notes as a date starts, the time's-up notes), the daters' voice intros and the
+recorded fallback segment. So after the moderator ends the date (`end`), the room goes
+silent, unlike decision 0004. That's acceptable for a spike that measures Nova's timing;
+the agent for real shows has to play all three.
+
 ### Suggested changes, not applied
 
 These came before any rehearsal. The targets above stay as set unless the product owner
