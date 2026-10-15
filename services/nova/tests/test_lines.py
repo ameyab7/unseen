@@ -466,12 +466,13 @@ async def test_questions_about_personal_details_or_looks_are_declined_without_th
     assert model.prompts == []
 
 
-async def test_if_the_model_fails_an_audience_question_is_read_as_approved_when_safe():
-    w = writer(FakeModel(error=RuntimeError("down")))
-    safe = await w.line_for(Say(Moment.FROM_THE_ROOM, detail="Mountains or sea?"))
-    assert safe.text == "A question from the room. Mountains or sea?"
-    unsafe = await w.line_for(Say(Moment.FROM_THE_ROOM, detail="Have you been to Lisbon, Theo?"))
-    assert unsafe.text == script.from_the_room_fallback(REHEARSAL_PAIR)
+@pytest.mark.parametrize("model", [FakeModel(error=RuntimeError("down")), FakeModel("Hi!")])
+async def test_if_the_model_fails_nova_never_reads_the_question_itself(model):
+    """Fallbacks are never built from free text (decision 0005), so not even an approved
+    audience question is read word for word."""
+    line = await writer(model).line_for(Say(Moment.FROM_THE_ROOM, detail="Sing or dance?"))
+    assert line.source is Source.FALLBACK
+    assert line.text == "Room, keep the questions coming. Maya, Theo, back to you."
 
 
 # --- Every fallback line passes the guardrails --------------------------------------------

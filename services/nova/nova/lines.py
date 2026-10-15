@@ -290,11 +290,8 @@ class LineWriter:
         return self._fallback(say, attempt)
 
     def _fallback(self, say: Say, attempt: Attempt) -> Line:
-        """The first fallback that passes the guardrails; the last one always does."""
-        options = self._fallbacks_for(say)
-        chosen = next((o for o in options[:-1] if not self._check(say, o)), options[-1])
         return Line(
-            chosen,
+            self._fallback_for(say),
             Source.FALLBACK,
             say.moment,
             violations=attempt.violations,
@@ -302,39 +299,37 @@ class LineWriter:
             ms=attempt.ms,
         )
 
-    def _fallbacks_for(self, say: Say) -> Sequence[str]:
+    def _fallback_for(self, say: Say) -> str:
+        """An approved fallback line, never built from what a dater or listener said."""
         pair = self._pair
         match say.moment:
             case Moment.DOORS_INTRO:
-                return [script.doors_fallback(pair)]
+                return script.doors_fallback(pair)
             case Moment.FIRST_QUESTION:
-                return [script.first_question_fallback(pair.card(_seat(say)))]
+                return script.first_question_fallback(pair.card(_seat(say)))
             case Moment.LIGHTNING_QUESTION:
                 n, total = _lightning_position(say)
                 # "Last quick one: ..." only ever comes last.
                 options = [
                     o for o in script.LIGHTNING_FALLBACKS if n == total or not o.startswith("Last")
                 ]
-                return [self._least_like_tonight(say, options)]
+                return self._least_like_tonight(say, options)
             case Moment.LAST_WORD:
-                return [script.last_word_fallback(pair.card(_seat(say)))]
+                return script.last_word_fallback(pair.card(_seat(say)))
             case Moment.OUTRO:
-                return [self._least_like_tonight(say, script.outro_fallbacks(pair))]
+                return self._least_like_tonight(say, script.outro_fallbacks(pair))
             case Moment.NEXT_UP:
-                return [script.next_up_fallback(self._next_pair or pair)]
+                return script.next_up_fallback(self._next_pair or pair)
             case Moment.SILENCE:
-                return [self._least_like_tonight(say, script.silence_fallbacks(pair))]
+                return self._least_like_tonight(say, script.silence_fallbacks(pair))
             case Moment.FROM_THE_ROOM:
-                return [
-                    script.from_the_room_verbatim(say.detail or ""),
-                    script.from_the_room_fallback(pair),
-                ]
+                return script.from_the_room_fallback(pair)
             case Moment.ROOM_TALK:
-                return [script.ROOM_TALK_FALLBACK]
+                return script.ROOM_TALK_FALLBACK
             case Moment.REPLY:
                 if distress_in(say.detail or "") is not Distress.NONE:
-                    return [script.TAKE_YOUR_TIME]  # never "I'll stay out of that one"
-                return [script.REPLY_FALLBACK]
+                    return script.TAKE_YOUR_TIME  # never "I'll stay out of that one"
+                return script.REPLY_FALLBACK
         raise ValueError(f"No fallback for {say.moment}")
 
     def _least_like_tonight(self, say: Say, options: Sequence[str]) -> str:

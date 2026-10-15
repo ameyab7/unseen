@@ -105,11 +105,6 @@ def silence_fallbacks(pair: Pair) -> tuple[str, str, str]:
     )
 
 
-def from_the_room_verbatim(question: str) -> str:
-    """A moderator-approved question read as approved. Still checked by the guardrails."""
-    return f"A question from the room. {question}"
-
-
 def from_the_room_fallback(pair: Pair) -> str:
     return (
         f"Room, keep the questions coming. "
