@@ -9,6 +9,7 @@ from nova.guardrails import (
     check,
     clean,
     question_is_off_limits,
+    slot_words,
 )
 
 NAMES = frozenset({"Maya", "Theo", "Nova"})
@@ -404,3 +405,46 @@ def test_nova_never_claims_another_name(line):
 
 def test_nova_may_say_it_is_nova():
     assert found("I'm Nova, the AI host. Over to you, Maya.") == set()
+
+
+# --- Personal details in lowercase speech ---------------------------------------------------
+# Speech-to-text often doesn't capitalise, so a workplace or street a dater names comes in
+# lowercase. Words after a cue like "work at" or "my insta is" never come back in a line.
+
+SLOT_SPEECH = [
+    ("nova i work at northwind bank come say hi", "Northwind sounds like a busy place, Maya."),
+    ("i live on harbour street by the water", "Harbour views, Maya? Back to you both."),
+    ("i studied at st marys", "Marys? Lovely. Back to you, Theo."),
+    ("my insta is maya dot bakes", "Bakes, Maya? Back to you both."),
+    ("my company's called brightloop", "Brightloop sounds fun, Maya. Back to you both."),
+]
+
+
+@pytest.mark.parametrize(("said", "line"), SLOT_SPEECH)
+def test_a_detail_said_in_lowercase_never_comes_back_in_a_line(said, line):
+    assert V.PERSONAL_DETAIL in set(check(line, names=NAMES, echo_from=[said]))
+
+
+def test_slot_words_stop_at_punctuation_or_a_function_word_and_skip_daters_names():
+    assert slot_words(["i work at northwind bank, come say hi"]) == {"northwind", "bank"}
+    assert slot_words(["i work at the bakery by the station"]) == {"bakery"}
+    assert slot_words(["my insta is maya dot bakes"], NAMES) == {"dot", "bakes"}
+    assert slot_words(["i live in lisbon now"]) == set(), "a city is fine"
+    assert slot_words(["I want to work forwards, honestly"]) == set()
+
+
+def test_an_ordinary_phrase_a_dater_said_can_still_be_echoed():
+    line = "Your favourite film? Big question. Back to you both."
+    assert check(line, names=NAMES, echo_from=["nova my favourite film is a hard one"]) == ()
+
+
+def test_a_phone_number_read_out_in_words_is_caught():
+    assert V.PERSONAL_DETAIL in found("Maya, is it five five five, one two three four?")
+    assert V.PERSONAL_DETAIL in found("Theo, double seven, one, two? Back to you.")
+    assert found("Two or three coffees a day, Theo?") == set()
+    assert found("Maya, twenty-nine, meet Theo, thirty-one.") == set()
+
+
+def test_a_question_with_a_number_in_words_is_off_limits():
+    assert question_is_off_limits("Maya, is your number five five five one two three four?")
+    assert not question_is_off_limits("Two or three coffees a day, Theo?")

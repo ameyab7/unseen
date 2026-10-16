@@ -526,6 +526,15 @@ async def test_nova_never_repeats_a_workplace_or_handle_a_dater_said_on_air():
     assert {Violation.PERSONAL_DETAIL, Violation.UNKNOWN_NAME} <= set(line.violations)
 
 
+async def test_nova_never_repeats_a_workplace_said_in_lowercase():
+    """Speech-to-text often doesn't capitalise, and the line puts the word first, where
+    the unknown-name check doesn't look."""
+    said = "nova i work at northwind bank come say hi"
+    model = FakeModel("Northwind sounds like a busy place, Maya. Back to you both.")
+    line = await writer(model).line_for(Say(Moment.REPLY, about=LEFT, detail=said))
+    assert line.source is Source.FALLBACK and Violation.PERSONAL_DETAIL in line.violations
+
+
 async def test_nova_never_echoes_a_name_from_what_a_dater_said_even_to_open_a_line():
     said = "Nova, I work at Northwind, come say hi."
     model = FakeModel("Northwind sounds lovely, Maya. Back to you two.")

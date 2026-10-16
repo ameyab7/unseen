@@ -131,9 +131,20 @@ INSTRUCTIONS = _any(
 # Case-sensitive, and run before names are masked, so "I'm Nova" is fine.
 OTHER_NAME = re.compile(r"\b(?:I'm|I am|[Mm]y name is|[Mm]y name's|[Cc]all me)\s+(?!Nova\b)[A-Z]")
 
+# Number words, for a phone number or address read out: three or more in a row ("five five
+# five, one two three four", "double seven"), never "two or three".
+_DIGIT_WORD = r"(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)"
+_NUMBER_WORD = (
+    rf"(?:(?:double|triple)\s+{_DIGIT_WORD}|{_DIGIT_WORD}|ten|eleven|twelve|thirteen|fourteen"
+    r"|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy"
+    r"|eighty|ninety|hundred)"
+)
+SPELLED_NUMBER = rf"\b{_NUMBER_WORD}(?:[\s,.-]+{_NUMBER_WORD}){{2,}}\b"
+
 # Never repeat a workplace, address, surname, school, phone number or social handle.
 PERSONAL_DETAIL = _any(
     r"(?:\+?\d[\s().-]*){7,}",  # phone numbers
+    SPELLED_NUMBER,
     r"\b\d{3,}\b",  # house numbers, postcodes, any long number
     r"\b[\w.+-]+@[\w-]+\.[\w.-]+",  # email
     r"(?<!\w)@\w+",  # social handle
@@ -154,6 +165,36 @@ PERSONAL_DETAIL = _any(
     r"\b(?:local|favou?rite)\s+(?:spot|place|bar|pub|cafe|café|restaurant|hangout|haunt"
     r"|neighbou?rhood)\b",
 )
+# What identifies a dater in what they said, capitalised or not (speech-to-text often
+# doesn't capitalise): up to SLOT_WORDS words after one of these cues, stopping at
+# punctuation or a function word. "i work at northwind bank" gives northwind and bank.
+SLOT_CUE = _any(
+    r"\b(?:work|works|worked|working)\s+(?:at|for)\b",
+    r"\bemployed\s+by\b",
+    r"\bmy\s+(?:job|boss|office)(?:\s+is)?\s+at\b",
+    r"\b(?:live|lives|lived|living)\s+(?:on|at|near)\b",  # not "in": a city is fine
+    r"\bmy\s+(?:street|address|school|postcode)\s+is\b",
+    r"\b(?:study|studied|studying)\s+at\b",
+    r"\bmy\s+(?:insta|instagram|handle|snap|number|email|surname|last name)\s+is\b",
+    r"\bmy\s+(?:company|business|shop|school|street|building)(?:'s|\s+is)?\s+(?:called|named)\b",
+)
+SLOT_WORDS = 3
+SLOT_TOKEN = re.compile(r"[^\W_]+(?:'[^\W_]+)*|[^\w\s]")  # a word, or one punctuation mark
+SLOT_SKIPPED = frozenset({"the", "a", "an"})  # before the slot: "at the northwind bank"
+FUNCTION_WORDS = frozenset((
+    "the", "a", "an", "and", "or", "but", "so", "because", "if", "then", "than", "as",
+    "with", "without", "to", "in", "on", "at", "for", "of", "by", "from", "near", "into",
+    "onto", "about", "around", "over", "under", "up", "down", "out", "off", "after",
+    "before", "since", "until", "is", "was", "are", "were", "be", "been", "am", "it", "its",
+    "it's", "that", "this", "these", "those", "which", "who", "whom", "whose", "when",
+    "where", "why", "how", "what", "i", "i'm", "you", "he", "she", "we", "they", "me", "him",
+    "her", "us", "them", "my", "your", "his", "our", "their", "not", "no", "yes", "just",
+    "really", "very", "too", "also", "now", "there", "here", "come", "came", "say", "said",
+    "go", "went", "know", "think", "like", "love", "lol", "haha", "um", "uh", "okay", "ok",
+    "well", "anyway", "all", "some", "any", "every", "do", "does", "did", "have", "has",
+    "had", "will", "would", "can", "could", "should",
+))  # fmt: skip
+
 # A street: a capitalised word or a number, then a street word ("Harbour Street", "42 Elm Road").
 STREET = re.compile(
     r"\b(?:\d+|[A-Z][a-z]+)\s+(?i:street|st|road|rd|avenue|ave|lane|ln|boulevard|blvd|drive"
@@ -225,9 +266,11 @@ def check(
     """Every rule the line breaks, in a fixed order. An empty tuple means it may be spoken.
 
     echo_from: what daters or listeners said for this line. Any proper noun in it (a
-    capitalised word mid-sentence that isn't a dater's name) must not come back in the
-    line, wherever it appears: "Northwind sounds lovely" is caught as well as "at Northwind".
-    This holds even for a word that is also on a blind card.
+    capitalised word mid-sentence that isn't a dater's name), and, capitalised or not, any
+    word after a cue like "work at", "live on" or "my insta is" (slot words), must not come
+    back in the line, wherever it appears: "Northwind sounds lovely" is caught as well as
+    "at Northwind", from "I work at Northwind" or "i work at northwind". This holds even
+    for a word that is also on a blind card. The words are never logged.
 
     card_words: names and places from the blind cards of the daters this line is about
     (card_words()), which Nova may say.
@@ -239,7 +282,8 @@ def check(
         return (Violation.EMPTY,)
     found: set[Violation] = set()
     known = _allowed_words(names)  # names and fixed words, never anything a dater wrote
-    echoes = _proper_nouns(echo_from, known)
+    said = list(echo_from)
+    echoes = _proper_nouns(said, known) | slot_words(said, known)
     allowed = known | set(card_words)
 
     if len(text) > max_chars or len(SENTENCE_END.findall(text)) > max_sentences:
@@ -338,6 +382,32 @@ def _allowed_words(names: Collection[str]) -> set[str]:
         | CALENDAR
         | {f"{day}s" for day in DAYS}  # "her Sundays"
     )
+
+
+def slot_words(texts: Iterable[str], known: Collection[str] = ()) -> set[str]:
+    """Words after an identifying cue (SLOT_CUE) in what daters or listeners said,
+    lowercased, whatever their case: up to SLOT_WORDS of them, stopping at punctuation or a
+    function word. Daters' names and other known words are never slot words."""
+    skip = {word.lower() for word in known}
+    found: set[str] = set()
+    for text in texts:
+        plain = text.translate(STRAIGHT_QUOTES)
+        for cue in SLOT_CUE.finditer(plain):
+            taken = 0
+            for token in SLOT_TOKEN.finditer(plain, cue.end()):
+                word = token.group(0).lower()
+                if not word[0].isalnum():
+                    break  # punctuation ends the slot
+                if word in FUNCTION_WORDS:
+                    if taken == 0 and word in SLOT_SKIPPED:
+                        continue
+                    break
+                if word not in skip:
+                    found.add(word.split("'")[0])
+                taken += 1
+                if taken == SLOT_WORDS:
+                    break
+    return found
 
 
 def _proper_nouns(texts: Iterable[str], allowed: set[str]) -> set[str]:
