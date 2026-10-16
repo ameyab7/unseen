@@ -35,6 +35,7 @@ from nova.cues import (
     PlayVoiceIntro,
     PollClosed,
     PollOpened,
+    QuestionSkipped,
     RoomFacts,
     Say,
     Segment,
@@ -45,6 +46,7 @@ from nova.cues import (
 )
 from nova.decisions import DecisionDesk, Outcome
 from nova.distress import Verdict, is_unmistakable
+from nova.guardrails import screen_question
 from nova.questions import AudienceQuestion
 from nova.timing import FULL, Timing
 
@@ -470,11 +472,22 @@ class ShowRunner:
         return Say(Moment.FIRST_QUESTION, about=seat, detail=card.prompts[0].text)
 
     def _audience_question(self, at: float) -> list[Cue]:
-        if not self._questions or self._questions_asked >= AUDIENCE_QUESTIONS:
-            return []
-        self._questions_asked += 1
-        self._quiet_since = at
-        return [Say(Moment.FROM_THE_ROOM, detail=self._questions.popleft())]
+        """The next approved question the screen lets through. One it catches is skipped
+        without a word, since a spoken decline would tell the room a listener asked
+        something off limits: the console gets a code, and the next in the queue takes the
+        slot."""
+        cues: list[Cue] = []
+        while self._questions and self._questions_asked < AUDIENCE_QUESTIONS:
+            question = self._questions.popleft()
+            reasons = screen_question(question)
+            if reasons:
+                cues.append(QuestionSkipped(reasons[0]))
+                continue
+            self._questions_asked += 1
+            self._quiet_since = at
+            cues.append(Say(Moment.FROM_THE_ROOM, detail=question))
+            break
+        return cues
 
     def _lightning_question(self, n: int) -> Say:
         return Say(Moment.LIGHTNING_QUESTION, detail=f"{n} of {LIGHTNING_QUESTIONS}")

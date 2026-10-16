@@ -24,7 +24,10 @@ Date: 2026-10-13. Status: accepted.
   Each names its source; lines not in the brand book or prototype need the product
   owner's sign-off.
 - **Nova reads only moderator-approved audience questions.** Passing the automatic screen
-  for kindness and personal details is not enough; anything not approved is dropped.
+  for kindness and personal details is not enough; anything not approved is dropped. An
+  approved question the screen still catches is skipped without a word, never declined
+  aloud: the console gets a `QuestionSkipped` code, and the next approved question takes
+  the slot (decision 0005).
 - **Need a moment holds the show clock** until that dater is back, so nobody loses their
   last word or decision time; dates run slightly long instead. "And we're back." is said
   only when the dater who paused actually returns. If they aren't back after 30 seconds,

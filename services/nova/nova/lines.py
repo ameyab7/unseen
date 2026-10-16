@@ -105,6 +105,8 @@ def names_for(moment: Moment, pair: Pair, next_pair: Pair | None) -> frozenset[s
 
 @dataclass(frozen=True)
 class Line:
+    """What Nova says for a cue. An empty text: Nova says nothing for it."""
+
     text: str
     source: Source
     moment: Moment
@@ -139,7 +141,6 @@ def fallback_lines(pair: Pair, next_pair: Pair | None) -> list[tuple[Moment, str
         *((Moment.OUTRO, o) for o in script.outro_fallbacks(pair)),
         *((Moment.SILENCE, s) for s in script.silence_fallbacks(pair)),
         (Moment.FROM_THE_ROOM, script.from_the_room_fallback(pair)),
-        (Moment.FROM_THE_ROOM, script.DECLINE_QUESTION),
         (Moment.ROOM_TALK, script.ROOM_TALK_FALLBACK),
         (Moment.REPLY, script.REPLY_FALLBACK),
         (Moment.REPLY, script.TAKE_YOUR_TIME),
@@ -264,10 +265,8 @@ class LineWriter:
         if say.moment not in LIVE_REACTIONS:
             raise ValueError(f"No line for {say.moment}: it needs approved text")
 
-        if self._declines(say):
-            return Line(
-                script.DECLINE_QUESTION, Source.FALLBACK, say.moment, error=ErrorKind.DECLINED
-            )
+        if self._declines(say):  # the runner skips these; if one gets here, say nothing
+            return Line("", Source.FALLBACK, say.moment, error=ErrorKind.DECLINED)
 
         attempt = await self._attempt(say, self._prompt_for(say), self._live_timeout)
         return self._settle(say, attempt, Source.MODEL)
@@ -291,8 +290,10 @@ class LineWriter:
         self._planned[_key(say)] = self._tonight.plan(say.moment, line.text, names=self._names)
 
     def _declines(self, say: Say) -> bool:
-        """Audience questions about personal details or looks, or that try to instruct Nova,
-        are declined with a fixed line before the model sees them."""
+        """Audience questions the screen holds back (personal details, looks, instructions
+        to Nova) never reach the model. The show runner skips them on air; Nova never
+        declines one aloud, which would tell the room a listener asked something off
+        limits."""
         return say.moment is Moment.FROM_THE_ROOM and question_is_off_limits(say.detail or "")
 
     async def _prepare_one(self, say: Say) -> Line:
@@ -361,7 +362,9 @@ class LineWriter:
         )
 
     def _fallback_for(self, say: Say) -> str:
-        """An approved fallback line, never built from what a dater or listener said."""
+        """An approved fallback line, never built from what a dater or listener said (one
+        exception is proposed, behind a switch that's off: an approved audience question,
+        framed)."""
         pair = self._pair
         match say.moment:
             case Moment.DOORS_INTRO:
@@ -384,6 +387,12 @@ class LineWriter:
             case Moment.SILENCE:
                 return self._least_like_tonight(say, script.silence_fallbacks(pair))
             case Moment.FROM_THE_ROOM:
+                # Proposed, off until sign-off: the approved question, framed, if that
+                # passes the guardrails (docs/sign-off/2026-10-audience-questions.md).
+                if script.READ_APPROVED_QUESTION_ON_FAILURE and say.detail:
+                    framed = script.from_the_room_framed(say.detail)
+                    if not self._check(say, framed):
+                        return framed
                 return script.from_the_room_fallback(pair)
             case Moment.ROOM_TALK:
                 return script.ROOM_TALK_FALLBACK

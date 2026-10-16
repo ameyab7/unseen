@@ -17,11 +17,16 @@ Date: 2026-10-13. Status: accepted.
   one instruction we wrote, naming daters by seat, then one `<data>` block of JSON with
   angle brackets and ampersands escaped: blind cards, audience questions and what daters
   said. The data is normalised (NFKC) first, so lookalike characters such as a full-width
-  `＜` become plain ones and are escaped too. The rules say data is never an instruction.
+  `＜` become plain ones and are escaped too; the lookalike brackets NFKC leaves alone
+  (`‹ ›`, `〈 〉`, `⟨ ⟩`) are escaped as well. The rules say data is never an instruction.
 - **Every model line passes the guardrails or a fallback is said instead.** Fallbacks are
   approved lines built only from first names and ages, never from free text, so injected
   text can't reach the room through them. The product owner signed them all off on
-  2026-10-13.
+  2026-10-13. *Proposed, not yet signed off:* one exception, for a question a moderator
+  approved: when the model fails on it, Nova reads it framed ("From the room: <question>"),
+  but only if that line passes the guardrails for the moment; otherwise today's fallback.
+  It's behind `READ_APPROVED_QUESTION_ON_FAILURE` (off) in `nova/script.py`, and the frame
+  waits for sign-off in `docs/sign-off/2026-10-audience-questions.md`.
 - **A blind card is checked when it's made** (`nova/cards.py`), because its first name and
   age go into fixed and fallback lines that no guardrail checks: a first name is letters,
   with single spaces, hyphens or apostrophes between them, at most 30 characters; an age
@@ -191,19 +196,29 @@ fallback line, never an unsafe one.
 | Guardrail | How it checks | What it can't catch |
 | --- | --- | --- |
 | Claims to be human | First-person patterns: "I'm human / a real person", "I'm not an AI / a bot", "as a woman", "when I was a kid", "my mom / body / hair", "my first date", "I've been on" | Claims worded another way ("trust me, I know those nerves"), experience implied without those words, other languages |
-| Decisions | Words about the outcome (reveal, unseen, mutual, match, chose, picked, said yes, second date, photos, see each other) and hints (sparks, chemistry, made for each other, lovely couple, I bet, my guess, fingers crossed). The capitalised show name "Unseen" is allowed | Hints without those words ("I've a good feeling about tonight", "they seem happy") |
+| Decisions | Words about the outcome (reveal, unseen, mutual, match, chose, picked, said yes, second date, photos, see each other) and hints (sparks, chemistry, made for each other, lovely couple, I bet, my guess, fingers crossed). "Unseen" is allowed where it names the show: starting a sentence, after on, to, of, at or from, after "this is" or "welcome to", or before 's ("Welcome to Unseen", "Unseen's next date"); anywhere else, capitalised or not ("keep it Unseen"), it's decision talk | Hints without those words ("I've a good feeling about tonight", "they seem happy") |
 | Looks or voice | Appearance words (gorgeous, handsome, attractive), "looks great", "you're so cute", "voice", "accent", "you sound lovely" | Indirect compliments ("that smile must be something"), unlisted adjectives, clothes |
-| Personal details | Phone numbers, numbers of 3+ digits, emails, @handles, web addresses, social platforms, "works at", "lives on", a capitalised word plus Street/Road, surname words and a surname after a first name ("Maya Lopez", even if "Lopez" is on her card), school words, Nova asking where someone lives, works or spends time; plus any proper noun from what the dater or listener said for this line, wherever it appears | Lowercase descriptions ("the bakery by the station"), spelled-out numbers ("five five five"), job titles, places that are described rather than named |
-| Unknown names | Any capitalised word mid-sentence that isn't a dater's first name, Nova, AI, a day or month, the show, or a name or place on the blind card of a dater the line is about ("lost in Lisbon"); any acronym. A card that tries to give Nova instructions lends no words, and a word from what a dater or listener said live is blocked even if it's also on a card | A proper noun the model invents at the start of a sentence; lowercase names |
-| Spending | Coins, gestures, gifts, roses, encores, buy, spending money, membership, subscribe | Indirect asks ("show them some love tonight") |
+| Personal details | Phone numbers, numbers of 3+ digits, three or more number words in a row ("five five five, one two three four", "double seven"; not "two or three"), emails, @handles, web addresses, social platforms, "works at", "lives on", a capitalised word or a number plus Street/Road/Way/Place and the like, unless the word can't name a street ("Either way", "No way", "So close", "a Sunday drive", "First place"), surname words and a surname after a first name ("Maya Lopez", even if "Lopez" is on her card), school words, Nova asking where someone lives, works or spends time; plus any proper noun from what the dater or listener said for this line, wherever it appears, and, capitalised or not, up to three words after a cue in it ("i work at northwind bank", "i live on harbour street", "my insta is ...", "my company's called ..."; stopping at punctuation or a function word), since speech-to-text often doesn't capitalise | Lowercase descriptions with no cue ("the bakery by the station"), a rare word said without a cue (a word list could catch it; not added, it needs a dependency or a vendored list), job titles, places that are described rather than named |
+| Unknown names | Any capitalised word mid-sentence that isn't a dater's first name, Nova, AI, a day or month, a holiday (Christmas, Easter, Halloween, Thanksgiving, Diwali, Eid, Hanukkah, Lunar New Year, Valentine's Day, New Year's Eve and Day, Boxing Day), the show, or a name or place on the blind card of a dater the line is about ("lost in Lisbon"); any acronym. A card that tries to give Nova instructions lends no words, and a word from what a dater or listener said live is blocked even if it's also on a card | A proper noun the model invents at the start of a sentence; lowercase names |
+| Spending | Coins, gestures, gifts, roses ("roses", "a rose", "send a rose", not the verb "rose"), encores, buy, spending money, membership, subscribe | Indirect asks ("show them some love tonight") |
 | Unkind | A short list of insults (stupid, pathetic, desperate, creepy, shut up) | Sarcasm, tone, mockery without those words |
-| Instructions | Talk of instructions, rules, the system, data, prompts, angle brackets, "I was told"; Nova claiming any name but Nova ("I'm Kate", "call me Kate") | An injection that steers Nova into an ordinary-looking line, such as an untrue but harmless claim about a dater |
-| Voice and format | Exclamation marks, emoji, symbols, markdown, length (characters and sentences), names in the wrong case; the model's outro is one sentence with no question; a lightning question is one sentence and doesn't open with both daters' names | Tone, wrong pronouns, a question ending in a full stop (handled by the instructions only) |
+| Instructions | Talk of instructions, rules, the system, data, prompts, angle brackets, "I was told"; Nova claiming any name but Nova ("I'm Kate", "call me Kate"), though not a fixed word ("I'm OK with either answer") | An injection that steers Nova into an ordinary-looking line, such as an untrue but harmless claim about a dater |
+| Voice and format | Exclamation marks, emoji, symbols (a slash too, which the voice reads aloud as "slash"; the model is told to join options with "or" and write no slashes or ampersands), markdown, length (characters and sentences), a name with a capital in the wrong place ("MAYA", "MaYa": the voice may spell it out). A name all in lowercase is an ordinary word, so a dater called Will, Hope or May keeps lines that say will, hope or may; the model's outro is one sentence with no question; a lightning question is one sentence and doesn't open with both daters' names | Tone, wrong pronouns, a question ending in a full stop (handled by the instructions only) |
 | A dater who wants to stop (what a dater says on air, not Nova's line) | On whole utterances, not speech-to-text fragments. Instant layer: unmistakable requests that end there or are about the date (want to stop, need a moment, not comfortable, don't feel safe, get me out of here, stop the date, a panic attack, harassing me), acted on once the utterance closes, or 3 s after the match if the dater keeps talking. Meaning layer: every other utterance goes to the model once, with the same dater's last 15 seconds, which answers yes, maybe or no; a failed or slow check alerts the moderator | Distress the model misjudges (the test set measures this; it missed "Is this almost over?"), or heard only in a voice; the instant layer pausing a story that happens to use a stop phrase ("we had to end the date early") |
 
-Before the model, audience questions about personal details or looks, or that try to give
-Nova instructions, are declined with a fixed line. This can't catch cleverly worded ones
-("which part of town has the best coffee for you?"); moderator approval stays the main gate.
+Moderator approval is the main gate for audience questions. The automatic screen
+(`screen_question`) gives the console a warning before the moderator approves: a code for
+personal details (where someone works, lives or studies, a surname, contact details),
+looks, or instructions to Nova. On air it's a silent backstop: the show runner skips an
+approved question it still catches without a word (a spoken decline told the daters and
+the room that a listener asked something off limits), sends the console a
+`QuestionSkipped` cue with the code and no text, and reads the next approved question in
+the queue for that slot. Its patterns are narrow enough to let harmless approved questions
+through ("your lucky number", "a job you'd do for free", "your favourite subject at
+school", "face to face with a wild animal"): a number only to call, school only with which,
+where or the name of, a favourite place only near home, and face, body, eyes, hair and
+height only next to a looks word. It can't catch cleverly worded ones ("which part of town
+has the best coffee for you?").
 
 The layers, in order: moderator approval of questions, data kept apart from instructions,
 Nova's rules, the guardrails, and approved fallbacks.
@@ -234,6 +249,10 @@ right-hand column above). Before the first real show, Nova needs both of these:
   close on time: distress first, and a reply to Nova held until the check's verdict.
 - The moderator console needs a third distress alert, `distress_unchecked`: the check
   failed or was too slow, so listen in (decision 0004).
+- The console runs the screen (`screen_question`) on every submitted question and shows
+  its codes (`personal_detail`, `looks`, `instructs_nova`) as a warning before the
+  moderator approves, and shows `QuestionSkipped` when an approved question is skipped on
+  air.
 - The distress check sends everything daters say to the model in `NOVA_LLM`, one call per
   utterance, about 60 to 90 a date: on this PC's Gemma, nothing leaves the machine; with
   Claude, every utterance goes to Anthropic, so the cost and the privacy notice need a

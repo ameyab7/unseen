@@ -11,6 +11,8 @@ import unicodedata
 from collections.abc import Collection, Iterable
 from enum import StrEnum
 
+from nova.questions import OffLimits
+
 
 class Violation(StrEnum):
     EMPTY = "empty"
@@ -100,7 +102,9 @@ SPENDING = _any(
     r"\bmembership\b",
     r"\bsubscri\w*",
     r"\bencores?\b",
-    r"\broses?\b",
+    # Roses as a gift, not the verb ("who rose earliest", for a dater called Rose too).
+    r"\broses\b",
+    r"\b(?:a|one|send|sent|give|gave|throw|threw)\s+(?:them\s+|her\s+|him\s+)?(?:a\s+)?rose\b",
 )
 
 # Teasing is fine; humiliation is not.
@@ -126,12 +130,24 @@ INSTRUCTIONS = _any(
 )
 
 # Nova is only ever Nova. Claiming another name ("I'm Kate") means an injection steered it.
-# Case-sensitive, and run before names are masked, so "I'm Nova" is fine.
-OTHER_NAME = re.compile(r"\b(?:I'm|I am|[Mm]y name is|[Mm]y name's|[Cc]all me)\s+(?!Nova\b)[A-Z]")
+# Case-sensitive, and run before names are masked, so "I'm Nova" is fine, and so is a fixed
+# word ("I'm OK with either answer").
+OTHER_NAME = re.compile(r"\b(?:I'm|I am|[Mm]y name is|[Mm]y name's|[Cc]all me)\s+([A-Z][\w'-]*)")
 
-# Never repeat a workplace, address, surname, school, phone number or social handle.
-PERSONAL_DETAIL = _any(
+# Number words, for a phone number or address read out: three or more in a row ("five five
+# five, one two three four", "double seven"), never "two or three".
+_DIGIT_WORD = r"(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)"
+_NUMBER_WORD = (
+    rf"(?:(?:double|triple)\s+{_DIGIT_WORD}|{_DIGIT_WORD}|ten|eleven|twelve|thirteen|fourteen"
+    r"|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy"
+    r"|eighty|ninety|hundred)"
+)
+SPELLED_NUMBER = rf"\b{_NUMBER_WORD}(?:[\s,.-]+{_NUMBER_WORD}){{2,}}\b"
+
+# Personal details, in Nova's lines and in audience questions alike.
+_CONTACT_AND_HOME = (
     r"(?:\+?\d[\s().-]*){7,}",  # phone numbers
+    SPELLED_NUMBER,
     r"\b\d{3,}\b",  # house numbers, postcodes, any long number
     r"\b[\w.+-]+@[\w-]+\.[\w.-]+",  # email
     r"(?<!\w)@\w+",  # social handle
@@ -144,35 +160,93 @@ PERSONAL_DETAIL = _any(
     r"\b(?:lives?|living|lived)\s+(?:on|in|at|near)\b",
     r"\b(?:address|neighbou?rhood|postcode|zip code)\b",
     r"\b(?:surname|last name|family name|maiden name)\b",
-    r"\b(?:school|university|uni|college|campus|class of|graduated)\b",
     r"\b(?:studies|study|studying|student)\s+at\b",
+)
+_SPOT = r"(?:spot|place|bar|pub|cafe|café|restaurant|hangout|haunt|neighbou?rhood)"
+
+# Never repeat a workplace, address, surname, school, phone number or social handle.
+PERSONAL_DETAIL = _any(
+    *_CONTACT_AND_HOME,
+    r"\b(?:school|university|uni|college|campus|class of|graduated)\b",
     # Nova asking for one: "where do you work?", "a favourite local spot?"
     r"\bwhere\s+(?:do|does|did|would)\s+(?:you|he|she|they)\s+(?:work|live|study|stay|go|hang out"
     r"|spend)\b",
-    r"\b(?:local|favou?rite)\s+(?:spot|place|bar|pub|cafe|café|restaurant|hangout|haunt"
-    r"|neighbou?rhood)\b",
+    rf"\b(?:local|favou?rite)\s+{_SPOT}\b",
 )
+# What identifies a dater in what they said, capitalised or not (speech-to-text often
+# doesn't capitalise): up to SLOT_WORDS words after one of these cues, stopping at
+# punctuation or a function word. "i work at northwind bank" gives northwind and bank.
+SLOT_CUE = _any(
+    r"\b(?:work|works|worked|working)\s+(?:at|for)\b",
+    r"\bemployed\s+by\b",
+    r"\bmy\s+(?:job|boss|office)(?:\s+is)?\s+at\b",
+    r"\b(?:live|lives|lived|living)\s+(?:on|at|near)\b",  # not "in": a city is fine
+    r"\bmy\s+(?:street|address|school|postcode)\s+is\b",
+    r"\b(?:study|studied|studying)\s+at\b",
+    r"\bmy\s+(?:insta|instagram|handle|snap|number|email|surname|last name)\s+is\b",
+    r"\bmy\s+(?:company|business|shop|school|street|building)(?:'s|\s+is)?\s+(?:called|named)\b",
+)
+SLOT_WORDS = 3
+SLOT_TOKEN = re.compile(r"[^\W_]+(?:'[^\W_]+)*|[^\w\s]")  # a word, or one punctuation mark
+SLOT_SKIPPED = frozenset({"the", "a", "an"})  # before the slot: "at the northwind bank"
+FUNCTION_WORDS = frozenset((
+    "the", "a", "an", "and", "or", "but", "so", "because", "if", "then", "than", "as",
+    "with", "without", "to", "in", "on", "at", "for", "of", "by", "from", "near", "into",
+    "onto", "about", "around", "over", "under", "up", "down", "out", "off", "after",
+    "before", "since", "until", "is", "was", "are", "were", "be", "been", "am", "it", "its",
+    "it's", "that", "this", "these", "those", "which", "who", "whom", "whose", "when",
+    "where", "why", "how", "what", "i", "i'm", "you", "he", "she", "we", "they", "me", "him",
+    "her", "us", "them", "my", "your", "his", "our", "their", "not", "no", "yes", "just",
+    "really", "very", "too", "also", "now", "there", "here", "come", "came", "say", "said",
+    "go", "went", "know", "think", "like", "love", "lol", "haha", "um", "uh", "okay", "ok",
+    "well", "anyway", "all", "some", "any", "every", "do", "does", "did", "have", "has",
+    "had", "will", "would", "can", "could", "should",
+))  # fmt: skip
+
 # A street: a capitalised word or a number, then a street word ("Harbour Street", "42 Elm Road").
+# Words that can't name a street don't count, so "Either way", "So close", "a Sunday drive"
+# and "First place" aren't addresses.
+NOT_A_STREET_NAME = (
+    "Either", "Neither", "No", "Any", "One", "Some", "That", "This", "Which", "Each", "Every",
+    "Same", "First", "Last", "Next", "So", "Too", "Half", "All", "Long",
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+)  # fmt: skip
 STREET = re.compile(
-    r"\b(?:\d+|[A-Z][a-z]+)\s+(?i:street|st|road|rd|avenue|ave|lane|ln|boulevard|blvd|drive"
-    r"|way|place|court|terrace|crescent|close|square)\b"
+    rf"\b(?:\d+|(?!(?:{'|'.join(NOT_A_STREET_NAME)})\b)[A-Z][a-z]+)\s+"
+    r"(?i:street|st|road|rd|avenue|ave|lane|ln|boulevard|blvd|drive|way|place|court|terrace"
+    r"|crescent|close|square)\b"
 )
 
-# Audience questions Nova won't read: personal details, or looks.
-OFF_LIMITS_QUESTION = _any(
-    r"\bwhere\s+(?:do|does|did)\s+(?:you|he|she|they)\s+(?:work|live|study|stay|grow up"
+# Audience questions the screen holds back. Moderator approval is the main gate (decision
+# 0005), so these are narrow enough to let harmless approved questions through: "your lucky
+# number", "a job you'd do for free", "favourite subject at school", "face to face".
+QUESTION_PERSONAL_DETAIL = _any(
+    *_CONTACT_AND_HOME,
+    # "where do you work", "where does Theo live", "where did Maya's sister grow up"
+    r"\bwhere\s+(?:do|does|did)\s+(?:[\w']+\s+){1,2}?(?:work|live|study|stay|grow up"
     r"|go to school)\b",
     r"\bwhat\s+(?:do|does)\s+(?:you|he|she|they)\s+do for (?:a living|work)\b",
-    r"\b(?:job|employer|company|office|workplace)\b",
+    r"\b(?:your|his|her|their)\s+(?:job|company|boss)\b",  # someone's own, not "a job"
     r"\b(?:street|address|neighbou?rhood|postcode|zip)\b",
-    r"\b(?:number|phone|email|e-mail|handle|username|socials?)\b",
+    r"\b(?:phone|digits|e-?mail|handle|username|socials?)\b",
+    r"\byour\s+number\b",  # to call, not "your lucky number"
+    # School only with which, where or the name of: not "a subject at school".
+    r"\b(?:which|where|name of)\b.{0,30}\b(?:school|uni|university|college)\b",
+    # A favourite place only near home: not "your favourite place to travel".
+    rf"\blocal\s+{_SPOT}\b",
+    rf"\bfavou?rite\s+{_SPOT}\b.{{0,30}}\b(?:near|nearby|in town|around here|in the city)\b",
+)
+QUESTION_LOOKS = _any(
     r"\blooks?\s+like\b",
     r"\bwhat\s+(?:do|does)\s+\w+(?:\s+\w+)?\s+look\b",
     r"\b(?:attractive|hot|cute|pretty|handsome|beautiful|gorgeous|sexy|ugly)\b",
-    r"\b(?:tall|height|weight|hair|eyes|body|face)\b",
+    r"\b(?:tall|weight)\b",
+    # Face, body, eyes, hair and height only next to a looks word: not "face to face".
+    r"\b(?:look|looks|attractive|describe)\b.{0,30}\b(?:face|body|eyes|hair|height)\b",
+    r"\b(?:face|body|eyes|hair|height)\b.{0,30}\b(?:look|looks|attractive|describe)\b",
 )
 
-# Audience questions that try to give Nova instructions: declined before the model.
+# Audience questions that try to give Nova instructions: the screen holds them back.
 INSTRUCTING_NOVA = _any(
     r"\bignore\b.{0,30}\b(?:rules|instructions|above|previous|prompt)\b",
     r"\b(?:forget|override|bypass|disregard)\b.{0,20}\b(?:rules|instructions|prompt)\b",
@@ -184,8 +258,15 @@ INSTRUCTING_NOVA = _any(
     r"\bjailbreak\b",
 )
 
-SHOW_NAME = "Unseen"  # capitalised, it's the show; "keep it unseen" is decision talk
+SHOW_NAME = "Unseen"  # where it names the show; "keep it Unseen" is decision talk
+SHOW_NAME_BEFORE = re.compile(r"\b(?:on|to|of|at|from|this is|welcome to)\s+$", re.IGNORECASE)
 ALWAYS_ALLOWED = frozenset({"I", "AI", "OK", SHOW_NAME})
+# Holidays aren't unknown names. Nationalities, languages and cuisines stay blocked: they
+# can single out someone's background.
+HOLIDAYS = re.compile(
+    r"\b(?:Christmas|Easter|Halloween|Thanksgiving|Diwali|Eid|Hanukkah|Lunar New Year"
+    r"|Valentine's Day|New Year's (?:Eve|Day)|Boxing Day)\b"
+)
 DAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 MONTHS = (
     "January", "February", "March", "April", "May", "June",
@@ -223,9 +304,11 @@ def check(
     """Every rule the line breaks, in a fixed order. An empty tuple means it may be spoken.
 
     echo_from: what daters or listeners said for this line. Any proper noun in it (a
-    capitalised word mid-sentence that isn't a dater's name) must not come back in the
-    line, wherever it appears: "Northwind sounds lovely" is caught as well as "at Northwind".
-    This holds even for a word that is also on a blind card.
+    capitalised word mid-sentence that isn't a dater's name), and, capitalised or not, any
+    word after a cue like "work at", "live on" or "my insta is" (slot words), must not come
+    back in the line, wherever it appears: "Northwind sounds lovely" is caught as well as
+    "at Northwind", from "I work at Northwind" or "i work at northwind". This holds even
+    for a word that is also on a blind card. The words are never logged.
 
     card_words: names and places from the blind cards of the daters this line is about
     (card_words()), which Nova may say.
@@ -237,7 +320,8 @@ def check(
         return (Violation.EMPTY,)
     found: set[Violation] = set()
     known = _allowed_words(names)  # names and fixed words, never anything a dater wrote
-    echoes = _proper_nouns(echo_from, known)
+    said = list(echo_from)
+    echoes = _proper_nouns(said, known) | slot_words(said, known)
     allowed = known | set(card_words)
 
     if len(text) > max_chars or len(SENTENCE_END.findall(text)) > max_sentences:
@@ -251,15 +335,17 @@ def check(
         found.add(Violation.QUESTION)
     if not open_with_names and _opens_with_both_names(text, names):
         found.add(Violation.OPENS_WITH_NAMES)
-    if OTHER_NAME.search(text):
+    claimed = (match.group(1).split("'")[0] for match in OTHER_NAME.finditer(text))
+    if any(word not in ALWAYS_ALLOWED and word != "Nova" for word in claimed):
         found.add(Violation.INSTRUCTIONS)
 
     if any(m.group(0).split("'")[0].lower() in echoes for m in WORD.finditer(text)):
         found.add(Violation.PERSONAL_DETAIL)
 
     # Word checks run with the daters' own names masked, so a dater called Rose or Hope
-    # doesn't trip the spending or any other word list.
-    masked = re.sub(rf"\b{SHOW_NAME}\b", "Show", _mask_names(text, names))
+    # doesn't trip the spending or any other word list, and with the show's name masked
+    # where it names the show.
+    masked = _mask_show_name(_mask_names(text, names))
     for violation, pattern in (
         (Violation.CLAIMS_HUMAN, CLAIMS_HUMAN),
         (Violation.DECISION, DECISION),
@@ -276,16 +362,24 @@ def check(
     return tuple(v for v in Violation if v in found)
 
 
+def screen_question(question: str) -> tuple[OffLimits, ...]:
+    """Why the screen would hold this audience question back, if it would: where someone
+    works, lives or studies, a surname or contact details; anyone's looks; or an attempt to
+    give Nova instructions. The console shows these to the moderator before they approve;
+    on air, the show runner skips a question it catches, silently. Empty: nothing found."""
+    found = {
+        OffLimits.PERSONAL_DETAIL: bool(
+            QUESTION_PERSONAL_DETAIL.search(question) or STREET.search(question)
+        ),
+        OffLimits.LOOKS: bool(QUESTION_LOOKS.search(question)),
+        OffLimits.INSTRUCTS_NOVA: bool(INSTRUCTING_NOVA.search(question)),
+    }
+    return tuple(reason for reason in OffLimits if found[reason])
+
+
 def question_is_off_limits(question: str) -> bool:
-    """True for audience questions about where someone works, lives or studies, a surname,
-    contact details or anyone's looks, and for questions that try to give Nova
-    instructions. Nova declines these without reading them."""
-    return bool(
-        INSTRUCTING_NOVA.search(question)
-        or OFF_LIMITS_QUESTION.search(question)
-        or PERSONAL_DETAIL.search(question)
-        or STREET.search(question)
-    )
+    """True for an audience question the screen would hold back (screen_question)."""
+    return bool(screen_question(question))
 
 
 def card_words(cards: Iterable[str]) -> frozenset[str]:
@@ -323,6 +417,22 @@ def _has_formatting(text: str) -> bool:
     return any(unicodedata.category(c).startswith("C") for c in text)
 
 
+def _mask_show_name(text: str) -> str:
+    """ "Unseen" becomes "Show" only where it names the show: starting a sentence, after on,
+    to, of, at or from, after "this is" or "welcome to", or before 's. Anywhere else ("keep
+    it Unseen", "stay Unseen") it stays, for the decision check to catch."""
+
+    def masked(match: re.Match[str]) -> str:
+        names_the_show = (
+            _starts_sentence(text, match.start())
+            or SHOW_NAME_BEFORE.search(text, 0, match.start()) is not None
+            or text.startswith(("'s", "’s"), match.end())
+        )
+        return "Show" if names_the_show else match.group(0)
+
+    return re.sub(rf"\b{SHOW_NAME}\b", masked, text)
+
+
 def _mask_names(text: str, names: Collection[str]) -> str:
     for name in sorted(names, key=len, reverse=True):
         text = re.sub(rf"\b{re.escape(name)}\b", "Name", text)
@@ -336,6 +446,32 @@ def _allowed_words(names: Collection[str]) -> set[str]:
         | CALENDAR
         | {f"{day}s" for day in DAYS}  # "her Sundays"
     )
+
+
+def slot_words(texts: Iterable[str], known: Collection[str] = ()) -> set[str]:
+    """Words after an identifying cue (SLOT_CUE) in what daters or listeners said,
+    lowercased, whatever their case: up to SLOT_WORDS of them, stopping at punctuation or a
+    function word. Daters' names and other known words are never slot words."""
+    skip = {word.lower() for word in known}
+    found: set[str] = set()
+    for text in texts:
+        plain = text.translate(STRAIGHT_QUOTES)
+        for cue in SLOT_CUE.finditer(plain):
+            taken = 0
+            for token in SLOT_TOKEN.finditer(plain, cue.end()):
+                word = token.group(0).lower()
+                if not word[0].isalnum():
+                    break  # punctuation ends the slot
+                if word in FUNCTION_WORDS:
+                    if taken == 0 and word in SLOT_SKIPPED:
+                        continue
+                    break
+                if word not in skip:
+                    found.add(word.split("'")[0])
+                taken += 1
+                if taken == SLOT_WORDS:
+                    break
+    return found
 
 
 def _proper_nouns(texts: Iterable[str], allowed: set[str]) -> set[str]:
@@ -363,16 +499,23 @@ def _name_problems(
     and fixed words) may follow, so a card word is never said as a surname."""
     problems: set[Violation] = set()
 
+    # A name in the wrong case: the voice may spell out MAYA, and captions show names as
+    # written. All lowercase it's an ordinary word, which sounds the same either way, so a
+    # dater called Will, Hope or May doesn't lose every line that says will, hope or may.
     for name in names:
         for match in re.finditer(rf"\b{re.escape(name)}\b", text, re.IGNORECASE):
-            if match.group(0) != name:
+            word = match.group(0)
+            if word != name and not word.islower():
                 problems.add(Violation.NAME_CASE)
 
+    holidays = [match.span() for match in HOLIDAYS.finditer(text)]
     tokens = list(WORD.finditer(text))
     for i, match in enumerate(tokens):
         word = match.group(0)
         base = word.split("'")[0]
         if not base[:1].isupper():
+            continue
+        if any(start <= match.start() < end for start, end in holidays):
             continue
         if base in allowed:
             following = tokens[i + 1] if i + 1 < len(tokens) else None

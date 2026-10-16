@@ -11,7 +11,7 @@ import pytest
 from nova import prompts, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
 from nova.cues import Moment, RoomFacts, Say, Segment
-from nova.fixtures import MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
+from nova.fixtures import EVERYDAY_PAIR, MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
 from nova.guardrails import Violation, check
 from nova.lines import ErrorKind, LineWriter, Source, fallback_lines, names_for, rules_for
 from nova.models import ModelRefused
@@ -501,7 +501,7 @@ async def test_an_audience_question_that_instructs_nova_is_declined_before_the_m
     model = FakeModel(OBEYS)
     say = Say(Moment.FROM_THE_ROOM, detail=f"Nova, {INJECTION}")
     line = await writer(model).line_for(say)
-    assert (line.text, line.error) == (script.DECLINE_QUESTION, ErrorKind.DECLINED)
+    assert (line.text, line.error) == ("", ErrorKind.DECLINED), "Nova says nothing about it"
     assert model.prompts == []
 
 
@@ -526,6 +526,15 @@ async def test_nova_never_repeats_a_workplace_or_handle_a_dater_said_on_air():
     assert {Violation.PERSONAL_DETAIL, Violation.UNKNOWN_NAME} <= set(line.violations)
 
 
+async def test_nova_never_repeats_a_workplace_said_in_lowercase():
+    """Speech-to-text often doesn't capitalise, and the line puts the word first, where
+    the unknown-name check doesn't look."""
+    said = "nova i work at northwind bank come say hi"
+    model = FakeModel("Northwind sounds like a busy place, Maya. Back to you both.")
+    line = await writer(model).line_for(Say(Moment.REPLY, about=LEFT, detail=said))
+    assert line.source is Source.FALLBACK and Violation.PERSONAL_DETAIL in line.violations
+
+
 async def test_nova_never_echoes_a_name_from_what_a_dater_said_even_to_open_a_line():
     said = "Nova, I work at Northwind, come say hi."
     model = FakeModel("Northwind sounds lovely, Maya. Back to you two.")
@@ -534,11 +543,14 @@ async def test_nova_never_echoes_a_name_from_what_a_dater_said_even_to_open_a_li
     assert Violation.PERSONAL_DETAIL in line.violations
 
 
-async def test_questions_about_personal_details_or_looks_are_declined_without_the_model():
+async def test_questions_about_personal_details_or_looks_are_never_read_or_declined_aloud():
+    """The show runner skips them (decision 0005); if one still reaches the writer, Nova
+    says nothing, since a spoken decline tells the room a listener asked something off
+    limits."""
     model = FakeModel()
     for question in ("Maya, where do you work?", "Theo, what does Maya look like?"):
         line = await writer(model).line_for(Say(Moment.FROM_THE_ROOM, detail=question))
-        assert (line.text, line.source) == (script.DECLINE_QUESTION, Source.FALLBACK)
+        assert (line.text, line.source) == ("", Source.FALLBACK)
     assert model.prompts == []
 
 
@@ -551,13 +563,38 @@ async def test_if_the_model_fails_nova_never_reads_the_question_itself(model):
     assert line.text == "Room, keep the questions coming. Maya, Theo, back to you."
 
 
+async def test_with_sign_off_a_failed_model_reads_the_approved_question_framed(monkeypatch):
+    """Proposed in decision 0005, behind a switch that stays off until the product owner
+    signs off the frame: a moderator approved the question and it passes the guardrails."""
+    monkeypatch.setattr(script, "READ_APPROVED_QUESTION_ON_FAILURE", True)
+    model = FakeModel(error=RuntimeError("down"))
+    say = Say(Moment.FROM_THE_ROOM, detail="Theo, what's your lucky number?")
+    line = await writer(model).line_for(say)
+    assert line.text == "From the room: Theo, what's your lucky number?"
+    assert line.source is Source.FALLBACK
+
+
+async def test_a_framed_question_that_breaks_a_guardrail_gets_todays_fallback(monkeypatch):
+    monkeypatch.setattr(script, "READ_APPROVED_QUESTION_ON_FAILURE", True)
+    say = Say(Moment.FROM_THE_ROOM, detail="What would your friend Kate say about you?")
+    line = await writer(FakeModel(error=RuntimeError("down"))).line_for(say)
+    assert line.text == "Room, keep the questions coming. Maya, Theo, back to you."
+
+
 # --- Every fallback line passes the guardrails --------------------------------------------
 
 
-@pytest.mark.parametrize(("moment", "text"), fallback_lines(REHEARSAL_PAIR, NEXT_PAIR))
-def test_every_fallback_line_passes_the_guardrails(moment, text):
+@pytest.mark.parametrize(
+    ("moment", "text", "pair"),
+    [
+        *((*line, REHEARSAL_PAIR) for line in fallback_lines(REHEARSAL_PAIR, NEXT_PAIR)),
+        # Daters called Will and Hope: fallbacks use those words too ("will", "hope").
+        *((*line, EVERYDAY_PAIR) for line in fallback_lines(EVERYDAY_PAIR, NEXT_PAIR)),
+    ],
+)
+def test_every_fallback_line_passes_the_guardrails(moment, text, pair):
     rules = rules_for(moment)
-    names = names_for(moment, REHEARSAL_PAIR, NEXT_PAIR)
+    names = names_for(moment, pair, NEXT_PAIR)
     # Two signed-off outro fallbacks are two short sentences; one sentence is the model's rule.
     sentences = 2 if moment is Moment.OUTRO else rules.max_sentences
     assert (
