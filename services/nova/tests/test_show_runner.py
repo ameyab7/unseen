@@ -4,7 +4,7 @@ import random
 
 import pytest
 
-from nova import script
+from nova import running_order, script
 from nova.cards import Seat
 from nova.cues import (
     AlertModerator,
@@ -277,10 +277,23 @@ def test_lightning_round_runs_three_questions_only_when_unlocked():
         LightningMeterClosed(),
     ]
     show.until(600)
-    assert [(t, c.detail) for t, c in show.says(Moment.LIGHTNING_QUESTION)] == [
-        (330.0, "1 of 3"),
-        (360.0, "2 of 3"),
-        (390.0, "3 of 3"),
+    assert [(t, c.number, c.of) for t, c in show.says(Moment.LIGHTNING_QUESTION)] == [
+        (330.0, 1, 3),
+        (360.0, 2, 3),
+        (390.0, 3, 3),
+    ]
+
+
+def test_the_runner_asks_as_many_lightning_questions_as_the_running_order_says(monkeypatch):
+    monkeypatch.setattr(running_order, "LIGHTNING_QUESTIONS", 4)
+    show = Show()
+    show.at(200, "unlock_lightning_round")
+    show.until(600)
+    assert [(c.number, c.of) for _, c in show.says(Moment.LIGHTNING_QUESTION)] == [
+        (1, 4),
+        (2, 4),
+        (3, 4),
+        (4, 4),
     ]
 
 

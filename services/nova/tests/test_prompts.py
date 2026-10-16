@@ -38,7 +38,7 @@ ALL_TASKS = {
     "doors": lambda pair, t: prompts.doors_intro(pair, tonight=t),
     "first_question": lambda pair, t: prompts.first_question(pair, Seat.LEFT, tonight=t),
     "lightning": lambda pair, t: prompts.lightning_question(
-        pair, 2, form=prompts.LIGHTNING_FORMS[0], tonight=t
+        pair, 2, total=3, form=prompts.LIGHTNING_FORMS[0], tonight=t
     ),
     "last_word": lambda pair, t: prompts.last_word(pair, Seat.RIGHT, tonight=t),
     "outro": lambda pair, t: prompts.outro(pair, tonight=t),
@@ -164,7 +164,7 @@ def test_the_outro_is_one_sentence_with_no_question():
 
 @pytest.mark.parametrize("form", prompts.LIGHTNING_FORMS)
 def test_a_lightning_question_takes_a_format_and_never_opens_with_the_names(form):
-    instructions, _ = split(prompts.lightning_question(REHEARSAL_PAIR, 1, form=form))
+    instructions, _ = split(prompts.lightning_question(REHEARSAL_PAIR, 1, total=3, form=form))
     assert form in instructions and "Don't open with their names" in instructions
 
 

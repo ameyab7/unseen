@@ -18,7 +18,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from nova import script
+from nova import running_order, script
 from nova.cards import Pair, Seat
 from nova.cues import (
     AlertModerator,
@@ -64,8 +64,6 @@ ON_AIR = frozenset(
 # Segments where a long silence brings a prompt from Nova.
 SILENCE_RULE = frozenset({Segment.FREE_TALK, Segment.FROM_THE_ROOM})
 
-LIGHTNING_QUESTIONS = 3
-AUDIENCE_QUESTIONS = 2
 # Below this, a percentage says too much about too few people, so the verdict stays hidden.
 MIN_VOTES_FOR_VERDICT = 5
 
@@ -166,7 +164,7 @@ class ShowRunner:
             (t.lightning, "lightning", None),
             *(
                 (t.lightning + n * t.lightning_gap, "lightning_question", n + 1)
-                for n in range(1, LIGHTNING_QUESTIONS)
+                for n in range(1, running_order.LIGHTNING_QUESTIONS)
             ),
             (t.last_word, "last_word", None),
             (t.last_word + t.second_last_word_after, "second_last_word", None),
@@ -444,16 +442,16 @@ class ShowRunner:
                 return [
                     *closed,
                     *self._enter(Segment.LIGHTNING_ROUND, at),
-                    self._lightning_question(1),
+                    running_order.lightning_question(1),
                 ]
             case "lightning_question":
                 if self.segment is not Segment.LIGHTNING_ROUND:
                     return []
-                return [self._lightning_question(int(str(beat.arg)))]
+                return [running_order.lightning_question(int(str(beat.arg)))]
             case "last_word":
-                return [*self._enter(Segment.LAST_WORD, at), Say(Moment.LAST_WORD, about=first)]
+                return [*self._enter(Segment.LAST_WORD, at), running_order.last_word(first)]
             case "second_last_word":
-                return [Say(Moment.LAST_WORD, about=second)]
+                return [running_order.last_word(second)]
             case "time":
                 return self._time(at)
             case "result":
@@ -468,8 +466,7 @@ class ShowRunner:
         return [SegmentStarted(segment)]
 
     def _prompt(self, seat: Seat) -> Say:
-        card = self._pair.card(seat)
-        return Say(Moment.FIRST_QUESTION, about=seat, detail=card.prompts[0].text)
+        return running_order.first_question(self._pair, seat)
 
     def _audience_question(self, at: float) -> list[Cue]:
         """The next approved question the screen lets through. One it catches is skipped
@@ -477,7 +474,7 @@ class ShowRunner:
         something off limits: the console gets a code, and the next in the queue takes the
         slot."""
         cues: list[Cue] = []
-        while self._questions and self._questions_asked < AUDIENCE_QUESTIONS:
+        while self._questions and self._questions_asked < running_order.AUDIENCE_QUESTIONS:
             question = self._questions.popleft()
             reasons = screen_question(question)
             if reasons:
@@ -488,9 +485,6 @@ class ShowRunner:
             cues.append(Say(Moment.FROM_THE_ROOM, detail=question))
             break
         return cues
-
-    def _lightning_question(self, n: int) -> Say:
-        return Say(Moment.LIGHTNING_QUESTION, detail=f"{n} of {LIGHTNING_QUESTIONS}")
 
     def _time(self, at: float) -> list[Cue]:
         self._desk.open_window()
@@ -531,7 +525,7 @@ class ShowRunner:
         cues: list[Cue] = []
         if self._next_pair is not None:
             cues += self._enter(Segment.NEXT_UP, at)
-            cues.append(Say(Moment.NEXT_UP, detail=self._next_pair.label))
+            cues.append(running_order.next_up(self._next_pair))
         return cues + self._finish()
 
     def _silence_due(self) -> float:

@@ -84,13 +84,16 @@ class RoomFacts:
 class Say:
     """A line for Nova. With text, Nova says exactly that (an approved line). Without,
     the line writer writes one for this moment, about this dater, from detail; talk to the
-    room works from the room facts."""
+    room works from the room facts. number of of: a question's place in its round (the
+    lightning round's "2 of 3")."""
 
     moment: Moment
     text: str | None = None
     about: Seat | None = None
     detail: str | None = None
     room: RoomFacts | None = None
+    number: int | None = None
+    of: int | None = None
 
 
 @dataclass(frozen=True)

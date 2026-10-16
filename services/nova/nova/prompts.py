@@ -142,9 +142,12 @@ LIGHTNING_FORMS = (
 )
 
 
-def lightning_question(pair: Pair, n: int, *, form: str, tonight: Sequence[str] = ()) -> str:
+def lightning_question(
+    pair: Pair, n: int, *, total: int, form: str, tonight: Sequence[str] = ()
+) -> str:
     return _task(
-        f"the lightning round, question {n} of 3: something quick and light for both daters. "
+        f"the lightning round, question {n} of {total}: something quick and light for both "
+        "daters. "
         f"{form} Don't open with their names. One short sentence.",
         _seats(pair, _name),
         tonight,

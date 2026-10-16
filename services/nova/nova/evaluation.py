@@ -35,7 +35,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from nova import script
+from nova import running_order, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
 from nova.config import Settings, load_settings
 from nova.cues import AlertModerator, Cue, Moment, RoomFacts, Say, Segment
@@ -97,7 +97,7 @@ CASES: tuple[Case, ...] = (
     ),
     Case(
         "lightning question",
-        Say(Moment.LIGHTNING_QUESTION, detail="1 of 3"),
+        running_order.lightning_question(1),
     ),
     Case(
         "last word",
@@ -807,27 +807,24 @@ NIGHT_REMARKS = (
 def date_cues(pair: Pair, next_pair: Pair | None, n: int) -> list[Say]:
     """What one date asks Nova for, in show order: every set piece, two silences, an
     audience question, a dater speaking to Nova, and talk to the room in a pause and while
-    the daters decide. Who goes first alternates from date to date."""
+    the daters decide. Who goes first alternates from date to date. Set pieces are built
+    by the running order (nova/running_order.py), as the show runner builds them."""
     first = Seat.LEFT if n % 2 == 0 else Seat.RIGHT
-    cues = [
+    lightning = range(1, running_order.LIGHTNING_QUESTIONS + 1)
+    return [
         Say(Moment.DOORS_INTRO),
-        *(
-            Say(Moment.FIRST_QUESTION, about=seat, detail=pair.card(seat).prompts[0].text)
-            for seat in (first, first.other)
-        ),
+        *(running_order.first_question(pair, seat) for seat in (first, first.other)),
         Say(Moment.SILENCE),
         Say(Moment.FROM_THE_ROOM, detail=NIGHT_QUESTIONS[n % len(NIGHT_QUESTIONS)]),
         Say(Moment.ROOM_TALK, room=RoomFacts(Segment.FROM_THE_ROOM, False, 1)),
         Say(Moment.REPLY, about=first.other, detail=NIGHT_REMARKS[n % len(NIGHT_REMARKS)]),
         Say(Moment.SILENCE),
-        *(Say(Moment.LIGHTNING_QUESTION, detail=f"{k} of 3") for k in (1, 2, 3)),
-        *(Say(Moment.LAST_WORD, about=seat) for seat in (first, first.other)),
+        *(running_order.lightning_question(k) for k in lightning),
+        *(running_order.last_word(seat) for seat in (first, first.other)),
         Say(Moment.ROOM_TALK, room=RoomFacts(Segment.TIME, True, 1)),
         Say(Moment.OUTRO),
+        *([running_order.next_up(next_pair)] if next_pair is not None else []),
     ]
-    if next_pair is not None:
-        cues.append(Say(Moment.NEXT_UP, detail=next_pair.label))
-    return cues
 
 
 @dataclass(frozen=True)

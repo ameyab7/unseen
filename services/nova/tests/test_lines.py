@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from nova import prompts, script
+from nova import prompts, running_order, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
 from nova.cues import Moment, RoomFacts, Say, Segment
 from nova.fixtures import EVERYDAY_PAIR, MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
@@ -68,9 +68,9 @@ SET_PIECES = [
     Say(Moment.DOORS_INTRO),
     Say(Moment.FIRST_QUESTION, about=LEFT, detail=MAYA.prompts[0].text),
     Say(Moment.FIRST_QUESTION, about=RIGHT, detail=THEO.prompts[0].text),
-    Say(Moment.LIGHTNING_QUESTION, detail="1 of 3"),
-    Say(Moment.LIGHTNING_QUESTION, detail="2 of 3"),
-    Say(Moment.LIGHTNING_QUESTION, detail="3 of 3"),
+    Say(Moment.LIGHTNING_QUESTION, number=1, of=3),
+    Say(Moment.LIGHTNING_QUESTION, number=2, of=3),
+    Say(Moment.LIGHTNING_QUESTION, number=3, of=3),
     Say(Moment.LAST_WORD, about=LEFT),
     Say(Moment.LAST_WORD, about=RIGHT),
     Say(Moment.OUTRO),
@@ -265,7 +265,7 @@ async def test_a_lightning_question_never_opens_with_both_daters_names():
     model = FakeModel("Maya, Theo, mountains or sea?")
     w = writer(model)
     await w.prepare()
-    line = await w.line_for(Say(Moment.LIGHTNING_QUESTION, detail="1 of 3"))
+    line = await w.line_for(Say(Moment.LIGHTNING_QUESTION, number=1, of=3))
     assert line.source is Source.FALLBACK
     assert Violation.OPENS_WITH_NAMES in line.violations
 
@@ -398,19 +398,29 @@ async def test_lightning_fallbacks_take_turns_across_the_whole_night():
     w = writer(FakeModel(error=RuntimeError("down")), tonight=tonight)
     await w.prepare()
     texts = [
-        (await w.line_for(Say(Moment.LIGHTNING_QUESTION, detail=f"{n} of 3"))).text
-        for n in (1, 2, 3)
+        (await w.line_for(Say(Moment.LIGHTNING_QUESTION, number=n, of=3))).text for n in (1, 2, 3)
     ]
     assert texts[0] == script.LIGHTNING_FALLBACKS[1], "not the one an earlier date heard"
     assert texts[2] == script.LIGHTNING_FALLBACKS[2], '"Last quick one" only ever comes last'
     assert not any(text.startswith("Last") for text in texts[:2])
 
 
+async def test_the_number_of_lightning_questions_lives_in_the_running_order(monkeypatch):
+    """With "1 of 3" as a string, a fourth question silently lost its prepared line."""
+    monkeypatch.setattr(running_order, "LIGHTNING_QUESTIONS", 4)
+    w = writer(FakeModel(error=RuntimeError("down")))
+    await w.prepare()
+    lines = [await w.line_for(running_order.lightning_question(n)) for n in (1, 2, 3, 4)]
+    assert all(line.error is ErrorKind.ERROR for line in lines), "all four were prepared"
+    assert lines[3].text == script.LIGHTNING_FALLBACKS[2], '"Last quick one" comes fourth'
+    assert not any(line.text.startswith("Last") for line in lines[:3])
+
+
 async def test_a_lightning_question_is_one_sentence():
     model = FakeModel("Time for the lightning round. Mountains or sea?")
     w = writer(model)
     await w.prepare()
-    line = await w.line_for(Say(Moment.LIGHTNING_QUESTION, detail="1 of 3"))
+    line = await w.line_for(Say(Moment.LIGHTNING_QUESTION, number=1, of=3))
     assert line.source is Source.FALLBACK and Violation.TOO_LONG in line.violations
 
 
