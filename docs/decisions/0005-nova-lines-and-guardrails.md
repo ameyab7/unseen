@@ -79,9 +79,14 @@ Date: 2026-10-13. Status: accepted.
     minute, so a rehearsal measures it.
   - **Words to Nova wait for the verdict.** Words are to Nova only when Nova is addressed:
     "Nova" among the first three words ("Nova, ...", "Hey Nova ...", "OK so Nova ...") or
-    as the last word ("..., Nova?"). "Did you hear what Nova said?" gets no reply, but the
-    rule can't tell a mention in the first three words ("I think Nova is funny") from a
-    question. The reply's detail is the whole utterance. The reply is written while the
+    as the last word ("..., Nova?") of any sentence in the utterance or any final in it,
+    so "That's so funny." then "Nova, what do you think?" is to Nova. "Nova" directly
+    followed by said, says, asked, asks, is, isn't, was, wasn't, thinks or thought is
+    talked about ("Honestly, Nova is so funny", "did you hear what" then "Nova said?"),
+    and "Nova's" is never Nova. Limits: the comma matters, so "Nova, is it my turn?" is
+    to Nova but an unpunctuated "nova is it my turn" isn't, and Nova as the last word of
+    a sentence is still taken as asked ("I really like Nova."). The reply's detail is the
+    whole utterance, and an utterance gets at most one reply. It is written while the
     check runs and said only if the answer isn't yes; on yes the kind line comes instead.
     Both are measured from the end of the dater's sentence, so the grace and the check's
     time count against the 2.5 s reply target (`docs/spike-results.md`); the rehearsal

@@ -12,6 +12,7 @@ from nova.cards import Seat
 from nova.cues import AlertModerator, ModeratorAlert, Moment, Say
 from nova.decisions import InMemoryDecisionDesk
 from nova.distress import DistressCheck, Verdict
+from nova.evaluation import FakeClock as Clock
 from nova.evaluation import Speech, hear_on_air, spoken
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
 from nova.on_air import MATCH_CAP, OnAirCues, OnAirListener, addresses_nova
@@ -23,14 +24,6 @@ LEFT, RIGHT = Seat.LEFT, Seat.RIGHT
 ON_AIR_AT = FULL.free_talk + 20.0  # where hear_on_air puts the date: free talk
 GRACE, MAX_WAIT = 0.6, 1.5  # the defaults
 DISTRESSED = AlertModerator(ModeratorAlert.DATER_DISTRESSED, LEFT)
-
-
-class Clock:
-    def __init__(self, now: float = 0.0) -> None:
-        self.now = now
-
-    def __call__(self) -> float:
-        return self.now
 
 
 class Model:
@@ -270,27 +263,68 @@ async def test_a_split_question_to_nova_gets_one_reply_to_the_whole_utterance():
 
 
 @pytest.mark.parametrize(
-    ("words", "to_nova"),
+    ("finals", "to_nova"),
     [
-        ("Did you hear what Nova said?", False),
-        ("Nova's questions are the best part.", False),
-        ("What do you think, Nova?", True),
-        ("Nova, tea or coffee?", True),
-        ("Hey Nova, tea or coffee?", True),
-        ("OK so Nova, who goes first?", True),
-        ("nova what's next", True),
-        ("I think tea, honestly.", False),
+        (("Did you hear what Nova said?",), False),
+        (("Nova's questions are the best part.",), False),
+        (("What do you think, Nova?",), True),
+        (("Nova, tea or coffee?",), True),
+        (("Hey Nova, tea or coffee?",), True),
+        (("OK so Nova, who goes first?",), True),
+        (("nova what's next",), True),
+        (("I think tea, honestly.",), False),
+        (("Nova, is it my turn?",), True),  # with a comma, asked
+        (("I think Nova is funny.",), False),
+        (("Nova said we'd get a question.",), False),
+        (("Nova’s questions are hard.",), False),  # a curly apostrophe
+        (("Did you hear what Nova", "said?"), False),  # directly followed, in the next final
     ],
 )
-def test_words_are_to_nova_only_when_nova_is_addressed(words, to_nova):
-    assert addresses_nova(words) is to_nova
+def test_words_are_to_nova_only_when_nova_is_addressed(finals, to_nova):
+    assert addresses_nova(*finals) is to_nova
 
 
-async def test_talking_about_nova_gets_no_reply_but_is_still_checked():
+# Words to Nova after something else, in a sentence or a final of their own; and words
+# about Nova, some of which start a final of their own.
+TO_NOVA = [
+    ("That's so funny.", "Nova, what do you think?"),
+    ("That's so funny. Nova, what do you think?",),
+    ("that's so funny", "nova what do you think"),
+    ("What do you think, Nova? I'd say pineapple.",),
+    ("Okay. Hey Nova, settle this for us.",),
+    ("Nova, Nova?",),
+    ("Nova,", "Nova?"),
+]
+ABOUT_NOVA = [
+    ("Did you hear what Nova said?",),
+    ("Did you hear what", "Nova said?"),
+    ("Nova's questions are hard.",),
+    ("Honestly, Nova is so funny.",),
+]
+
+
+def reply_details(said) -> list[str | None]:
+    return [c.detail for c in said if isinstance(c, Say) and c.moment is Moment.REPLY]
+
+
+@pytest.mark.parametrize("finals", TO_NOVA)
+async def test_words_to_nova_get_one_reply_to_the_whole_utterance(finals):
+    whole = " ".join(finals)
+    listener, delivered, _, clock = on_air()
+    await say(listener, clock, *finals)
+    assert reply_details(cues(delivered)) == [whole]
+    heard = await hear_on_air(DistressCheck(Model(), timeout=1.0), *finals)
+    assert heard.reply and reply_details(heard.cues) == [whole]
+
+
+@pytest.mark.parametrize("finals", ABOUT_NOVA)
+async def test_words_about_nova_get_no_reply_but_are_still_checked(finals):
     listener, delivered, model, clock = on_air()
-    await say(listener, clock, "Did you hear what Nova said?")
+    await say(listener, clock, *finals)
     assert replies(delivered) == []
-    assert [sentence for _, sentence in model.checked] == ["Did you hear what Nova said?"]
+    assert [sentence for _, sentence in model.checked] == [" ".join(finals)]
+    heard = await hear_on_air(DistressCheck(Model(), timeout=1.0), *finals)
+    assert not heard.reply and reply_details(heard.cues) == []
 
 
 async def test_naming_nova_last_gets_a_reply():

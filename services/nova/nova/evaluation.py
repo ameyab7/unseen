@@ -284,7 +284,8 @@ class Speech(StrEnum):
 
 
 def spoken(finals: Sequence[str], *, at: float) -> list[tuple[float, Speech, str]]:
-    """What the on-air listener hears, and when, as a dater says these finals from at."""
+    """What the on-air listener hears, and when, as a dater says these finals from at, in
+    the order it hears them."""
     events = [(at, Speech.STARTED, "")]
     for k, final in enumerate(finals):
         stopped = at + SPEAKING
@@ -295,15 +296,28 @@ def spoken(finals: Sequence[str], *, at: float) -> list[tuple[float, Speech, str
         at = stopped + PAUSE
         if k < len(finals) - 1:
             events.append((at, Speech.STARTED, ""))
-    return events
+    return sorted(events, key=lambda event: event[0])
 
 
-class _Clock:
-    def __init__(self, now: float) -> None:
-        self.now = now
+class FakeClock:
+    """Time for the evaluation and its tests, set by hand. It never goes backwards: a step
+    back would be a bug in what's simulated, so it raises instead of passing silently."""
+
+    def __init__(self, now: float = 0.0) -> None:
+        self._now = now
 
     def __call__(self) -> float:
-        return self.now
+        return self._now
+
+    @property
+    def now(self) -> float:
+        return self._now
+
+    @now.setter
+    def now(self, at: float) -> None:
+        if at < self._now:
+            raise ValueError(f"the fake clock went backwards, from {self._now} to {at}")
+        self._now = at
 
 
 async def hear_on_air(
@@ -319,7 +333,7 @@ async def hear_on_air(
     transcripts, after saying earlier a few seconds before. The same on-air listener as
     the rehearsal (nova/on_air.py) hears it, spoken as in spoken() on a fake clock, so the
     evaluation measures what runs rather than a copy of it."""
-    clock = _Clock(FULL.free_talk + 20.0)
+    clock = FakeClock(FULL.free_talk + 20.0)
     runner = ShowRunner(pair, desk=InMemoryDecisionDesk(), poll=NoVotes(), first_up=Seat.LEFT)
     runner.start(0.0)
     runner.tick(clock.now)  # the date so far

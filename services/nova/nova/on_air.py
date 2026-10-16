@@ -28,6 +28,7 @@ seconds of it. Nothing here logs or stores it.
 import asyncio
 import re
 import time
+from bisect import bisect_left
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -42,17 +43,54 @@ from nova.show_runner import ShowRunner
 MATCH_CAP = 3.0
 # A sentence end older than this isn't the one a transcript belongs to.
 SENTENCE_END_MAX_AGE = 5.0
-# Words to Nova name Nova in the first few words ("Nova, ...", "Hey Nova ...", "OK so
-# Nova ...") or as the last word ("..., Nova?"). Anywhere else, Nova is talked about.
+# Words to Nova name Nova in the first few words of a sentence or a final transcript
+# ("Nova, ...", "Hey Nova ...", "OK so Nova ...") or as its last word ("..., Nova?").
+# Anywhere else, Nova is talked about.
 ADDRESS_WORDS = 3
+# Nova directly followed by one of these is talked about, wherever it comes ("Nova said",
+# "Nova is so funny"); with a comma between, Nova is asked ("Nova, is it my turn?").
+# "Nova's" is one word, so never Nova.
+MENTIONED_BY = frozenset(
+    {"said", "says", "asked", "asks", "is", "isn't", "was", "wasn't", "thinks", "thought"}
+)
 _WORD = re.compile(r"[a-z]+(?:'[a-z]+)*")
+_SENTENCE = re.compile(r"[^.?!]+")
 
 
-def addresses_nova(words: str) -> bool:
-    """Whether a dater said these words to Nova, not about Nova ("did you hear what Nova
-    said?") or about Nova's things ("Nova's questions")."""
-    said = _WORD.findall(words.lower().replace("’", "'"))
-    return "nova" in said[:ADDRESS_WORDS] or said[-1:] == ["nova"]
+def addresses_nova(*finals: str) -> bool:
+    """Whether a dater said these words, one or more final transcripts, to Nova, not about
+    Nova ("did you hear what Nova said?") or about Nova's things ("Nova's questions").
+    Speech recognition splits sentences at pauses and an utterance joins them, so Nova is
+    looked for in each sentence of the whole and in each final: "That's so funny." then
+    "Nova, what do you think?" is to Nova."""
+    finals = tuple(final.lower().replace("’", "'") for final in finals)
+    text = " ".join(finals)
+    words = list(_WORD.finditer(text))
+    starts = [word.start() for word in words]
+
+    def between(begin: int, end: int) -> range:
+        """The words that start between two places in text."""
+        return range(bisect_left(starts, begin), bisect_left(starts, end))
+
+    parts = [between(sentence.start(), sentence.end()) for sentence in _SENTENCE.finditer(text)]
+    begin = 0
+    for final in finals:
+        parts.append(between(begin, begin + len(final)))
+        begin += len(final) + 1
+    named = {k for part in parts for k in (*part[:ADDRESS_WORDS], *part[-1:])}
+    return any(_asked(text, words, k) for k in named)
+
+
+def _asked(text: str, words: list[re.Match[str]], k: int) -> bool:
+    """Word k is Nova, and not directly followed by a verb that talks about Nova."""
+    if words[k].group() != "nova":
+        return False
+    after = words[k + 1] if k + 1 < len(words) else None
+    return not (
+        after is not None
+        and after.group() in MENTIONED_BY
+        and text[words[k].end() : after.start()].isspace()
+    )
 
 
 @dataclass(frozen=True)
@@ -228,7 +266,7 @@ class OnAirListener:
         instant = hearing.unmistakable is not None
         self.closed.append(Closed(seat, instant=instant, waited=now - ended))
         if hearing.unmistakable is not None:
-            self._wants_to_stop(now, seat, hearing.unmistakable, words, ended)
+            self._wants_to_stop(now, seat, hearing.unmistakable, utterance, ended)
             return
         hold: asyncio.Future[Verdict] | None = None
         if hearing.check is not None:
@@ -236,7 +274,7 @@ class OnAirListener:
             task = asyncio.ensure_future(self._act_on(hearing.check, seat, ended, now, hold))
             self._checks.add(task)
             task.add_done_callback(self._checks.discard)
-        if addresses_nova(words):
+        if addresses_nova(*utterance.words):  # one reply, to the whole utterance
             self._send(runner.dater_asked_nova(now, seat, words), ended, hold, now)
 
     def _recheck(self, now: float, seat: Seat, dater: _Dater, utterance: _Utterance) -> None:
@@ -255,11 +293,13 @@ class OnAirListener:
         if self._runner.started:
             self._send(self._runner.tick(now))
         self.closed.append(Closed(seat, instant=True, waited=now - ended if stopped else None))
-        self._wants_to_stop(now, seat, heard, utterance.text, ended)
+        self._wants_to_stop(now, seat, heard, utterance, ended)
 
-    def _wants_to_stop(self, now: float, seat: Seat, heard: str, words: str, ended: float) -> None:
+    def _wants_to_stop(
+        self, now: float, seat: Seat, heard: str, utterance: _Utterance, ended: float
+    ) -> None:
         runner = self._runner
-        said = runner.dater_asked_nova if addresses_nova(words) else runner.dater_said
+        said = runner.dater_asked_nova if addresses_nova(*utterance.words) else runner.dater_said
         self._send(said(now, seat, heard), ended, closed_at=now)
 
     async def _act_on(

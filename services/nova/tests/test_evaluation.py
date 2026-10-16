@@ -4,12 +4,15 @@ NOVA_LLM) is on demand: uv run python -m nova.evaluation. It is never part of CI
 import asyncio
 import re
 
+import pytest
+
 from nova.cues import Moment
 from nova.distress import is_unmistakable
 from nova.distress_set import DISTRESS_SET
 from nova.evaluation import (
     CASES,
     CaseResult,
+    FakeClock,
     Repetition,
     distress_summary,
     fallback_rates,
@@ -21,6 +24,7 @@ from nova.evaluation import (
     run_cases,
     run_distress,
     run_night,
+    spoken,
 )
 from nova.fixtures import NIGHT
 from nova.lines import LIVE_REACTIONS, SET_PIECES
@@ -395,3 +399,27 @@ async def test_a_grace_too_short_for_the_pause_splits_the_utterance_and_shows_in
     assert summary.split_quiet == 1 and summary.false_pauses == 5
     off = render_distress(results, model_name="fake/model")
     assert "false pause [instant]  I want to stop / eating sugar." in off
+
+
+def test_simulated_speech_reaches_the_listener_in_time_order():
+    """The voice detector hears a dater stop before their final transcript arrives, so the
+    events of a sentence split in two come in that order."""
+    events = spoken(("Nova,", "what's your favourite film?"), at=10.0)
+    times = [at for at, _, _ in events]
+    assert times == sorted(times)
+    assert [str(speech) for _, speech, _ in events] == [
+        "started",
+        "ended",
+        "final",
+        "started",
+        "ended",
+        "final",
+    ]
+
+
+def test_the_fake_clock_never_goes_backwards():
+    clock = FakeClock(5.0)
+    clock.now = 6.0
+    with pytest.raises(ValueError, match="went backwards"):
+        clock.now = 5.95
+    assert clock() == 6.0
