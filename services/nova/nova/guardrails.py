@@ -128,8 +128,9 @@ INSTRUCTIONS = _any(
 )
 
 # Nova is only ever Nova. Claiming another name ("I'm Kate") means an injection steered it.
-# Case-sensitive, and run before names are masked, so "I'm Nova" is fine.
-OTHER_NAME = re.compile(r"\b(?:I'm|I am|[Mm]y name is|[Mm]y name's|[Cc]all me)\s+(?!Nova\b)[A-Z]")
+# Case-sensitive, and run before names are masked, so "I'm Nova" is fine, and so is a fixed
+# word ("I'm OK with either answer").
+OTHER_NAME = re.compile(r"\b(?:I'm|I am|[Mm]y name is|[Mm]y name's|[Cc]all me)\s+([A-Z][\w'-]*)")
 
 # Number words, for a phone number or address read out: three or more in a row ("five five
 # five, one two three four", "double seven"), never "two or three".
@@ -196,9 +197,17 @@ FUNCTION_WORDS = frozenset((
 ))  # fmt: skip
 
 # A street: a capitalised word or a number, then a street word ("Harbour Street", "42 Elm Road").
+# Words that can't name a street don't count, so "Either way", "So close", "a Sunday drive"
+# and "First place" aren't addresses.
+NOT_A_STREET_NAME = (
+    "Either", "Neither", "No", "Any", "One", "Some", "That", "This", "Which", "Each", "Every",
+    "Same", "First", "Last", "Next", "So", "Too", "Half", "All", "Long",
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+)  # fmt: skip
 STREET = re.compile(
-    r"\b(?:\d+|[A-Z][a-z]+)\s+(?i:street|st|road|rd|avenue|ave|lane|ln|boulevard|blvd|drive"
-    r"|way|place|court|terrace|crescent|close|square)\b"
+    rf"\b(?:\d+|(?!(?:{'|'.join(NOT_A_STREET_NAME)})\b)[A-Z][a-z]+)\s+"
+    r"(?i:street|st|road|rd|avenue|ave|lane|ln|boulevard|blvd|drive|way|place|court|terrace"
+    r"|crescent|close|square)\b"
 )
 
 # Audience questions Nova won't read: personal details, or looks.
@@ -227,8 +236,15 @@ INSTRUCTING_NOVA = _any(
     r"\bjailbreak\b",
 )
 
-SHOW_NAME = "Unseen"  # capitalised, it's the show; "keep it unseen" is decision talk
+SHOW_NAME = "Unseen"  # where it names the show; "keep it Unseen" is decision talk
+SHOW_NAME_BEFORE = re.compile(r"\b(?:on|to|of|at|from|this is|welcome to)\s+$", re.IGNORECASE)
 ALWAYS_ALLOWED = frozenset({"I", "AI", "OK", SHOW_NAME})
+# Holidays aren't unknown names. Nationalities, languages and cuisines stay blocked: they
+# can single out someone's background.
+HOLIDAYS = re.compile(
+    r"\b(?:Christmas|Easter|Halloween|Thanksgiving|Diwali|Eid|Hanukkah|Lunar New Year"
+    r"|Valentine's Day|New Year's (?:Eve|Day)|Boxing Day)\b"
+)
 DAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 MONTHS = (
     "January", "February", "March", "April", "May", "June",
@@ -297,15 +313,17 @@ def check(
         found.add(Violation.QUESTION)
     if not open_with_names and _opens_with_both_names(text, names):
         found.add(Violation.OPENS_WITH_NAMES)
-    if OTHER_NAME.search(text):
+    claimed = (match.group(1).split("'")[0] for match in OTHER_NAME.finditer(text))
+    if any(word not in ALWAYS_ALLOWED and word != "Nova" for word in claimed):
         found.add(Violation.INSTRUCTIONS)
 
     if any(m.group(0).split("'")[0].lower() in echoes for m in WORD.finditer(text)):
         found.add(Violation.PERSONAL_DETAIL)
 
     # Word checks run with the daters' own names masked, so a dater called Rose or Hope
-    # doesn't trip the spending or any other word list.
-    masked = re.sub(rf"\b{SHOW_NAME}\b", "Show", _mask_names(text, names))
+    # doesn't trip the spending or any other word list, and with the show's name masked
+    # where it names the show.
+    masked = _mask_show_name(_mask_names(text, names))
     for violation, pattern in (
         (Violation.CLAIMS_HUMAN, CLAIMS_HUMAN),
         (Violation.DECISION, DECISION),
@@ -367,6 +385,22 @@ def _has_formatting(text: str) -> bool:
             continue
         return True  # markdown, brackets, symbols, emoji
     return any(unicodedata.category(c).startswith("C") for c in text)
+
+
+def _mask_show_name(text: str) -> str:
+    """ "Unseen" becomes "Show" only where it names the show: starting a sentence, after on,
+    to, of, at or from, after "this is" or "welcome to", or before 's. Anywhere else ("keep
+    it Unseen", "stay Unseen") it stays, for the decision check to catch."""
+
+    def masked(match: re.Match[str]) -> str:
+        names_the_show = (
+            _starts_sentence(text, match.start())
+            or SHOW_NAME_BEFORE.search(text, 0, match.start()) is not None
+            or text.startswith(("'s", "’s"), match.end())
+        )
+        return "Show" if names_the_show else match.group(0)
+
+    return re.sub(rf"\b{SHOW_NAME}\b", masked, text)
 
 
 def _mask_names(text: str, names: Collection[str]) -> str:
@@ -444,11 +478,14 @@ def _name_problems(
             if word != name and not word.islower():
                 problems.add(Violation.NAME_CASE)
 
+    holidays = [match.span() for match in HOLIDAYS.finditer(text)]
     tokens = list(WORD.finditer(text))
     for i, match in enumerate(tokens):
         word = match.group(0)
         base = word.split("'")[0]
         if not base[:1].isupper():
+            continue
+        if any(start <= match.start() < end for start, end in holidays):
             continue
         if base in allowed:
             following = tokens[i + 1] if i + 1 < len(tokens) else None

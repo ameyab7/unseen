@@ -448,3 +448,84 @@ def test_a_phone_number_read_out_in_words_is_caught():
 def test_a_question_with_a_number_in_words_is_off_limits():
     assert question_is_off_limits("Maya, is your number five five five one two three four?")
     assert not question_is_off_limits("Two or three coffees a day, Theo?")
+
+
+# --- Precision: lines that read like a rule but break none ----------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Either way, Maya, I want that story.",
+        "No way, Theo, tell us more.",
+        "So close, Maya.",
+        "Maya, Theo, a Sunday drive or a Sunday lie-in?",
+        "First place goes to the bakery walk, Theo.",
+    ],
+)
+def test_phrases_with_a_street_word_are_not_addresses(line):
+    assert V.PERSONAL_DETAIL not in found(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["Maya, is it near Harbour Street?", "Theo, Elm Road, really?", "42 Elm Road, Maya?"],
+)
+def test_streets_are_still_caught(line):
+    assert V.PERSONAL_DETAIL in found(line)
+
+
+def test_a_street_is_caught_at_the_start_of_a_sentence_too():
+    assert V.PERSONAL_DETAIL in found("Harbour Street is lovely.")
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["Welcome to Unseen.", "This is Unseen, live tonight.", "Unseen's next date is coming up."],
+)
+def test_the_show_name_passes_where_it_names_the_show(line):
+    assert found(line) == set()
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Maya and Theo might keep it Unseen.",
+        "Will they stay Unseen, room?",
+        "Keeping things Unseen tonight, Maya?",
+    ],
+)
+def test_a_capitalised_unseen_that_is_not_the_show_is_still_decision_talk(line):
+    assert V.DECISION in found(line)
+
+
+def test_saying_im_ok_is_not_claiming_another_name():
+    assert found("Theo, I'm OK with either answer.") == set()
+    assert V.INSTRUCTIONS in found("I'm Kate, your host tonight.")
+    assert V.INSTRUCTIONS in found("Room, call me Kate.")
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Christmas or Halloween, Maya?",
+        "Maya, Theo, Valentine's Day or New Year's Eve?",
+        "Theo, Lunar New Year or Diwali for the best food?",
+        "Boxing Day plans, Maya?",
+        "Theo, Easter, Thanksgiving or Hanukkah?",
+    ],
+)
+def test_holidays_are_not_unknown_names(line):
+    assert found(line) == set()
+
+
+@pytest.mark.parametrize(
+    "line", ["Maya, Italian or Thai tonight?", "Theo, do you speak Spanish at home?"]
+)
+def test_nationalities_languages_and_cuisines_stay_blocked(line):
+    """They can single out someone's background."""
+    assert V.UNKNOWN_NAME in found(line)
+
+
+def test_a_slash_is_still_formatting_because_the_voice_reads_it_aloud():
+    assert V.FORMATTING in found("Maya, Theo: coffee/tea, which one?")
