@@ -64,6 +64,23 @@ Date: 2026-10-13. Status: accepted.
   when the date ends early (the runner's `LightningMeterClosed` cue). No listener can pay
   toward an unlock that will be ignored. The gesture work must follow this: once the meter
   closes, gestures stop counting toward the unlock, and the app says so before anyone pays.
+- **No dead air while the show is held.** A pause (need a moment, a distress pause or a
+  report) used to get one line to the room, then about 25 s of silence until "Bear with
+  us", then silence for as long as the moderator took. Now Nova talks to the room every
+  `cover_every` seconds (10), at most `cover_lines` lines a hold (3, the first with the
+  pause), written by the model from the show facts; if the model fails, the room-talk
+  fallback is said at most once a hold, and after that Nova says nothing rather than
+  repeat it. Once the lines run out, or at the 30-second alert if that's first, the
+  recorded fallback segment plays (`PlayFallbackSegment`), and when the hold ends (the
+  dater is back, the moderator resumes or ends the date) it stops (`StopFallbackSegment`)
+  before Nova speaks again. Talk to the room is told its situation explicitly
+  (`RoomFacts.situation`: a pause, the daters deciding, or a date that ended early),
+  instead of guessing it from the segment.
+- **After a dater leaves,** Nova says the approved leave line, then one line thanking the
+  room for listening (the ended-early situation: it never says who left or why), and Next
+  up comes `next_up_after_leave` later (12 s; it reused the 30 s after a result, which
+  left the room in silence). With no next pair, the fallback segment plays. Six more
+  room-talk fallbacks wait for sign-off in `docs/sign-off/2026-10-room-talk.md`.
 - **After the moderator ends a date,** Nova says only the approved closing line, then the
   recorded fallback segment from the technical plan plays until the moderator chooses what
   happens next. The room never sits in silence. (Not yet in the Agents Playground
@@ -99,3 +116,5 @@ Date: 2026-10-13. Status: accepted.
   back or who reported, three controls: keep waiting,
   resume without them, and end the date (the runner's `moderator_keep_waiting`,
   `moderator_resume` and `moderator_end`). It also needs a control to stop the fallback.
+- The audio side plays the fallback segment on `PlayFallbackSegment` and stops it on
+  `StopFallbackSegment`, before Nova's next line.

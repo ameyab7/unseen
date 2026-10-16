@@ -30,6 +30,13 @@ class Timing:
     # Need a moment: the clock holds until the dater is back. After 30 seconds (prototype:
     # "Nova is covering for 30 seconds") the moderator is alerted and decides what's next.
     moment_alert_after: float = 30.0
+    # While the show is held, Nova talks to the room every cover_every seconds, at most
+    # cover_lines lines; then the recorded fallback segment plays (at the latest at the
+    # alert), so the room never sits in silence. Assumptions, like the gaps above.
+    cover_every: float = 10.0
+    cover_lines: int = 3
+    # After a dater leaves: one line to the room, then Next up.
+    next_up_after_leave: float = 12.0
 
     # Long silence in free talk. Assumptions: the brand book says "a long silence".
     silence_after: float = 8.0
@@ -55,7 +62,7 @@ class Timing:
         """Shrinks every beat by factor, except the silence rule and the talk-over grace:
         people need the same few seconds to fill a silence or finish a sentence whether or
         not it's a rehearsal."""
-        keep = {"silence_after", "silence_cooldown", "talk_over_grace"}
+        keep = {"silence_after", "silence_cooldown", "talk_over_grace", "cover_lines"}
         return replace(
             self,
             **{

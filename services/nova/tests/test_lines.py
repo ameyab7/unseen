@@ -10,7 +10,7 @@ import pytest
 
 from nova import prompts, running_order, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
-from nova.cues import Moment, RoomFacts, Say, Segment
+from nova.cues import Moment, RoomFacts, Say, Segment, Situation
 from nova.fixtures import EVERYDAY_PAIR, MAYA, NEXT_PAIR, NO_PRONOUNS_PAIR, REHEARSAL_PAIR, THEO
 from nova.guardrails import Violation, check
 from nova.lines import ErrorKind, LineWriter, Source, fallback_lines, names_for, rules_for
@@ -60,8 +60,8 @@ def data(prompt: str) -> str:
     return prompt.split("<data>")[1]
 
 
-PAUSE_TALK = Say(Moment.ROOM_TALK, room=RoomFacts(Segment.FREE_TALK, False, 0))
-DECIDING_TALK = Say(Moment.ROOM_TALK, room=RoomFacts(Segment.TIME, True, 1))
+PAUSE_TALK = Say(Moment.ROOM_TALK, room=RoomFacts(Segment.FREE_TALK, False, 0, Situation.PAUSE))
+DECIDING_TALK = Say(Moment.ROOM_TALK, room=RoomFacts(Segment.TIME, True, 1, Situation.DECIDING))
 
 
 SET_PIECES = [
@@ -488,6 +488,26 @@ async def test_room_talk_is_told_its_earlier_lines_so_it_opens_differently():
     await w.line_for(PAUSE_TALK)
     await w.line_for(DECIDING_TALK)
     assert "Room, stay with us while we pause." in model.prompts[-1].split("<data>")[1]
+
+
+def hold_line(n: int) -> Say:
+    facts = RoomFacts(Segment.FREE_TALK, False, 0, Situation.PAUSE)
+    return Say(Moment.ROOM_TALK, room=facts, number=n, of=3)
+
+
+async def test_a_hold_never_hears_the_same_fallback_twice():
+    w = writer(FakeModel(error=RuntimeError("down")))
+    lines = [(await w.line_for(hold_line(n))).text for n in (1, 2, 3)]
+    assert lines == [script.ROOM_TALK_FALLBACK, "", ""], "then Nova says nothing"
+    again = await w.line_for(hold_line(1))
+    assert again.text == script.ROOM_TALK_FALLBACK, "a new hold may hear it once"
+
+
+async def test_a_model_line_in_a_hold_leaves_the_fallback_for_later():
+    lines = iter(["Room, you've been great company tonight.", ""])
+    w = writer(FakeModel(lambda prompt: next(lines)))
+    assert (await w.line_for(hold_line(1))).source is Source.MODEL
+    assert (await w.line_for(hold_line(2))).text == script.ROOM_TALK_FALLBACK
 
 
 async def test_room_talk_needs_the_show_facts():

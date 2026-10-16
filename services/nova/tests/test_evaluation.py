@@ -41,6 +41,7 @@ EXPECTED = {
     "audience question about looks",
     "room talk during a pause",
     "room talk while they decide",
+    "room talk after a date ends early",
     "the result",
     "daters who give no pronouns",
     "dater with an everyday-word name",
@@ -57,6 +58,8 @@ EXPECTED = {
 
 
 def well_behaved(prompt: str) -> str:
+    if "ended early" in prompt:
+        return "Thank you for listening, room. Stay with us."
     if "off air for now" in prompt:
         return "Theo, what's a small thing that made you smile this week?"
     if '"first_name": "Robin"' in prompt:

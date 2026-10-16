@@ -1,5 +1,6 @@
 """Nova's show runner, driven on a fake clock. No network, no audio, no model."""
 
+import dataclasses
 import random
 
 import pytest
@@ -26,7 +27,9 @@ from nova.cues import (
     Segment,
     SegmentStarted,
     ShowVerdict,
+    Situation,
     Sound,
+    StopFallbackSegment,
     StopSpeaking,
 )
 from nova.decisions import Choice, InMemoryDecisionDesk, Outcome
@@ -105,6 +108,10 @@ class Show:
 
     def says(self, moment=None):
         return [(t, c) for t, c in self.log if isinstance(c, Say) and moment in (None, c.moment)]
+
+
+def replace_timing(**changes) -> Timing:
+    return dataclasses.replace(FULL, **changes)
 
 
 def full_date(**options) -> Show:
@@ -186,7 +193,7 @@ def test_time_opens_the_private_decision_and_the_room_poll():
         DecisionWindowOpened(seconds=60.0),
         PollOpened(script.POLL_QUESTION),
         Say(Moment.TIME, text="That's time. Maya and Theo are deciding, privately."),
-        Say(Moment.ROOM_TALK, room=RoomFacts(Segment.TIME, poll_open=True, questions_asked=0)),
+        Say(Moment.ROOM_TALK, room=RoomFacts(Segment.TIME, True, 0, Situation.DECIDING)),
     ]
 
 
@@ -460,8 +467,15 @@ def test_with_only_unapproved_questions_nova_reads_none():
 # --- Need a moment ------------------------------------------------------------------------
 
 
-PAUSE_FACTS = RoomFacts(Segment.FREE_TALK, poll_open=False, questions_asked=0)
-PAUSE_TALK = Say(Moment.ROOM_TALK, room=PAUSE_FACTS)
+PAUSE_FACTS = RoomFacts(Segment.FREE_TALK, False, 0, Situation.PAUSE)
+PAUSE_TALK = Say(Moment.ROOM_TALK, room=PAUSE_FACTS, number=1, of=3)  # a hold's first line
+
+
+def cover_line(n: int) -> Say:
+    """A hold's nth line to the room: every 10 s, at most 3."""
+    return Say(Moment.ROOM_TALK, room=PAUSE_FACTS, number=n, of=3)
+
+
 COVER = [Say(Moment.NEED_A_MOMENT, text=script.NEED_A_MOMENT), PAUSE_TALK]
 WELCOME_BACK = Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK)
 BEAR_WITH_US = Say(Moment.BEAR_WITH_US, text=script.BEAR_WITH_US)
@@ -481,11 +495,11 @@ def test_need_a_moment_nova_covers_and_the_clock_holds_until_the_dater_is_back()
     assert show.at(100, "need_a_moment", LEFT) == COVER
     assert "Maya" not in script.NEED_A_MOMENT and "Theo" not in script.NEED_A_MOMENT
 
-    show.until(119.5)
-    assert show.cues(since=100.5, before=120) == [], "nothing else happens while Nova covers"
-    assert show.at(120, "back", LEFT) == [WELCOME_BACK]
+    show.until(114.5)
+    assert show.cues(since=100.5, before=115) == [cover_line(2)], "Nova covers every 10 s"
+    assert show.at(115, "back", LEFT) == [WELCOME_BACK]
     show.until(300)
-    assert (260.0, "from_the_room") in show.segments(), "the running order shifted by 20 s"
+    assert (255.0, "from_the_room") in show.segments(), "the running order shifted by 15 s"
     assert show.cues(AlertModerator) == []
 
 
@@ -498,7 +512,8 @@ def test_only_the_dater_who_asked_can_end_the_pause():
 
 def test_not_back_after_thirty_seconds_nova_asks_the_room_to_bear_with_us_once():
     show = paused_and_not_back()
-    assert show.cues(since=130, before=130.5) == NOT_BACK
+    assert show.cues(since=100.5, before=130) == [cover_line(2), cover_line(3)]
+    assert show.cues(since=130, before=130.5) == [*NOT_BACK, PlayFallbackSegment()]
     show.until(400)
     assert show.says(Moment.BEAR_WITH_US) == [(130.0, BEAR_WITH_US)], "said once"
     assert show.cues(AlertModerator) == [NOT_BACK[0]], "alerted once"
@@ -511,8 +526,8 @@ def test_the_moderator_can_keep_waiting_until_the_dater_is_back():
     show = paused_and_not_back()
     assert show.at(140, "moderator_keep_waiting") == []
     show.until(200)
-    assert show.cues(since=130.5) == [], "still on hold, and Nova says nothing more"
-    assert show.at(210, "back", LEFT) == [WELCOME_BACK]
+    assert show.cues(since=130.5) == [], "still on hold: the fallback segment plays"
+    assert show.at(210, "back", LEFT) == [StopFallbackSegment(), WELCOME_BACK]
     show.until(400)
     assert (350.0, "from_the_room") in show.segments(), "the running order shifted by 110 s"
 
@@ -521,7 +536,8 @@ def test_the_moderator_can_resume_without_the_dater_and_nova_welcomes_them_back_
     """Before, a dater who came back after the moderator resumed got nothing, and nothing
     marked their return. "And we're back." is true then, so Nova says it (decision 0004)."""
     show = paused_and_not_back()
-    assert show.at(140, "moderator_resume") == [], "no welcome back: nobody came back"
+    resumed = show.at(140, "moderator_resume")
+    assert resumed == [StopFallbackSegment()], "no welcome back: nobody came back"
     assert show.at(150, "back", LEFT) == [WELCOME_BACK]
     assert show.at(160, "back", LEFT) == [], "once"
     show.until(400)
@@ -581,10 +597,34 @@ def test_after_a_report_the_reporter_isnt_welcomed_back_their_date_ended_in_the_
     assert show.at(120, "back", LEFT) == []
 
 
+def test_nova_covers_a_hold_every_ten_seconds_three_lines_at_most_then_the_segment_plays():
+    show = Show(timing=replace_timing(cover_every=8.0))
+    show.at(100, "need_a_moment", LEFT)
+    show.until(129.5)
+    assert [t for t, _ in show.says(Moment.ROOM_TALK)] == [100.0, 108.0, 116.0], "three lines"
+    assert show.times(PlayFallbackSegment) == [124.0], "once the lines run out"
+    show.until(140)
+    assert show.times(PlayFallbackSegment) == [124.0], "it plays on, started once"
+
+
+def test_the_fallback_segment_stops_before_nova_speaks_again():
+    show = paused_and_not_back()
+    back = show.at(150, "back", LEFT)
+    assert back == [StopFallbackSegment(), WELCOME_BACK], "stopped first, then Nova"
+
+
+def test_a_hold_that_ends_before_the_segment_never_plays_or_stops_it():
+    show = Show()
+    show.at(100, "need_a_moment", LEFT)
+    assert show.at(105, "back", LEFT) == [WELCOME_BACK]
+    assert show.cues(PlayFallbackSegment) == show.cues(StopFallbackSegment) == []
+
+
 def test_the_moderator_can_end_the_date_while_waiting():
     show = paused_and_not_back()
     ended = show.at(140, "moderator_end")
     assert ended == [
+        StopFallbackSegment(),
         StopSpeaking(),
         Say(Moment.MODERATOR_END, text=script.MODERATOR_END),
         LightningMeterClosed(),
@@ -614,8 +654,8 @@ def test_talk_to_the_room_comes_with_safe_facts_about_the_show():
     show.at(255, "back", LEFT)
     show.until(600)
     assert [cue.room for _, cue in show.says(Moment.ROOM_TALK)] == [
-        RoomFacts(Segment.FROM_THE_ROOM, poll_open=False, questions_asked=1),
-        RoomFacts(Segment.TIME, poll_open=True, questions_asked=1),
+        RoomFacts(Segment.FROM_THE_ROOM, False, 1, Situation.PAUSE),
+        RoomFacts(Segment.TIME, True, 1, Situation.DECIDING),
     ]
 
 
@@ -651,7 +691,7 @@ def test_a_dater_who_clearly_wants_to_stop_gets_a_kind_line_a_pause_and_the_mode
         PAUSE_TALK,
     ]
     show.until(119.5)
-    assert show.cues(since=100.5, before=120) == [], "the show holds, as for a moment"
+    assert show.cues(since=100.5, before=120) == [cover_line(2)], "held, as for a moment"
     assert show.at(120, "back", LEFT) == [WELCOME_BACK]
     show.until(300)
     assert (260.0, "from_the_room") in show.segments(), "the running order shifted by 20 s"
@@ -690,7 +730,7 @@ def test_a_yes_from_the_distress_check_pauses_as_for_an_unmistakable_request():
         PAUSE_TALK,
     ]
     show.until(119.5)
-    assert show.cues(since=100.5, before=120) == [], "the show holds, as for a moment"
+    assert show.cues(since=100.5, before=120) == [cover_line(2)], "held, as for a moment"
 
 
 def test_a_maybe_alerts_the_moderator_and_nothing_else():
@@ -718,7 +758,7 @@ def test_a_dater_who_wants_to_stop_is_heard_even_when_not_talking_to_nova(words)
     show = Show()
     assert show.at(100, "dater_said", LEFT, words) == [DISTRESSED, StopSpeaking(), KIND, PAUSE_TALK]
     show.until(119.5)
-    assert show.cues(since=100.5, before=120) == [], "the show holds, as for a moment"
+    assert show.cues(since=100.5, before=120) == [cover_line(2)], "held, as for a moment"
 
 
 def test_words_not_to_nova_that_the_instant_layer_doesnt_know_are_left_to_the_meaning_layer():
@@ -737,7 +777,7 @@ def test_after_a_distress_pause_the_usual_pause_rules_apply():
     show = Show()
     show.at(100, "dater_asked_nova", LEFT, "I'm not comfortable.")
     show.until(130)
-    assert show.cues(since=130, before=130.5) == NOT_BACK, "not back in 30 s"
+    assert show.cues(since=130, before=130.5) == [*NOT_BACK, PlayFallbackSegment()]
     show.at(140, "back", LEFT)
     assert show.at(200, "dater_asked_nova", LEFT, "I need a moment.") == [
         DISTRESSED,
@@ -782,16 +822,25 @@ def test_a_dater_leaving_is_closed_kindly_and_the_date_ends_as_dater_left():
         Say(Moment.DATER_LEFT, text=line),
         LightningMeterClosed(),
         DateEnded(EndReason.DATER_LEFT, outcome=None),
+        Say(Moment.ROOM_TALK, room=RoomFacts(Segment.FREE_TALK, False, 0, Situation.ENDED_EARLY)),
     ]
     assert not any(word in line.lower() for word in BLAME)
 
     show.until(600)
-    assert show.segments()[-1] == (230.0, "next_up"), "the show moves on to the next pair"
+    assert show.segments()[-1] == (212.0, "next_up"), "the next pair 12 s later, not 30"
     assert show.cues(ShowVerdict) == []
     assert show.says(Moment.RESULT) == [] and show.says(Moment.INVITATION) == []
     assert show.says(Moment.OUTRO) == []
     assert show.runner.end_reason is EndReason.DATER_LEFT
     assert show.runner.outcome is None
+
+
+def test_a_dater_leaving_with_no_next_pair_hands_over_to_the_fallback_segment():
+    show = Show(next_pair=None)
+    show.at(200, "dater_left", RIGHT)
+    show.until(600)
+    assert show.times(PlayFallbackSegment) == [212.0], "no dead air after the leave"
+    assert show.runner.finished
 
 
 def test_leaving_while_deciding_closes_the_poll_without_a_verdict_or_outcome():
@@ -812,7 +861,7 @@ def test_leaving_during_a_moment_releases_the_hold_with_no_alert():
     show.until(200)
     assert show.says(Moment.WELCOME_BACK) == []
     assert show.cues(AlertModerator) == []
-    assert show.segments()[-1] == (140.0, "next_up")
+    assert show.segments()[-1] == (122.0, "next_up")
 
 
 # --- The moderator ends the date ----------------------------------------------------------
@@ -966,8 +1015,8 @@ def test_a_report_alerts_the_moderator_first_then_pauses_the_date_naming_nobody(
     show = Show()
     assert show.at(100, "dater_reported", LEFT) == [REPORTED, StopSpeaking(), *COVER]
     show.until(130)
-    assert show.cues(since=100.5, before=130) == [], "the show holds"
-    assert show.cues(since=130, before=130.5) == NOT_BACK, "the usual 30-second alert"
+    assert show.cues(since=100.5, before=130) == [cover_line(2), cover_line(3)], "it holds"
+    assert show.cues(since=130, before=130.5) == [*NOT_BACK, PlayFallbackSegment()]
 
 
 def test_beats_already_due_come_out_before_a_report():

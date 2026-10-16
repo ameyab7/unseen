@@ -14,7 +14,7 @@ import unicodedata
 from collections.abc import Mapping, Sequence
 
 from nova.cards import BlindCard, Pair, Seat
-from nova.cues import RoomFacts, Segment
+from nova.cues import RoomFacts, Situation
 
 SYSTEM_PROMPT = """\
 You are Nova, the AI host of Unseen, a live, audio-only dating show. Two strangers talk on \
@@ -238,16 +238,23 @@ ROOM_TALK_OPENINGS = (
 
 
 def room_talk(facts: RoomFacts, *, opening: str, tonight: Sequence[str] = ()) -> str:
-    if facts.segment is Segment.TIME:
-        situation = (
-            "the daters are deciding privately, off air. Talk to the room for one or two "
-            "sentences while they decide. Don't guess or hint at what they'll choose."
-        )
-    else:
-        situation = (
-            "one of the daters is taking a short moment off air. Talk to the room for one or "
-            "two sentences. Don't say who stepped away or why."
-        )
+    match facts.situation:
+        case Situation.DECIDING:
+            situation = (
+                "the daters are deciding privately, off air. Talk to the room for one or two "
+                "sentences while they decide. Don't guess or hint at what they'll choose."
+            )
+        case Situation.PAUSE:
+            situation = (
+                "one of the daters is taking a short moment off air. Talk to the room for one "
+                "or two sentences. Don't say who stepped away or why."
+            )
+        case Situation.ENDED_EARLY:
+            situation = (
+                "this date has ended early. Thank the room for listening, in one or two "
+                "sentences. Never say who left, why, or that anyone left, and say nothing "
+                "about the daters."
+            )
     return _task(
         f"{situation} Work only from the facts about the show in the data; don't describe a "
         "place, lights or music. Never mention the outcome, spending or anyone's looks. "

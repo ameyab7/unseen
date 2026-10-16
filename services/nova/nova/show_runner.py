@@ -41,7 +41,9 @@ from nova.cues import (
     Segment,
     SegmentStarted,
     ShowVerdict,
+    Situation,
     Sound,
+    StopFallbackSegment,
     StopSpeaking,
 )
 from nova.decisions import DecisionDesk, Outcome
@@ -142,6 +144,8 @@ class ShowRunner:
         self._away: Seat | None = None  # the dater on a "need a moment"
         self._overdue = False  # not back in time: the moderator decides what happens next
         self._report_hold = False  # the pause is for a report: only the moderator lifts it
+        self._cover_lines = 0  # lines Nova has said to the room in this hold
+        self._segment_playing = False  # the fallback segment is covering this hold
         # A dater the moderator resumed the show without: their turns are skipped, silence
         # prompts go to the other dater, and if they come back, Nova welcomes them back. Not
         # after a report: the reporter's date ends in the app.
@@ -239,7 +243,7 @@ class ShowRunner:
         reporter's date ends in the app, and the moderator decides."""
         cues = self._due(now)
         if self._live and self._away is seat and not self._report_hold:
-            self._clear_pause(now)
+            cues += self._clear_pause(now)
             cues.append(Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK))
         elif self._live and self._absent is seat and not self._absent_reported:
             self._absent = None
@@ -258,22 +262,27 @@ class ShowRunner:
         cues = self._due(now)
         if self._live and self._away is not None:
             absent, reported = self._away, self._report_hold
-            self._clear_pause(now)
+            cues += self._clear_pause(now)
             self._absent, self._absent_reported = absent, reported
         return cues
 
     def dater_left(self, now: float, seat: Seat) -> list[Cue]:
-        """Nova closes kindly, with no reason and no blame; the show moves to the next pair."""
+        """Nova closes kindly, with no reason and no blame, then one line thanking the room;
+        Next up follows after timing.next_up_after_leave, or the fallback segment if
+        there's no next pair."""
         cues = self._due(now)
         if not self._live:
             return cues
-        self._clear_pause(now)
+        segment = self.segment or Segment.FREE_TALK
+        cues += self._clear_pause(now)
         leaver, other = self._pair.card(seat), self._pair.card(seat.other)
         cues += [StopSpeaking(), Say(Moment.DATER_LEFT, text=script.dater_left(leaver, other))]
         cues += self._close_poll()
         cues += self._end_date(EndReason.DATER_LEFT, None)
+        facts = RoomFacts(segment, False, self._questions_asked, Situation.ENDED_EARLY)
+        cues.append(Say(Moment.ROOM_TALK, room=facts))
         self._beats.clear()
-        self._schedule(self._show_time(now) + self._timing.next_up_after_result, "next_up")
+        self._schedule(self._show_time(now) + self._timing.next_up_after_leave, "next_up", "left")
         return cues
 
     def moderator_end(self, now: float) -> list[Cue]:
@@ -283,7 +292,7 @@ class ShowRunner:
         cues = self._due(now)
         if self.finished or not self.started:
             return cues
-        self._clear_pause(now)
+        cues += self._clear_pause(now)
         cues.append(StopSpeaking())
         if self.end_reason is None:
             cues.append(Say(Moment.MODERATOR_END, text=script.MODERATOR_END))
@@ -390,7 +399,8 @@ class ShowRunner:
         repeatable: counts towards the repeated-pause alert."""
         self._away, self._held_since, self._overdue = seat, now, False
         self._waiting, self._waiting_until = [], None
-        cues: list[Cue] = [Say(Moment.NEED_A_MOMENT, text=line), self._room_talk()]
+        self._cover_lines = 1
+        cues: list[Cue] = [Say(Moment.NEED_A_MOMENT, text=line), self._cover_line()]
         if repeatable:
             self._pauses[seat] += 1
             if self._pauses[seat] > 1:
@@ -405,12 +415,19 @@ class ShowRunner:
             cues += [StopSpeaking(), *self._pause(now, seat, script.DISTRESS_PAUSE)]
         return cues
 
-    def _room_talk(self) -> Say:
+    def _room_talk(self, situation: Situation, **place: int) -> Say:
         """Nova talks to the room, working only from safe facts about the show."""
         if self.segment is None:
             raise RuntimeError("Nova only talks to the room during a segment")
-        facts = RoomFacts(self.segment, self._poll_open, self._questions_asked)
-        return Say(Moment.ROOM_TALK, room=facts)
+        facts = RoomFacts(self.segment, self._poll_open, self._questions_asked, situation)
+        return Say(Moment.ROOM_TALK, room=facts, **place)
+
+    def _cover_line(self) -> Say:
+        """One of the hold's lines to the room, numbered, so the line writer never says
+        the same fallback twice in one hold."""
+        return self._room_talk(
+            Situation.PAUSE, number=self._cover_lines, of=self._timing.cover_lines
+        )
 
     def _show_time(self, now: float) -> float:
         if self._started_at is None:
@@ -431,10 +448,7 @@ class ShowRunner:
         cues = self._done_waiting(now)
         while not self.finished:
             if self._held_since is not None:
-                # The show clock is stopped: the only thing that can happen is the alert.
-                due = self._held_since + self._timing.moment_alert_after
-                if not self._overdue and due <= now:
-                    cues += self._not_back_in_time()
+                cues += self._cover(now)  # the show clock is stopped: Nova covers
                 break
             shown = self._show_time(now)
             beat_at = self._beats[0].at if self._beats else math.inf
@@ -504,7 +518,7 @@ class ShowRunner:
             case "result":
                 return self._result(at)
             case "next_up":
-                return self._next_up(at)
+                return self._next_up(at, after_a_leave=beat.arg == "left")
         raise ValueError(f"Unknown beat {beat.action!r}")
 
     def _enter(self, segment: Segment, at: float) -> list[Cue]:
@@ -546,7 +560,7 @@ class ShowRunner:
             DecisionWindowOpened(seconds=self._timing.decision_window),
             PollOpened(script.POLL_QUESTION),
             Say(Moment.TIME, text=script.time_line(self._pair)),
-            self._room_talk(),
+            self._room_talk(Situation.DECIDING),
         ]
 
     def _result(self, at: float) -> list[Cue]:
@@ -572,11 +586,13 @@ class ShowRunner:
         self._schedule(at + self._timing.next_up_after_result, "next_up")
         return cues
 
-    def _next_up(self, at: float) -> list[Cue]:
+    def _next_up(self, at: float, *, after_a_leave: bool = False) -> list[Cue]:
         cues: list[Cue] = []
         if self._next_pair is not None:
             cues += self._enter(Segment.NEXT_UP, at)
             cues.append(running_order.next_up(self._next_pair))
+        elif after_a_leave:
+            cues.append(PlayFallbackSegment())  # the date ended early, and nobody's next
         return cues + self._finish()
 
     def _wait_for_speech(self, now: float, cues: list[Cue]) -> list[Cue]:
@@ -621,6 +637,30 @@ class ShowRunner:
             return [Say(Moment.SILENCE, about=self._absent.other)]
         return [Say(Moment.SILENCE)]
 
+    def _cover(self, now: float) -> list[Cue]:
+        """While the show is held: a line to the room every timing.cover_every seconds, up
+        to timing.cover_lines in all (the first came with the pause); the alert at
+        timing.moment_alert_after; and the fallback segment once the lines run out, or at
+        the alert, whichever is first."""
+        if self._held_since is None:
+            return []
+        t, held = self._timing, self._held_since
+        alert_at = held + t.moment_alert_after
+        cues: list[Cue] = []
+        while self._cover_lines < t.cover_lines:
+            due = held + self._cover_lines * t.cover_every
+            if due > now or due >= alert_at:
+                break
+            self._cover_lines += 1
+            cues.append(self._cover_line())
+        if not self._overdue and alert_at <= now:
+            cues += self._not_back_in_time()
+        segment_at = min(held + t.cover_lines * t.cover_every, alert_at)
+        if not self._segment_playing and segment_at <= now:
+            self._segment_playing = True
+            cues.append(PlayFallbackSegment())
+        return cues
+
     def _not_back_in_time(self) -> list[Cue]:
         """Said once. The show stays on hold until the moderator keeps waiting, resumes or
         ends the date, or the dater comes back."""
@@ -630,8 +670,10 @@ class ShowRunner:
             alert.append(AlertModerator(ModeratorAlert.PAUSE_NOT_BACK, self._away))
         return [*alert, Say(Moment.BEAR_WITH_US, text=script.BEAR_WITH_US)]
 
-    def _clear_pause(self, now: float) -> None:
-        """Ends any pause and restarts the show clock; silence counts from now."""
+    def _clear_pause(self, now: float) -> list[Cue]:
+        """Ends any pause and restarts the show clock; silence counts from now. Stops the
+        fallback segment first if it was covering, so it never plays under Nova."""
+        stop: list[Cue] = [StopFallbackSegment()] if self._segment_playing else []
         if self._held_since is not None:
             self._held += now - self._held_since
             self._held_since = None
@@ -639,6 +681,8 @@ class ShowRunner:
         self._away = None
         self._overdue = False
         self._report_hold = False
+        self._cover_lines, self._segment_playing = 0, False
+        return stop
 
     def _close_poll(self) -> list[Cue]:
         if not self._poll_open:
@@ -665,6 +709,7 @@ class ShowRunner:
         self._held_since, self._away, self._overdue = None, None, False
         self._report_hold = False
         self._absent, self._absent_reported = None, False
+        self._cover_lines, self._segment_playing = 0, False
         return [Finished()]
 
 

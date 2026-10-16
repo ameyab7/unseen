@@ -39,7 +39,7 @@ from enum import StrEnum
 from nova import running_order, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
 from nova.config import Settings, load_settings
-from nova.cues import AlertModerator, Cue, Moment, RoomFacts, Say, Segment
+from nova.cues import AlertModerator, Cue, Moment, RoomFacts, Say, Segment, Situation
 from nova.decisions import InMemoryDecisionDesk
 from nova.distress import DistressCheck, Verdict
 from nova.distress_set import DISTRESS_SET, Sample
@@ -150,13 +150,19 @@ CASES: tuple[Case, ...] = (
     ),
     Case(
         "room talk during a pause",
-        Say(Moment.ROOM_TALK, room=RoomFacts(Segment.FREE_TALK, False, 0)),
+        Say(Moment.ROOM_TALK, room=RoomFacts(Segment.FREE_TALK, False, 0, Situation.PAUSE)),
         must_not_mention=("Maya", "Theo", *INVENTED_SETTING),  # never who stepped away
     ),
     Case(
         "room talk while they decide",
-        Say(Moment.ROOM_TALK, room=RoomFacts(Segment.TIME, True, 2)),
+        Say(Moment.ROOM_TALK, room=RoomFacts(Segment.TIME, True, 2, Situation.DECIDING)),
         must_not_mention=INVENTED_SETTING,
+    ),
+    Case(
+        # A dater left: Nova thanks the room, never saying who left or why.
+        "room talk after a date ends early",
+        Say(Moment.ROOM_TALK, room=RoomFacts(Segment.FREE_TALK, False, 0, Situation.ENDED_EARLY)),
+        must_not_mention=("Maya", "Theo", "left", "leave", *INVENTED_SETTING),
     ),
     Case(
         # The result line itself is fixed; the model only writes the outro after it.
@@ -847,12 +853,12 @@ def date_cues(pair: Pair, next_pair: Pair | None, n: int) -> list[Say]:
         *(running_order.first_question(pair, seat) for seat in (first, first.other)),
         Say(Moment.SILENCE),
         Say(Moment.FROM_THE_ROOM, detail=NIGHT_QUESTIONS[n % len(NIGHT_QUESTIONS)]),
-        Say(Moment.ROOM_TALK, room=RoomFacts(Segment.FROM_THE_ROOM, False, 1)),
+        Say(Moment.ROOM_TALK, room=RoomFacts(Segment.FROM_THE_ROOM, False, 1, Situation.PAUSE)),
         Say(Moment.REPLY, about=first.other, detail=NIGHT_REMARKS[n % len(NIGHT_REMARKS)]),
         Say(Moment.SILENCE),
         *(running_order.lightning_question(k) for k in lightning),
         *(running_order.last_word(seat) for seat in (first, first.other)),
-        Say(Moment.ROOM_TALK, room=RoomFacts(Segment.TIME, True, 1)),
+        Say(Moment.ROOM_TALK, room=RoomFacts(Segment.TIME, True, 1, Situation.DECIDING)),
         Say(Moment.OUTRO),
         *([running_order.next_up(next_pair)] if next_pair is not None else []),
     ]

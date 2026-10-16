@@ -70,6 +70,14 @@ class ModeratorAlert(StrEnum):
     DISTRESS_UNCHECKED = "distress_unchecked"  # the distress check failed or was too slow
 
 
+class Situation(StrEnum):
+    """Why Nova is talking to the room."""
+
+    PAUSE = "pause"  # a dater is taking a moment off air (or the date is held for a report)
+    DECIDING = "deciding"  # the daters are deciding privately
+    ENDED_EARLY = "ended_early"  # a dater left: the date is over before its time
+
+
 @dataclass(frozen=True)
 class RoomFacts:
     """What Nova may work from when it talks to the room: facts about the show, never
@@ -78,6 +86,7 @@ class RoomFacts:
     segment: Segment
     poll_open: bool
     questions_asked: int  # audience questions read so far in this date
+    situation: Situation
 
 
 @dataclass(frozen=True)
@@ -167,7 +176,12 @@ class DateEnded:
 @dataclass(frozen=True)
 class PlayFallbackSegment:
     """The recorded fallback segment (technical plan). Plays until the moderator chooses
-    what happens next, so the room never sits in silence."""
+    what happens next, or a held date carries on, so the room never sits in silence."""
+
+
+@dataclass(frozen=True)
+class StopFallbackSegment:
+    """The fallback segment stops: the hold it covered is over, and Nova speaks next."""
 
 
 @dataclass(frozen=True)
@@ -190,5 +204,6 @@ type Cue = (
     | QuestionSkipped
     | DateEnded
     | PlayFallbackSegment
+    | StopFallbackSegment
     | Finished
 )

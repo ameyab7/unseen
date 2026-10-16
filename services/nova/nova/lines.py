@@ -184,6 +184,7 @@ class LineWriter:
         # Set pieces in tonight's memory as planned: kept once spoken, dropped by finish().
         self._planned: dict[_Key, Remembered] = {}
         self.budget_exhausted = False  # the prep budget ran out before every piece was ready
+        self._fallback_in_hold = False  # the room-talk fallback was said in this hold
 
     # --- Before the date ------------------------------------------------------------------
 
@@ -255,6 +256,8 @@ class LineWriter:
         return await self._attempt(say, self._prompt_for(say), timeout)
 
     async def _line_for(self, say: Say) -> Line:
+        if say.moment is Moment.ROOM_TALK and say.number == 1:
+            self._fallback_in_hold = False  # a new hold
         if say.text is not None:
             return Line(say.text, Source.FIXED, say.moment)
         if say.moment in SET_PIECES:
@@ -401,6 +404,10 @@ class LineWriter:
                         return framed
                 return script.from_the_room_fallback(pair)
             case Moment.ROOM_TALK:
+                if say.number is not None:  # a hold's cover line
+                    if self._fallback_in_hold:
+                        return ""  # never the same fallback twice in one hold
+                    self._fallback_in_hold = True
                 return script.ROOM_TALK_FALLBACK
             case Moment.REPLY:
                 words = say.detail or ""
