@@ -29,6 +29,7 @@ from nova.cues import (
     StopSpeaking,
 )
 from nova.decisions import Choice, InMemoryDecisionDesk, Outcome
+from nova.distress import Verdict
 from nova.fixtures import MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
 from nova.questions import AudienceQuestion, QuestionStatus
 from nova.show_runner import PollTally, ShowRunner
@@ -479,8 +480,15 @@ MAYBE_DISTRESSED = AlertModerator(ModeratorAlert.POSSIBLE_DISTRESS, LEFT)
     ["Nova, I want to stop.", "I'm not comfortable.", "Can we end this?", "I need a moment."],
 )
 def test_a_dater_who_clearly_wants_to_stop_gets_a_kind_line_a_pause_and_the_moderator(words):
+    """Nova stops mid-line first and nothing already queued is said: the kind line comes
+    at once, never after whatever Nova was saying."""
     show = Show()
-    assert show.at(100, "dater_asked_nova", LEFT, words) == [DISTRESSED, KIND, PAUSE_TALK]
+    assert show.at(100, "dater_asked_nova", LEFT, words) == [
+        DISTRESSED,
+        StopSpeaking(),
+        KIND,
+        PAUSE_TALK,
+    ]
     show.until(119.5)
     assert show.cues(since=100.5, before=120) == [], "the show holds, as for a moment"
     assert show.at(120, "back", LEFT) == [WELCOME_BACK]
@@ -503,14 +511,64 @@ def test_nova_never_deflects_a_dater_who_clearly_wants_to_stop():
 
 
 @pytest.mark.parametrize("words", ["Help.", "Nova, help me out, what should I ask Theo?"])
-def test_words_that_may_be_distress_alert_the_moderator_and_nova_answers_as_usual(words):
+def test_words_the_instant_layer_doesnt_know_get_a_reply_cue(words):
+    """The meaning layer checks them outside the runner; the verdict comes back through
+    distress_check, and whoever runs the show holds the reply until then."""
     show = Show()
     assert show.at(100, "dater_asked_nova", LEFT, words) == [
-        MAYBE_DISTRESSED,
-        Say(Moment.REPLY, about=LEFT, detail=words),
+        Say(Moment.REPLY, about=LEFT, detail=words)
     ]
+
+
+def test_a_yes_from_the_distress_check_pauses_as_for_an_unmistakable_request():
+    show = Show()
+    assert show.at(100, "distress_check", LEFT, Verdict.YES) == [
+        DISTRESSED,
+        StopSpeaking(),
+        KIND,
+        PAUSE_TALK,
+    ]
+    show.until(119.5)
+    assert show.cues(since=100.5, before=120) == [], "the show holds, as for a moment"
+
+
+def test_a_maybe_alerts_the_moderator_and_nothing_else():
+    show = Show()
+    assert show.at(100, "distress_check", LEFT, Verdict.MAYBE) == [MAYBE_DISTRESSED]
     show.until(300)
     assert show.says(Moment.NEED_A_MOMENT) == [], "no pause"
+    assert (240.0, "from_the_room") in show.segments(), "the show clock never stopped"
+
+
+def test_a_check_that_failed_or_was_too_slow_alerts_the_moderator_to_listen_in():
+    show = Show()
+    assert show.at(100, "distress_check", LEFT, Verdict.UNCHECKED) == [
+        AlertModerator(ModeratorAlert.DISTRESS_UNCHECKED, LEFT)
+    ]
+
+
+def test_a_no_changes_nothing():
+    show = Show()
+    assert show.at(100, "distress_check", LEFT, Verdict.NO) == []
+
+
+@pytest.mark.parametrize("words", ["I want to stop.", "Theo, I'm not comfortable."])
+def test_a_dater_who_wants_to_stop_is_heard_even_when_not_talking_to_nova(words):
+    show = Show()
+    assert show.at(100, "dater_said", LEFT, words) == [DISTRESSED, StopSpeaking(), KIND, PAUSE_TALK]
+    show.until(119.5)
+    assert show.cues(since=100.5, before=120) == [], "the show holds, as for a moment"
+
+
+def test_words_not_to_nova_that_the_instant_layer_doesnt_know_are_left_to_the_meaning_layer():
+    show = Show()
+    assert show.at(100, "dater_said", LEFT, "Honestly I'm scared.") == []
+
+
+def test_ordinary_words_not_to_nova_change_nothing():
+    show = Show()
+    assert show.at(100, "dater_said", LEFT, "I think tea, honestly.") == []
+    show.until(300)
     assert (240.0, "from_the_room") in show.segments(), "the show clock never stopped"
 
 
@@ -522,6 +580,7 @@ def test_after_a_distress_pause_the_usual_pause_rules_apply():
     show.at(140, "back", LEFT)
     assert show.at(200, "dater_asked_nova", LEFT, "I need a moment.") == [
         DISTRESSED,
+        StopSpeaking(),
         KIND,
         PAUSE_TALK,
         AlertModerator(ModeratorAlert.REPEATED_PAUSE, LEFT),
@@ -532,11 +591,13 @@ def test_when_nova_cant_pause_or_answer_it_stays_quiet_but_the_moderator_is_alwa
     show = Show()
     show.at(100, "need_a_moment", RIGHT)
     assert show.at(105, "dater_asked_nova", LEFT, "I want to stop.") == [DISTRESSED], "a pause"
-    assert show.at(106, "dater_asked_nova", LEFT, "Help.") == [MAYBE_DISTRESSED], "no reply"
+    assert show.at(106, "distress_check", LEFT, Verdict.YES) == [DISTRESSED], "a pause"
+    assert show.at(107, "distress_check", LEFT, Verdict.MAYBE) == [MAYBE_DISTRESSED]
+    assert show.at(108, "dater_asked_nova", LEFT, "Help.") == [], "no reply on a pause"
     show.at(110, "back", RIGHT)
     # The 10 s hold moved Time from 480 to 490 and the result from 540 to 550.
     assert show.at(495, "dater_asked_nova", LEFT, "Can we end this?") == [DISTRESSED], "deciding"
-    assert show.at(496, "dater_asked_nova", LEFT, "Help.") == [MAYBE_DISTRESSED], "deciding"
+    assert show.at(496, "distress_check", LEFT, Verdict.YES) == [DISTRESSED], "deciding"
     show.until(560)
     assert show.at(560, "dater_asked_nova", LEFT, "Please stop.") == [DISTRESSED], (
         "after the result"
@@ -729,6 +790,178 @@ def test_the_verdict_is_hidden_when_fewer_than_five_people_voted(yes, no, verdic
 
 
 # --- Guards -------------------------------------------------------------------------------
+
+
+# --- A dater reports ----------------------------------------------------------------------
+
+REPORTED = AlertModerator(ModeratorAlert.DATER_REPORTED, LEFT)
+MOMENT_LINE = Say(Moment.NEED_A_MOMENT, text=script.NEED_A_MOMENT)
+REPEATED = AlertModerator(ModeratorAlert.REPEATED_PAUSE, LEFT)
+
+
+def test_a_report_alerts_the_moderator_first_then_pauses_the_date_naming_nobody():
+    """The prototype's report sheet: "Nova pauses the date and a live moderator listens in."
+    The need-a-moment cover, not the kind line: nothing on air answers or names the report."""
+    show = Show()
+    assert show.at(100, "dater_reported", LEFT) == [REPORTED, StopSpeaking(), *COVER]
+    show.until(130)
+    assert show.cues(since=100.5, before=130) == [], "the show holds"
+    assert show.cues(since=130, before=130.5) == NOT_BACK, "the usual 30-second alert"
+
+
+def test_beats_already_due_come_out_before_a_report():
+    show = Show()
+    show.until(44.5)
+    cues = show.runner.dater_reported(45.0, LEFT)  # the first question is due at 45 s
+    report = cues.index(REPORTED)
+    assert Moment.FIRST_QUESTION in [c.moment for c in cues[:report] if isinstance(c, Say)]
+    assert cues[report : report + 3] == [REPORTED, StopSpeaking(), MOMENT_LINE]
+    assert cues[report + 3].moment is Moment.ROOM_TALK
+
+
+def test_the_reporters_own_back_never_ends_the_pause():
+    """Their date ends in the app; only the moderator decides what happens next."""
+    show = Show()
+    show.at(100, "dater_reported", LEFT)
+    assert show.at(110, "back", LEFT) == []
+    show.until(300)
+    assert show.says(Moment.WELCOME_BACK) == []
+    assert show.segments()[-1] == (90.0, "free_talk"), "still on hold"
+
+
+def test_after_a_report_the_moderator_resumes_without_the_dater():
+    show = Show()
+    show.at(100, "dater_reported", LEFT)
+    assert show.at(120, "moderator_resume") == []
+    show.until(300)
+    assert (260.0, "from_the_room") in show.segments(), "the running order shifted by 20 s"
+    assert show.says(Moment.WELCOME_BACK) == []
+
+
+def test_after_a_report_the_moderator_can_end_the_date():
+    show = Show()
+    show.at(100, "dater_reported", LEFT)
+    cues = show.at(120, "moderator_end")
+    assert cues[0] == StopSpeaking()
+    assert Say(Moment.MODERATOR_END, text=script.MODERATOR_END) in cues
+    assert show.runner.end_reason is EndReason.MODERATOR_ENDED
+
+
+def test_a_report_never_counts_as_a_repeated_pause():
+    show = Show()
+    show.at(100, "dater_reported", LEFT)
+    show.at(110, "moderator_resume")
+    assert show.at(150, "need_a_moment", LEFT) == COVER, "the dater's first own pause"
+    show.at(160, "back", LEFT)
+    show.at(200, "dater_reported", LEFT)
+    show.at(210, "moderator_resume")
+    assert show.at(230, "need_a_moment", LEFT) == [*COVER, REPEATED], "their second own pause"
+    assert show.cues(AlertModerator).count(REPEATED) == 1
+
+
+def test_a_report_while_the_other_dater_is_on_a_pause_only_alerts():
+    show = Show()
+    show.at(100, "need_a_moment", RIGHT)
+    assert show.at(105, "dater_reported", LEFT) == [REPORTED]
+
+
+def test_a_report_while_the_daters_decide_only_alerts():
+    show = Show()
+    show.until(500)  # Time is at 480 s: the daters are deciding, off air
+    assert show.at(500, "dater_reported", LEFT) == [REPORTED]
+
+
+# --- Before the date starts and after it ends ----------------------------------------------
+
+UNCHECKED = AlertModerator(ModeratorAlert.DISTRESS_UNCHECKED, LEFT)
+
+
+def not_started() -> ShowRunner:
+    return ShowRunner(
+        REHEARSAL_PAIR, desk=InMemoryDecisionDesk(), poll=FakePoll(), next_pair=NEXT_PAIR,
+        first_up=LEFT,
+    )  # fmt: skip
+
+
+def finished() -> ShowRunner:
+    runner = full_date().runner
+    assert runner.finished
+    return runner
+
+
+def run(runner: ShowRunner, until: float = 600.0, step: float = 0.5) -> list:
+    """Starts the date at 0 s and ticks it: every (time, cue)."""
+    log, now = [(0.0, cue) for cue in runner.start(0.0)], 0.0
+    while now + step <= until:
+        now = round(now + step, 6)
+        log += [(now, cue) for cue in runner.tick(now)]
+    return log
+
+
+ANY_TIME = [
+    ("dater_said", (LEFT, "I want to stop."), [DISTRESSED]),
+    ("dater_said", (LEFT, "I think tea, honestly."), []),
+    ("dater_asked_nova", (LEFT, "Nova, I want to stop."), [DISTRESSED]),
+    ("dater_asked_nova", (LEFT, "Nova, tea or coffee?"), []),
+    ("distress_check", (LEFT, Verdict.YES), [DISTRESSED]),
+    ("distress_check", (LEFT, Verdict.MAYBE), [MAYBE_DISTRESSED]),
+    ("distress_check", (LEFT, Verdict.UNCHECKED), [UNCHECKED]),
+    ("distress_check", (LEFT, Verdict.NO), []),
+    ("dater_reported", (LEFT,), [REPORTED]),
+    ("speech", (LEFT,), []),
+    ("need_a_moment", (LEFT,), []),
+    ("back", (LEFT,), []),
+    ("dater_left", (LEFT,), []),
+    ("moderator_keep_waiting", (), []),
+    ("moderator_resume", (), []),
+    ("moderator_end", (), []),
+]
+
+
+@pytest.mark.parametrize(("method", "args", "expected"), ANY_TIME)
+@pytest.mark.parametrize(("when", "now"), [("before the start", 5.0), ("after the end", 900.0)])
+def test_off_air_alerts_still_reach_the_moderator_and_nothing_else_happens(
+    method, args, expected, when, now
+):
+    runner = not_started() if when == "before the start" else finished()
+    assert getattr(runner, method)(now, *args) == expected
+
+
+def test_nothing_before_the_start_changes_the_date():
+    runner = not_started()
+    for method, args, _ in ANY_TIME:
+        getattr(runner, method)(5.0, *args)
+    log = run(runner)
+    assert not runner.finished or runner.end_reason is EndReason.COMPLETED
+    assert [cue for _, cue in log if isinstance(cue, AlertModerator)] == []
+    assert [s for _, s in log if isinstance(s, SegmentStarted)][0] == SegmentStarted(Segment.DOORS)
+
+
+def test_an_approved_question_before_the_start_is_kept_for_the_date():
+    runner = not_started()
+    assert runner.queue_question(5.0, approved("Mountains or sea?")) == []
+    asked = [
+        (t, c.detail) for t, c in run(runner) if getattr(c, "moment", None) is Moment.FROM_THE_ROOM
+    ]
+    assert asked == [(240.0, "Mountains or sea?")]
+
+
+def test_an_unlock_before_the_start_is_kept_and_announced_after_the_doors_intro():
+    """A paid unlock is never lost (decision 0004). The meter closes at once."""
+    runner = not_started()
+    assert runner.unlock_lightning_round(5.0) == [LightningMeterClosed()]
+    log = run(runner)
+    doors = [cue for t, cue in log if t == 0.0]
+    assert doors[-1] == Say(Moment.LIGHTNING_UNLOCKED, text=script.LIGHTNING_UNLOCKED)
+    assert isinstance(doors[-2], PlayVoiceIntro)
+    questions = [t for t, c in log if getattr(c, "moment", None) is Moment.LIGHTNING_QUESTION]
+    assert questions == [330.0, 360.0, 390.0]
+    assert LightningMeterClosed() not in [cue for _, cue in log], "closed once, before the date"
+
+
+def test_ticking_before_the_start_is_still_a_mistake():
+    with pytest.raises(RuntimeError, match="start"):
+        not_started().tick(5.0)
 
 
 def test_starting_twice_is_a_mistake():

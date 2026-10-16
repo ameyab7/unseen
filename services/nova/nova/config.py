@@ -18,6 +18,11 @@ DEFAULT_ENV_FILE = Path(__file__).parents[1] / ".env"
 
 PROVIDERS = ("anthropic", "ollama")
 
+# LiveKit's built-in speech models. The voice is a shortlist pick until the product owner
+# chooses one (task 5); Robyn is Cartesia's neutral, mature voice.
+DEFAULT_VOICE = "cartesia/sonic-3:f31cc6a7-c1e8-4764-980c-60a361443dd1"
+DEFAULT_STT = "deepgram/nova-3"
+
 
 class ConfigError(ValueError):
     """A missing or malformed setting. The message names it, never its value."""
@@ -49,12 +54,28 @@ class Settings:
     anthropic_api_key: str | None = field(default=None, repr=False)
     ollama_base_url: str = "http://localhost:11434"
     # How long a live reaction may take before Nova uses a fallback line instead. Measured:
-    # warm Gemma writes a line in about 0.4 s, so 2 s is roughly 4x that, short enough that
-    # the room never hears more than 2 s of dead air before Nova speaks.
+    # warm Gemma writes a line in about 0.4 s, so 2 s is roughly 4x that. It caps the wait
+    # for the model, not the silence the room hears: the voice's first audio adds about 0.2
+    # to 0.5 s, and a reply also waits for the end of the dater's sentence and its transcript.
     live_timeout: float = 2.0
     # How long a set piece may take before the date. Loading Gemma cold took 28 s, so 60 s
     # covers a cold start plus the line; the date only starts once these are ready.
     prep_timeout: float = 60.0
+    # How long the distress check (decision 0005, the meaning layer) may take before the
+    # moderator is alerted instead. A "yes" pauses the dater only once it arrives, so this
+    # also bounds how late the kind line can come.
+    distress_timeout: float = 2.0
+    # How long Nova waits, once a dater has stopped speaking and the last transcript is in,
+    # before acting on what they said (decision 0005, utterances). Speech recognition
+    # finalizes at almost every pause, so without it Nova would answer half a sentence
+    # ("Nova,") or pause a dater for a phrase they hadn't finished. It counts against the
+    # 2.5 s reply target (docs/spike-results.md).
+    utterance_grace: float = 0.6
+    # The most Nova waits after a dater stops speaking, however late transcripts keep coming.
+    utterance_max_wait: float = 1.5
+    # Nova's voice as "provider/model:voice", and the speech recognition that hears daters.
+    voice: str = DEFAULT_VOICE
+    stt: str = DEFAULT_STT
 
     REQUIRED: ClassVar[tuple[str, ...]] = (
         "LIVEKIT_URL",
@@ -68,6 +89,11 @@ class Settings:
         "OLLAMA_BASE_URL",
         "NOVA_LIVE_TIMEOUT_SECONDS",
         "NOVA_PREP_TIMEOUT_SECONDS",
+        "NOVA_DISTRESS_TIMEOUT_SECONDS",
+        "NOVA_UTTERANCE_GRACE_SECONDS",
+        "NOVA_UTTERANCE_MAX_WAIT_SECONDS",
+        "NOVA_VOICE",
+        "NOVA_STT",
     )
 
     @classmethod
@@ -81,6 +107,13 @@ class Settings:
         if llm.provider == "anthropic" and anthropic_api_key is None:
             raise ConfigError("ANTHROPIC_API_KEY is required when NOVA_LLM uses anthropic")
 
+        grace = _seconds(env, "NOVA_UTTERANCE_GRACE_SECONDS", cls.utterance_grace)
+        max_wait = _seconds(env, "NOVA_UTTERANCE_MAX_WAIT_SECONDS", cls.utterance_max_wait)
+        if max_wait < grace:
+            raise ConfigError(
+                "NOVA_UTTERANCE_MAX_WAIT_SECONDS must be at least NOVA_UTTERANCE_GRACE_SECONDS"
+            )
+
         return cls(
             livekit_url=env["LIVEKIT_URL"].strip(),
             livekit_api_key=env["LIVEKIT_API_KEY"].strip(),
@@ -90,7 +123,20 @@ class Settings:
             ollama_base_url=env.get("OLLAMA_BASE_URL", "").strip() or cls.ollama_base_url,
             live_timeout=_seconds(env, "NOVA_LIVE_TIMEOUT_SECONDS", cls.live_timeout),
             prep_timeout=_seconds(env, "NOVA_PREP_TIMEOUT_SECONDS", cls.prep_timeout),
+            distress_timeout=_seconds(env, "NOVA_DISTRESS_TIMEOUT_SECONDS", cls.distress_timeout),
+            utterance_grace=grace,
+            utterance_max_wait=max_wait,
+            voice=_voice(env.get("NOVA_VOICE", "").strip() or cls.voice),
+            stt=env.get("NOVA_STT", "").strip() or cls.stt,
         )
+
+
+def _voice(value: str) -> str:
+    model = value.partition(":")[0]
+    provider, _, name = model.partition("/")
+    if not provider or not name:
+        raise ConfigError(f'NOVA_VOICE must look like "provider/model:voice", got {value!r}')
+    return value
 
 
 def _seconds(env: Mapping[str, str], name: str, default: float) -> float:

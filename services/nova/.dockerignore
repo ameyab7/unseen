@@ -1,0 +1,10 @@
+# Keys never go into the image: compose.yaml passes services/nova/.env in when it runs.
+.env
+.env.*
+!.env.example
+.venv
+rehearsals
+voice-samples
+__pycache__
+.pytest_cache
+.ruff_cache

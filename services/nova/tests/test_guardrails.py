@@ -4,12 +4,10 @@ model's output (or a prompt injection that fooled it) and the room."""
 import pytest
 
 from nova.guardrails import (
-    Distress,
     Violation,
     card_words,
     check,
     clean,
-    distress_in,
     question_is_off_limits,
 )
 
@@ -159,6 +157,15 @@ def test_voice_and_format_rules():
     assert V.NAME_CASE in found("maya, tell us more.")
 
 
+@pytest.mark.parametrize(
+    "char", ["\t", "\n", "\x1f", "\x85", "\x00", "\u200b", "\u200d", "\u2060", "\ufeff"]
+)
+def test_control_and_zero_width_characters_are_formatting(char):
+    """Characters nobody hears can hide text from these checks. clean() collapses whitespace
+    first, so this is the check on the line exactly as given."""
+    assert V.FORMATTING in set(check(f"Maya,{char} over to you.", names=NAMES))
+
+
 def test_clean_removes_wrapping_the_model_adds():
     assert clean('"Nova: Maya, tell us more."') == "Maya, tell us more."
     assert clean("  Theo,\n  over to you.  ") == "Theo, over to you."
@@ -289,85 +296,6 @@ def test_an_idea_can_sound_lovely_but_a_person_cannot():
     assert V.LOOKS_OR_VOICE in found("Theo, you sound nervous.")
 
 
-# --- A dater who wants to stop -----------------------------------------------------------
-
-# Clear: Nova pauses for the dater and alerts the moderator.
-CLEAR = [
-    # The product owner's examples.
-    "Nova, I want to stop.",
-    "I'm not comfortable.",
-    "Can we end this?",
-    "I need a moment.",
-    # Other ways to say it.
-    "I'd like to stop now.",
-    "Can we stop?",
-    "Please stop.",
-    "Let's stop the date.",
-    "Honestly I don’t feel comfortable with this.",  # a curly apostrophe, from speech-to-text
-    "This is making me uncomfortable.",
-    "I'm not OK.",
-    "I'm not feeling well.",
-    "I don't feel safe.",
-    "I feel unsafe.",
-    "Can we end the date?",
-    "I want to leave.",
-    "I need to go.",
-    "Get me out of here.",
-    "Take me off air.",
-    "I'm done.",
-    "I can't do this.",
-    "This is too much.",
-    "I need a break.",
-    "Give me a minute.",
-    "I'm having a panic attack.",
-    "I'm overwhelmed.",
-    "He's harassing me.",
-    "Help, I want to stop.",  # clear wins
-]
-
-# Ambiguous: the moderator is alerted, and Nova answers as usual.
-MAYBE = [
-    "Help.",
-    "Nova, help me out here, please.",
-    "Nova, can you help us pick a topic?",
-    "I'm scared.",
-    "I'm really upset.",
-    "I feel anxious.",
-    "That was inappropriate.",
-    "That's not okay.",
-    "That's creepy.",
-    "I'm crying.",
-]
-
-ORDINARY = [
-    "Nova, are you a real person?",
-    "Nova, who chose what on the last date?",
-    "I can't stop laughing.",
-    "Don't stop now, this is fun.",
-    "That was really helpful.",
-    "I'm comfortable talking about anything.",
-    "I'm totally fine with that question.",
-    "I'm afraid I've never been skiing.",
-    "Nova, what's the weirdest date you've heard of?",
-    "Nova, you're doing a great job.",
-]
-
-
-@pytest.mark.parametrize("words", CLEAR)
-def test_a_dater_who_clearly_wants_to_stop_is_heard_as_clear(words):
-    assert distress_in(words) is Distress.CLEAR
-
-
-@pytest.mark.parametrize("words", MAYBE)
-def test_words_that_may_be_distress_are_heard_as_maybe(words):
-    assert distress_in(words) is Distress.MAYBE
-
-
-@pytest.mark.parametrize("words", ORDINARY)
-def test_ordinary_things_said_to_nova_are_not_distress(words):
-    assert distress_in(words) is Distress.NONE
-
-
 # --- Shape rules for some moments ---------------------------------------------------------
 
 
@@ -403,6 +331,18 @@ def test_names_and_places_a_dater_wrote_on_their_own_card_may_be_used():
     assert check("Sam, tell us about getting lost in Lisbon.", names=SAM_NAMES) != ()
     assert (
         check("Sam, tell us about getting lost in Lisbon.", names=SAM_NAMES, card_words=words) == ()
+    )
+
+
+def test_a_word_from_a_card_is_never_said_as_a_surname():
+    """A card word may be said on its own; right after a first name it reads as a surname."""
+    words = card_words(["Ask me about the Lopez family bakery."])
+    assert words == {"Lopez"}
+    assert V.PERSONAL_DETAIL in set(
+        check("Maya Lopez, tell us more.", names=NAMES, card_words=words)
+    )
+    assert (
+        check("Maya, tell us about the Lopez family bakery.", names=NAMES, card_words=words) == ()
     )
 
 

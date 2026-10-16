@@ -61,10 +61,12 @@ class EndReason(StrEnum):
 
 
 class ModeratorAlert(StrEnum):
+    DATER_REPORTED = "dater_reported"  # a dater pressed Report: the console's most urgent alert
     PAUSE_NOT_BACK = "pause_not_back"  # a dater asked for a moment and isn't back after 30 s
     REPEATED_PAUSE = "repeated_pause"  # the second (or later) pause in this date
-    DATER_DISTRESSED = "dater_distressed"  # a dater asked Nova to stop: Nova paused for them
-    POSSIBLE_DISTRESS = "possible_distress"  # maybe distress ("help"): Nova answered as usual
+    DATER_DISTRESSED = "dater_distressed"  # a dater wants to stop: Nova paused for them
+    POSSIBLE_DISTRESS = "possible_distress"  # the distress check says maybe: listen in
+    DISTRESS_UNCHECKED = "distress_unchecked"  # the distress check failed or was too slow
 
 
 @dataclass(frozen=True)

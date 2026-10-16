@@ -30,6 +30,24 @@ class TestLlmChoice:
             LlmChoice.parse("openai/gpt-5")
 
 
+class TestSpeech:
+    def test_nova_has_a_voice_and_hears_daters_by_default(self):
+        settings = Settings.from_env(GOOD)
+        assert settings.voice == "cartesia/sonic-3:f31cc6a7-c1e8-4764-980c-60a361443dd1"
+        assert settings.stt == "deepgram/nova-3"
+
+    def test_the_voice_and_speech_recognition_are_settings(self):
+        settings = Settings.from_env(
+            {**GOOD, "NOVA_VOICE": " deepgram/aura-2:odysseus ", "NOVA_STT": "deepgram/flux"}
+        )
+        assert (settings.voice, settings.stt) == ("deepgram/aura-2:odysseus", "deepgram/flux")
+
+    @pytest.mark.parametrize("value", ["odysseus", "deepgram/", "/aura-2:odysseus"])
+    def test_a_voice_needs_a_provider_and_model(self, value):
+        with pytest.raises(ConfigError, match='NOVA_VOICE must look like "provider/model'):
+            Settings.from_env({**GOOD, "NOVA_VOICE": value})
+
+
 class TestSettings:
     def test_reads_every_value(self):
         settings = Settings.from_env(GOOD)
@@ -65,6 +83,8 @@ class TestLoadSettings:
     def test_environment_overrides_the_file(self, tmp_path, monkeypatch):
         env_file = tmp_path / ".env"
         env_file.write_text("\n".join(f"{k}={v}" for k, v in GOOD.items()), encoding="utf-8")
+        for name in GOOD:  # whatever this machine has set (Docker passes the real .env in)
+            monkeypatch.delenv(name, raising=False)
         monkeypatch.setenv("NOVA_LLM", "anthropic/claude-opus-5-5")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
         settings = load_settings(env_file)
@@ -83,6 +103,8 @@ class TestTimeouts:
         settings = Settings.from_env(GOOD)
         assert settings.live_timeout == 2.0
         assert settings.prep_timeout == 60.0
+        assert settings.distress_timeout == 2.0
+        assert (settings.utterance_grace, settings.utterance_max_wait) == (0.6, 1.5)
         assert settings.ollama_base_url == "http://localhost:11434"
 
     def test_can_be_set_in_the_env_file(self):
@@ -91,16 +113,36 @@ class TestTimeouts:
                 **GOOD,
                 "NOVA_LIVE_TIMEOUT_SECONDS": "1.5",
                 "NOVA_PREP_TIMEOUT_SECONDS": "90",
+                "NOVA_DISTRESS_TIMEOUT_SECONDS": "0.8",
+                "NOVA_UTTERANCE_GRACE_SECONDS": "0.4",
+                "NOVA_UTTERANCE_MAX_WAIT_SECONDS": "1",
                 "OLLAMA_BASE_URL": "http://gpu-box:11434",
             }
         )
         assert (settings.live_timeout, settings.prep_timeout) == (1.5, 90.0)
+        assert settings.distress_timeout == 0.8
+        assert (settings.utterance_grace, settings.utterance_max_wait) == (0.4, 1.0)
         assert settings.ollama_base_url == "http://gpu-box:11434"
 
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "NOVA_LIVE_TIMEOUT_SECONDS",
+            "NOVA_DISTRESS_TIMEOUT_SECONDS",
+            "NOVA_UTTERANCE_GRACE_SECONDS",
+            "NOVA_UTTERANCE_MAX_WAIT_SECONDS",
+        ],
+    )
     @pytest.mark.parametrize("value", ["0", "-1", "soon", "nan", "inf"])
-    def test_must_be_a_positive_number_of_seconds(self, value):
-        with pytest.raises(ConfigError, match="NOVA_LIVE_TIMEOUT_SECONDS must be a positive"):
-            Settings.from_env({**GOOD, "NOVA_LIVE_TIMEOUT_SECONDS": value})
+    def test_must_be_a_positive_number_of_seconds(self, name, value):
+        with pytest.raises(ConfigError, match=f"{name} must be a positive"):
+            Settings.from_env({**GOOD, name: value})
+
+    def test_the_most_nova_waits_for_an_utterance_is_never_less_than_the_grace(self):
+        env = {**GOOD, "NOVA_UTTERANCE_GRACE_SECONDS": "2", "NOVA_UTTERANCE_MAX_WAIT_SECONDS": "1"}
+        with pytest.raises(ConfigError, match="MAX_WAIT_SECONDS must be at least") as raised:
+            Settings.from_env(env)
+        assert "2" not in str(raised.value) and "1.0" not in str(raised.value)
 
 
 def test_env_example_lists_exactly_the_names_settings_reads():

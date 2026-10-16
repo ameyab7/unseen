@@ -30,12 +30,6 @@ class Violation(StrEnum):
     OPENS_WITH_NAMES = "opens_with_names"  # both daters' names first (lightning questions)
 
 
-class Distress(StrEnum):
-    NONE = "none"
-    MAYBE = "maybe"  # might be distress: the moderator is alerted, Nova answers as usual
-    CLEAR = "clear"  # wants to stop: Nova pauses for the dater, the moderator is alerted
-
-
 def _any(*patterns: str, flags: int = re.IGNORECASE) -> re.Pattern[str]:
     return re.compile("|".join(f"(?:{p})" for p in patterns), flags)
 
@@ -190,48 +184,6 @@ INSTRUCTING_NOVA = _any(
     r"\bjailbreak\b",
 )
 
-# What a dater says to Nova, heard before any reply. Clear: they want to stop, aren't
-# comfortable or safe, or need a moment; the show runner pauses for them and alerts the
-# moderator, and Nova never deflects. Maybe: words that might be distress ("help", "I'm
-# scared"); the moderator is alerted and Nova answers as usual. Both lean towards hearing
-# it: a false alarm costs a breather or a look from the moderator; a miss leaves a dater
-# unheard.
-NOT_ME = r"(?<!n't )(?<!not )"  # "don't stop now" is not a request to stop
-CLEAR_DISTRESS = _any(
-    # Stopping, ending, leaving.
-    r"\b(?:want|wanna|need|like|have)\s+to\s+(?:stop|end|leave|quit|pause|get out)\b",
-    r"\b(?:want|wanna|need|have)\s+to\s+go(?:\s+home|\s+now)?\s*(?:[.?!,]|$)",
-    r"\b(?:can|could|should|shall)\s+we\s+(?:please\s+|just\s+)?(?:stop|end|finish|pause"
-    r"|wrap up)\b",
-    rf"\blet'?s\s+(?:please\s+|just\s+)?{NOT_ME}(?:stop|end|pause)\b",
-    rf"\bplease\s+stop\b|{NOT_ME}\bstop\b[,.]?\s*please\b",
-    rf"{NOT_ME}\bstop\s+(?:this|the date|the show)\b",
-    r"\bend\s+(?:this|the date|the show)\b",
-    r"\bget me (?:out|off)\b|\btake me off\b|\bi\s+want\s+out\b",
-    r"\bi(?:'m| am)\s+(?:so\s+|just\s+)?(?:done|out|leaving)\s*(?:[.?!,]|$)",
-    r"\b(?:i'm|i am)\s+(?:so\s+|just\s+)?done\s+with\s+(?:this|it|the date)\b",
-    r"\bi\s+can(?:'t|not)\s+do\s+this\b",
-    r"\b(?:this|it|that)(?:'s| is)\s+(?:all\s+|getting\s+|a bit\s+)?too much\b",
-    # Needing a moment.
-    r"\bneed\s+(?:a|some)\s+(?:break|minute|moment|second|sec|breather|space|air)\b",
-    r"\bgive me\s+(?:a|some)\s+(?:minute|moment|second|sec|break|space)\b",
-    # Not comfortable, not safe, not well.
-    r"\b(?:uncomfortable|unsafe|unwell)\b",
-    r"(?:\bnot|n't)\s+(?:feel(?:ing)?\s+)?(?:very\s+|so\s+|really\s+)?(?:comfortable|safe)\b",
-    r"\bi(?:'m| am)\s+(?:really\s+|just\s+|so\s+)?not\s+(?:feeling\s+)?(?:ok|okay|alright"
-    r"|all right|fine|well|good)\b",
-    r"\bi\s+(?:don't|do not)\s+feel\s+(?:very\s+|so\s+|really\s+)?(?:ok|okay|alright"
-    r"|all right|well|good)\b",
-    r"\bpanic attacks?\b|\bpanicking\b|\b(?:overwhelmed|distressed)\b",
-    r"\b(?:harass\w*|threaten\w*|abus\w*)\b",
-)
-MAYBE_DISTRESS = _any(
-    r"\bhelp\b",
-    r"\b(?:scared|frightened|terrified|upset|anxious|crying)\b",
-    r"\b(?:inappropriate|creepy)\b",
-    r"(?:\bnot|n't)\s+(?:ok|okay|alright|all right|fine)\b",  # "that's not okay"
-)
-
 SHOW_NAME = "Unseen"  # capitalised, it's the show; "keep it unseen" is decision talk
 ALWAYS_ALLOWED = frozenset({"I", "AI", "OK", SHOW_NAME})
 DAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
@@ -284,9 +236,9 @@ def check(
     if not text.strip():
         return (Violation.EMPTY,)
     found: set[Violation] = set()
-    allowed = _allowed_words(names)
-    echoes = _proper_nouns(echo_from, allowed)
-    allowed |= set(card_words)
+    known = _allowed_words(names)  # names and fixed words, never anything a dater wrote
+    echoes = _proper_nouns(echo_from, known)
+    allowed = known | set(card_words)
 
     if len(text) > max_chars or len(SENTENCE_END.findall(text)) > max_sentences:
         found.add(Violation.TOO_LONG)
@@ -294,7 +246,7 @@ def check(
         found.add(Violation.EXCLAMATION)
     if _has_formatting(text):
         found.add(Violation.FORMATTING)
-    found |= _name_problems(text, names, allowed)
+    found |= _name_problems(text, names, allowed, known)
     if not questions and "?" in text:
         found.add(Violation.QUESTION)
     if not open_with_names and _opens_with_both_names(text, names):
@@ -334,18 +286,6 @@ def question_is_off_limits(question: str) -> bool:
         or PERSONAL_DETAIL.search(question)
         or STREET.search(question)
     )
-
-
-def distress_in(words: str) -> Distress:
-    """How a dater speaking to Nova sounds. Clear: "I want to stop", "I'm not comfortable",
-    "can we end this", "I need a moment" and the like. Maybe: "help", "I'm scared", "that's
-    not okay". Clear wins when both appear."""
-    words = " ".join(words.translate(STRAIGHT_QUOTES).split())
-    if CLEAR_DISTRESS.search(words):
-        return Distress.CLEAR
-    if MAYBE_DISTRESS.search(words):
-        return Distress.MAYBE
-    return Distress.NONE
 
 
 def card_words(cards: Iterable[str]) -> frozenset[str]:
@@ -414,9 +354,13 @@ def _proper_nouns(texts: Iterable[str], allowed: set[str]) -> set[str]:
     return nouns
 
 
-def _name_problems(text: str, names: Collection[str], allowed: set[str]) -> set[Violation]:
+def _name_problems(
+    text: str, names: Collection[str], allowed: set[str], known: set[str]
+) -> set[Violation]:
     """Only the daters' first names (and Nova) may appear: any other capitalised word in
-    the middle of a sentence is treated as a possible surname, place, workplace or school."""
+    the middle of a sentence is treated as a possible surname, place, workplace or school.
+    allowed adds words from the cards; right after a first name, only known words (names
+    and fixed words) may follow, so a card word is never said as a surname."""
     problems: set[Violation] = set()
 
     for name in names:
@@ -438,7 +382,7 @@ def _name_problems(text: str, names: Collection[str], allowed: set[str]) -> set[
                 and following is not None
                 and between == " "
                 and following.group(0)[:1].isupper()
-                and following.group(0).split("'")[0] not in allowed
+                and following.group(0).split("'")[0] not in known
             ):
                 problems.add(Violation.PERSONAL_DETAIL)  # "Maya Lopez": a surname
             continue

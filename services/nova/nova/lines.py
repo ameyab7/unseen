@@ -9,8 +9,9 @@
   call the model during the date, within live_timeout.
 
 Every model line passes the guardrails or is replaced by a fallback line. Every prompt
-sees what Nova has said tonight for that moment, across dates (nova/tonight.py). The log
-records events and timings only, never text.
+sees what Nova has said tonight for that moment, across dates (nova/tonight.py), except
+audience questions and replies, which are never remembered. The log records events and
+timings only, never text.
 """
 
 import asyncio
@@ -23,16 +24,9 @@ from enum import StrEnum
 from nova import prompts, script
 from nova.cards import BlindCard, Pair, Seat
 from nova.cues import Moment, RoomFacts, Say
+from nova.distress import has_warning, is_unmistakable
 from nova.events import Event, EventLog
-from nova.guardrails import (
-    Distress,
-    Violation,
-    card_words,
-    check,
-    clean,
-    distress_in,
-    question_is_off_limits,
-)
+from nova.guardrails import Violation, card_words, check, clean, question_is_off_limits
 from nova.models import LineModel, ModelRefused
 from nova.tonight import Tonight
 
@@ -47,6 +41,9 @@ SET_PIECES = frozenset(
     }
 )
 LIVE_REACTIONS = frozenset({Moment.SILENCE, Moment.FROM_THE_ROOM, Moment.ROOM_TALK, Moment.REPLY})
+# Live reactions kept in tonight's memory. Not audience questions or replies: their lines
+# carry what a listener or dater said, and the memory reaches every later date's prompts.
+REMEMBERED_LIVE = frozenset({Moment.SILENCE, Moment.ROOM_TALK})
 CANDIDATES = 3  # model lines written for each set piece; the best one is kept
 
 
@@ -81,7 +78,7 @@ def rules_for(moment: Moment) -> Rules:
     if moment is Moment.OUTRO:
         return Rules(max_sentences=1, questions=False)
     if moment is Moment.LIGHTNING_QUESTION:
-        return Rules(open_with_names=False)
+        return Rules(max_sentences=1, open_with_names=False)
     return Rules()
 
 
@@ -131,7 +128,7 @@ def fallback_lines(pair: Pair, next_pair: Pair | None) -> list[tuple[Moment, str
         *((Moment.LIGHTNING_QUESTION, q) for q in script.LIGHTNING_FALLBACKS),
         (Moment.LAST_WORD, script.last_word_fallback(pair.left)),
         (Moment.LAST_WORD, script.last_word_fallback(pair.right)),
-        (Moment.OUTRO, script.outro_fallback(pair)),
+        *((Moment.OUTRO, o) for o in script.outro_fallbacks(pair)),
         *((Moment.SILENCE, s) for s in script.silence_fallbacks(pair)),
         (Moment.FROM_THE_ROOM, script.from_the_room_fallback(pair)),
         (Moment.FROM_THE_ROOM, script.DECLINE_QUESTION),
@@ -196,7 +193,7 @@ class LineWriter:
 
     async def line_for(self, say: Say) -> Line:
         line = await self._line_for(say)
-        if line.source is not Source.FIXED and line.moment in LIVE_REACTIONS:
+        if line.source is not Source.FIXED and line.moment in REMEMBERED_LIVE:
             self._tonight.remember(line.moment, line.text, names=self._names)
         self._events.emit(
             Event.LINE,
@@ -209,7 +206,10 @@ class LineWriter:
         return line
 
     async def attempt_for(self, say: Say) -> Attempt:
-        """One model attempt for a cue, with no fallback: for the evaluation script."""
+        """One model attempt for a cue, with no fallback: for the evaluation script. An
+        audience question Nova declines never reaches the model, as in line_for."""
+        if self._declines(say):
+            return Attempt(None, (), 0, ErrorKind.DECLINED)
         timeout = self._prep_timeout if say.moment in SET_PIECES else self._live_timeout
         return await self._attempt(say, self._prompt_for(say), timeout)
 
@@ -224,7 +224,7 @@ class LineWriter:
         if say.moment not in LIVE_REACTIONS:
             raise ValueError(f"No line for {say.moment}: it needs approved text")
 
-        if say.moment is Moment.FROM_THE_ROOM and question_is_off_limits(say.detail or ""):
+        if self._declines(say):
             return Line(
                 script.DECLINE_QUESTION, Source.FALLBACK, say.moment, error=ErrorKind.DECLINED
             )
@@ -233,6 +233,11 @@ class LineWriter:
         return self._settle(say, attempt, Source.MODEL)
 
     # --- Internals ------------------------------------------------------------------------
+
+    def _declines(self, say: Say) -> bool:
+        """Audience questions about personal details or looks, or that try to instruct Nova,
+        are declined with a fixed line before the model sees them."""
+        return say.moment is Moment.FROM_THE_ROOM and question_is_off_limits(say.detail or "")
 
     async def _prepare_one(self, say: Say) -> Line:
         """Three candidates at once; keeps the one that passes the guardrails and is least
@@ -290,11 +295,8 @@ class LineWriter:
         return self._fallback(say, attempt)
 
     def _fallback(self, say: Say, attempt: Attempt) -> Line:
-        """The first fallback that passes the guardrails; the last one always does."""
-        options = self._fallbacks_for(say)
-        chosen = next((o for o in options[:-1] if not self._check(say, o)), options[-1])
         return Line(
-            chosen,
+            self._fallback_for(say),
             Source.FALLBACK,
             say.moment,
             violations=attempt.violations,
@@ -302,41 +304,44 @@ class LineWriter:
             ms=attempt.ms,
         )
 
-    def _fallbacks_for(self, say: Say) -> Sequence[str]:
+    def _fallback_for(self, say: Say) -> str:
+        """An approved fallback line, never built from what a dater or listener said."""
         pair = self._pair
         match say.moment:
             case Moment.DOORS_INTRO:
-                return [script.doors_fallback(pair)]
+                return script.doors_fallback(pair)
             case Moment.FIRST_QUESTION:
-                return [script.first_question_fallback(pair.card(_seat(say)))]
+                return script.first_question_fallback(pair.card(_seat(say)))
             case Moment.LIGHTNING_QUESTION:
-                return [script.LIGHTNING_FALLBACKS[_lightning_number(say) - 1]]
+                n, total = _lightning_position(say)
+                # "Last quick one: ..." only ever comes last.
+                options = [
+                    o for o in script.LIGHTNING_FALLBACKS if n == total or not o.startswith("Last")
+                ]
+                return self._least_like_tonight(say, options)
             case Moment.LAST_WORD:
-                return [script.last_word_fallback(pair.card(_seat(say)))]
+                return script.last_word_fallback(pair.card(_seat(say)))
             case Moment.OUTRO:
-                return [script.outro_fallback(pair)]
+                return self._least_like_tonight(say, script.outro_fallbacks(pair))
             case Moment.NEXT_UP:
-                return [script.next_up_fallback(self._next_pair or pair)]
+                return script.next_up_fallback(self._next_pair or pair)
             case Moment.SILENCE:
-                # The one least like tonight's silence prompts: they take turns all night.
-                return [
-                    min(
-                        script.silence_fallbacks(pair),
-                        key=lambda o: self._tonight.closeness(say.moment, o, names=self._names),
-                    )
-                ]
+                return self._least_like_tonight(say, script.silence_fallbacks(pair))
             case Moment.FROM_THE_ROOM:
-                return [
-                    script.from_the_room_verbatim(say.detail or ""),
-                    script.from_the_room_fallback(pair),
-                ]
+                return script.from_the_room_fallback(pair)
             case Moment.ROOM_TALK:
-                return [script.ROOM_TALK_FALLBACK]
+                return script.ROOM_TALK_FALLBACK
             case Moment.REPLY:
-                if distress_in(say.detail or "") is not Distress.NONE:
-                    return [script.TAKE_YOUR_TIME]  # never "I'll stay out of that one"
-                return [script.REPLY_FALLBACK]
+                words = say.detail or ""
+                if is_unmistakable(words) or has_warning(words):
+                    return script.TAKE_YOUR_TIME  # never "I'll stay out of that one"
+                return script.REPLY_FALLBACK
         raise ValueError(f"No fallback for {say.moment}")
+
+    def _least_like_tonight(self, say: Say, options: Sequence[str]) -> str:
+        """The option least like what Nova has said tonight for this moment, so fixed
+        fallbacks take turns across the night; ties go to the first."""
+        return min(options, key=lambda o: self._tonight.closeness(say.moment, o, names=self._names))
 
     def _prompt_for(self, say: Say) -> str:
         pair, tonight = self._pair, self._tonight.said(say.moment)
@@ -405,7 +410,13 @@ def _room(say: Say) -> RoomFacts:
 
 
 def _lightning_number(say: Say) -> int:
-    return int((say.detail or "1 of 3").split()[0])
+    return _lightning_position(say)[0]
+
+
+def _lightning_position(say: Say) -> tuple[int, int]:
+    """("2 of 3") -> (2, 3)."""
+    n, _, total = (say.detail or "1 of 3").split()
+    return int(n), int(total)
 
 
 def _ms_since(started: float) -> int:

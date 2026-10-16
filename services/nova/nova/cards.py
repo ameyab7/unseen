@@ -1,7 +1,14 @@
 """Seats and blind cards: what Nova knows about the two daters on air."""
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
+
+# A first name and age are said on air exactly as written, in fixed and fallback lines
+# (nova/script.py) that no guardrail checks, so a card holds nothing else there.
+FIRST_NAME = re.compile(r"[^\W\d_]+(?:[ '-][^\W\d_]+)*")  # letters; single spaces, - or '
+MAX_FIRST_NAME = 30
+MIN_AGE, MAX_AGE = 18, 99
 
 
 class Seat(StrEnum):
@@ -13,6 +20,10 @@ class Seat(StrEnum):
     @property
     def other(self) -> Seat:
         return Seat.RIGHT if self is Seat.LEFT else Seat.LEFT
+
+
+class InvalidCard(ValueError):
+    """A blind card Nova can't put on air. The message names the field, never its value."""
 
 
 @dataclass(frozen=True)
@@ -31,6 +42,16 @@ class BlindCard:
     age: int
     pronouns: str
     prompts: tuple[Prompt, Prompt]
+
+    def __post_init__(self) -> None:
+        name = self.first_name
+        if len(name) > MAX_FIRST_NAME or not FIRST_NAME.fullmatch(name):
+            raise InvalidCard(
+                f"first_name must be letters, with single spaces, hyphens or apostrophes "
+                f"between them, at most {MAX_FIRST_NAME} characters"
+            )
+        if type(self.age) is not int or not MIN_AGE <= self.age <= MAX_AGE:
+            raise InvalidCard(f"age must be a whole number from {MIN_AGE} to {MAX_AGE}")
 
     @property
     def label(self) -> str:

@@ -15,7 +15,7 @@ from nova.fixtures import MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
 from nova.guardrails import Violation, check
 from nova.lines import ErrorKind, LineWriter, Source, fallback_lines, names_for, rules_for
 from nova.models import ModelRefused
-from nova.tonight import NAME, Tonight
+from nova.tonight import NAME, Tonight, mask
 
 LEFT, RIGHT = Seat.LEFT, Seat.RIGHT
 
@@ -236,6 +236,18 @@ async def test_tonight_is_shared_across_dates_and_earlier_daters_names_never_rea
         assert "Maya" not in prompt and "Theo" not in prompt
 
 
+async def test_audience_questions_and_replies_are_never_remembered_for_later_dates():
+    """Those lines carry what a listener or dater said, and tonight's memory goes into
+    every later date's prompts."""
+    tonight = Tonight()
+    w = writer(FakeModel("Maya, Theo, over to you."), tonight=tonight)
+    await w.line_for(Say(Moment.FROM_THE_ROOM, detail="Sing or dance?"))
+    await w.line_for(Say(Moment.REPLY, about=LEFT, detail="Nova, are you human?"))
+    await w.line_for(Say(Moment.SILENCE))
+    assert tonight.said(Moment.FROM_THE_ROOM) == tonight.said(Moment.REPLY) == []
+    assert tonight.said(Moment.SILENCE) == [f"{NAME}, {NAME}, over to you."], "other lines are"
+
+
 # --- Fixed lines and live reactions -------------------------------------------------------
 
 
@@ -301,6 +313,41 @@ async def test_silence_fallbacks_take_turns_across_the_whole_night():
     texts = [(await later.line_for(Say(Moment.SILENCE))).text for _ in range(2)]
     assert options[0] not in texts, "the earlier date already heard the first one"
     assert sorted(texts) == sorted(options[1:])
+
+
+async def test_outro_fallbacks_take_turns_across_the_whole_night():
+    tonight, outros = Tonight(), []
+    for pair in (REHEARSAL_PAIR, NEXT_PAIR, REHEARSAL_PAIR, NEXT_PAIR):
+        w = writer(
+            FakeModel(error=RuntimeError("down")), pair=pair, next_pair=None, tonight=tonight
+        )
+        await w.prepare()
+        outros.append((await w.line_for(Say(Moment.OUTRO))).text)
+    shapes = {mask(text, ["Maya", "Theo", "Sam", "Priya"]) for text in outros}
+    assert len(shapes) == 4, "four dates, four different outros"
+
+
+async def test_lightning_fallbacks_take_turns_across_the_whole_night():
+    tonight = Tonight()
+    earlier_date = script.LIGHTNING_FALLBACKS[0]
+    tonight.remember(Moment.LIGHTNING_QUESTION, earlier_date, names=[])
+    w = writer(FakeModel(error=RuntimeError("down")), tonight=tonight)
+    await w.prepare()
+    texts = [
+        (await w.line_for(Say(Moment.LIGHTNING_QUESTION, detail=f"{n} of 3"))).text
+        for n in (1, 2, 3)
+    ]
+    assert texts[0] == script.LIGHTNING_FALLBACKS[1], "not the one an earlier date heard"
+    assert texts[2] == script.LIGHTNING_FALLBACKS[2], '"Last quick one" only ever comes last'
+    assert not any(text.startswith("Last") for text in texts[:2])
+
+
+async def test_a_lightning_question_is_one_sentence():
+    model = FakeModel("Time for the lightning round. Mountains or sea?")
+    w = writer(model)
+    await w.prepare()
+    line = await w.line_for(Say(Moment.LIGHTNING_QUESTION, detail="1 of 3"))
+    assert line.source is Source.FALLBACK and Violation.TOO_LONG in line.violations
 
 
 # --- Lines that vary ----------------------------------------------------------------------
@@ -431,12 +478,13 @@ async def test_questions_about_personal_details_or_looks_are_declined_without_th
     assert model.prompts == []
 
 
-async def test_if_the_model_fails_an_audience_question_is_read_as_approved_when_safe():
-    w = writer(FakeModel(error=RuntimeError("down")))
-    safe = await w.line_for(Say(Moment.FROM_THE_ROOM, detail="Mountains or sea?"))
-    assert safe.text == "A question from the room. Mountains or sea?"
-    unsafe = await w.line_for(Say(Moment.FROM_THE_ROOM, detail="Have you been to Lisbon, Theo?"))
-    assert unsafe.text == script.from_the_room_fallback(REHEARSAL_PAIR)
+@pytest.mark.parametrize("model", [FakeModel(error=RuntimeError("down")), FakeModel("Hi!")])
+async def test_if_the_model_fails_nova_never_reads_the_question_itself(model):
+    """Fallbacks are never built from free text (decision 0005), so not even an approved
+    audience question is read word for word."""
+    line = await writer(model).line_for(Say(Moment.FROM_THE_ROOM, detail="Sing or dance?"))
+    assert line.source is Source.FALLBACK
+    assert line.text == "Room, keep the questions coming. Maya, Theo, back to you."
 
 
 # --- Every fallback line passes the guardrails --------------------------------------------
@@ -446,8 +494,27 @@ async def test_if_the_model_fails_an_audience_question_is_read_as_approved_when_
 def test_every_fallback_line_passes_the_guardrails(moment, text):
     rules = rules_for(moment)
     names = names_for(moment, REHEARSAL_PAIR, NEXT_PAIR)
+    # Two signed-off outro fallbacks are two short sentences; one sentence is the model's rule.
+    sentences = 2 if moment is Moment.OUTRO else rules.max_sentences
     assert (
-        check(text, names=names, max_chars=rules.max_chars, max_sentences=rules.max_sentences) == ()
+        check(
+            text,
+            names=names,
+            max_chars=rules.max_chars,
+            max_sentences=sentences,
+            questions=rules.questions,
+            open_with_names=rules.open_with_names,
+        )
+        == ()
+    )
+
+
+def test_the_outro_fallbacks_are_the_four_the_product_owner_signed_off():
+    assert script.outro_fallbacks(REHEARSAL_PAIR) == (
+        "Maya and Theo, thank you both.",
+        "Thank you, Maya. Thank you, Theo.",
+        "That's our date with Maya and Theo. Thank you both.",
+        "Maya, Theo, thank you for being here tonight.",
     )
 
 

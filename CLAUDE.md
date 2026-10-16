@@ -37,16 +37,38 @@ components and say so in the pull request.
 - supabase start: local stack; pnpm db:test: pgTAP tests; pnpm db:types: regenerate types
 - services/nova (Python 3.14, uv): uv sync; uv run pytest; uv run ruff check;
   uv run ruff format. Settings come from services/nova/.env (see .env.example)
-- services/nova: uv run python -m nova.evaluation [--repeat N] runs Nova's show moments
-  and attacks against the real model in NOVA_LLM; --night runs a full night of eight dates
-  and reports repetition across it (the number we track). On demand only, never in CI;
-  run it before any model change (docs/decisions/0005-nova-lines-and-guardrails.md)
+- services/nova: uv run python -m nova.evaluation [--repeat N] runs Nova's show moments,
+  attacks and the distress test set against the real model in NOVA_LLM; --distress runs
+  only the distress set; --night runs a full night of eight dates and reports repetition
+  across it (the number we track). On demand only, never in CI; run it before any model
+  change (docs/decisions/0005-nova-lines-and-guardrails.md)
+- services/nova: uv run python -m nova.agent dev runs Nova in LiveKit for one measured
+  rehearsal date in the Agents Playground; uv run python -m nova.voices writes voice
+  samples. Both use LiveKit credit (docs/spike-results.md)
 
 Install app packages from apps/mobile with
 `node ../../node_modules/expo/bin/cli install <pkg>`, not `npx expo install`, then
 check package.json put them in the right section (docs/decisions/0001-pnpm-monorepo.md).
 
-On Windows: if `pnpm` is not recognized, run once
+On Windows, Smart App Control (Windows 11's reputation check for apps and DLLs) is on. It
+blocks unsigned files that few machines run, and re-checks each file about once a day, so a
+tool can work one day and be blocked the next (the Code Integrity event log names what it
+blocks). It currently blocks PyAV's DLLs, so nothing that imports LiveKit runs natively
+(Nova's agent and voice samples, tests/test_agent.py, tests/test_voices.py), and pnpm 12's
+native binary. Never turn it off or change other security settings; use these instead:
+- Nova: with Docker Desktop running, from the repository root, this runs a rehearsal
+  (LiveKit credit), and the second runs every test (compose.yaml lists more):
+  `docker compose -f services/nova/compose.yaml up --build`
+  `docker compose -f services/nova/compose.yaml run --rm --build nova uv run pytest`
+  Ollama on Windows is reached at host.docker.internal; the keys stay in
+  services/nova/.env and never go in the image.
+  Natively, the tests that don't import LiveKit still run:
+  `uv run pytest --ignore=tests/test_agent.py --ignore=tests/test_voices.py`.
+- The app: `node node_modules/expo/bin/cli start apps/mobile --dev-client` from the
+  repository root does what `pnpm dev` does, without pnpm. Run pnpm itself (installs, root
+  scripts) in WSL or a container while it is blocked.
+
+If `pnpm` is not recognized at all, run once
 `corepack enable --install-directory "$env:APPDATA\npm" pnpm` (no admin needed; that
 folder is on the user PATH), then open a new terminal. Don't use `corepack pnpm <script>`:
 the root scripts call pnpm themselves and fail when it is not on PATH.
