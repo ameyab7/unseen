@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 
 from nova.cues import Moment
+from nova.text import mask_names
 
 NAME = "[name]"  # stands in for a dater's first name
 SHOWN = 24  # lines per moment shown to the model: about three a date for eight dates
@@ -35,9 +36,7 @@ class Remembered:
 
 
 def mask(text: str, names: Iterable[str]) -> str:
-    for name in sorted(names, key=len, reverse=True):
-        text = re.sub(rf"\b{re.escape(name)}\b", NAME, text)
-    return text
+    return mask_names(text, names, NAME)
 
 
 def words(text: str) -> list[str]:

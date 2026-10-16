@@ -30,6 +30,7 @@ from nova.cues import Moment, RoomFacts, Say
 from nova.distress import has_warning, is_unmistakable
 from nova.events import Event, EventLog
 from nova.guardrails import Violation, card_words, check, clean, question_is_off_limits
+from nova.measure import ms_since
 from nova.models import LineModel, ModelRefused, warm_up
 from nova.tonight import SHOWN, SHOWN_LIVE, Remembered, Tonight
 
@@ -153,8 +154,8 @@ class LineWriter:
         pair: Pair,
         *,
         next_pair: Pair | None = None,
-        live_timeout: float = 2.0,
-        prep_timeout: float = 60.0,
+        live_timeout: float = Settings.live_timeout,
+        prep_timeout: float = Settings.prep_timeout,
         prep_budget: float = Settings.prep_budget,
         events: EventLog | None = None,
         rng: random.Random | None = None,
@@ -173,9 +174,8 @@ class LineWriter:
             prompts.LIGHTNING_FORMS, len(prompts.LIGHTNING_FORMS)
         )
         self._tonight = tonight or Tonight()  # shared by every date's writer tonight
-        self._names = {pair.left.first_name, pair.right.first_name}
-        if next_pair is not None:
-            self._names |= {next_pair.left.first_name, next_pair.right.first_name}
+        # The daters this writer's lines may be about, masked in tonight's memory.
+        self._names = {card.first_name for card in cards_for(Moment.NEXT_UP, pair, next_pair)}
         self._prepared: dict[_Key, Line] = {}
         # Set pieces in tonight's memory as planned: kept once spoken, dropped by finish().
         self._planned: dict[_Key, Remembered] = {}
@@ -215,7 +215,7 @@ class LineWriter:
             Event.PREPARED,
             count=len(self._prepared),
             fallbacks=fallbacks,
-            ms=_ms_since(started),
+            ms=ms_since(started),
             budget_exhausted=self.budget_exhausted,
         )
 
@@ -318,13 +318,13 @@ class LineWriter:
                 self._model.write(system=prompts.SYSTEM_PROMPT, prompt=prompt), timeout
             )
         except TimeoutError:
-            return Attempt(None, (), _ms_since(started), ErrorKind.TIMEOUT)
+            return Attempt(None, (), ms_since(started), ErrorKind.TIMEOUT)
         except ModelRefused:
-            return Attempt(None, (), _ms_since(started), ErrorKind.REFUSED)
+            return Attempt(None, (), ms_since(started), ErrorKind.REFUSED)
         except Exception:  # any model failure: the room hears a fallback, not an error
-            return Attempt(None, (), _ms_since(started), ErrorKind.ERROR)
+            return Attempt(None, (), ms_since(started), ErrorKind.ERROR)
         text = clean(raw)
-        return Attempt(text, self._check(say, text), _ms_since(started), None)
+        return Attempt(text, self._check(say, text), ms_since(started), None)
 
     def _check(self, say: Say, text: str) -> tuple[Violation, ...]:
         """The guardrails for this cue. Names and places on the blind cards of the daters
@@ -494,7 +494,3 @@ def _place(say: Say) -> tuple[int, int]:
     if say.number is None or say.of is None:
         raise ValueError(f"{say.moment} needs its place in the round")
     return say.number, say.of
-
-
-def _ms_since(started: float) -> int:
-    return round((time.monotonic() - started) * 1000)

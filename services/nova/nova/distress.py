@@ -33,7 +33,9 @@ from nova import prompts
 from nova.cards import Seat
 from nova.cues import Conduct
 from nova.events import Event, EventLog
+from nova.measure import ms_since
 from nova.models import LineModel
+from nova.text import any_of, plain
 
 JOINED = 5.0  # seconds of one dater's transcripts joined for the instant layer
 CONTEXT = 15.0  # seconds of what the dater said before, shown to the meaning layer
@@ -52,10 +54,6 @@ class CheckError(StrEnum):
     UNLABELLED = "unlabelled"  # the model answered something other than a label
 
 
-def _any(*patterns: str) -> re.Pattern[str]:
-    return re.compile("|".join(f"(?:{p})" for p in patterns), re.IGNORECASE)
-
-
 # --- The instant layer ----------------------------------------------------------------------
 
 # Words about the date or about now that may follow a request, and then the clause ends.
@@ -69,7 +67,7 @@ _TAIL = (
 _END = rf"{_ABOUT_THE_DATE}{_TAIL}\s*(?:[.?!;,:]|$)"
 _WITH_IT = r"(?:\s+(?:with (?:this|that|it|him|her|them)|here|right now|now|anymore))?"
 
-INSTANT = _any(
+INSTANT = any_of(
     # "I want to stop", "I'd like to leave", "we need to end this", "I have to go now".
     r"\b(?:i|we)(?:'d|\s+would)?\s+(?:(?:really|just|honestly|actually|seriously)\s+)?"
     r"(?:want\s+to|wanna|need\s+to|have\s+to|like\s+to|gotta)\s+"
@@ -114,7 +112,7 @@ INSTANT = _any(
 # Words that might be distress. Every sentence goes to the meaning layer whatever its words,
 # so these only choose a reply's fallback: "Take all the time you need." rather than "I'll
 # stay out of that one" (nova/lines.py).
-WARNING = _any(
+WARNING = any_of(
     r"\bstop\w*",
     r"\bend\b",
     r"\bleav(?:e|es|ing)\b",
@@ -149,19 +147,14 @@ WARNING = _any(
 )
 
 
-def _plain(words: str) -> str:
-    """Curly apostrophes from speech-to-text, and runs of spaces, made plain."""
-    return " ".join(words.replace("’", "'").replace("‘", "'").split())
-
-
 def is_unmistakable(words: str) -> bool:
     """An unmistakable request to stop: the instant layer pauses for it."""
-    return bool(INSTANT.search(_plain(words)))
+    return bool(INSTANT.search(plain(words)))
 
 
 def has_warning(words: str) -> bool:
     """A word that might be distress."""
-    return bool(WARNING.search(_plain(words)))
+    return bool(WARNING.search(plain(words)))
 
 
 # --- The meaning layer ----------------------------------------------------------------------
@@ -303,7 +296,7 @@ class DistressCheck:
             error = CheckError.TIMEOUT
         except Exception:  # any failure: the moderator is alerted instead
             error = CheckError.ERROR
-        checked = Checked(verdict, round((time.monotonic() - started) * 1000), error, conduct)
+        checked = Checked(verdict, ms_since(started), error, conduct)
         self._events.emit(
             Event.DISTRESS_CHECK, verdict=verdict, ms=checked.ms, error=error, conduct=conduct
         )

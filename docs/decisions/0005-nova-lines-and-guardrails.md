@@ -10,8 +10,11 @@ Date: 2026-10-13. Status: accepted.
   the date only live reactions call it: a silence prompt, an audience question, talk to the
   room, and a reply when a dater speaks to Nova (`services/nova/nova/lines.py`).
 - **The model is one setting.** `NOVA_LLM` picks Ollama (development: Gemma, thinking off)
-  or Claude (the official SDK; Nova's rules in a cached system block, effort low, no
-  sampling settings). A Claude refusal gets Nova's own fallback line. No server-side
+  or Claude (the official SDK; Nova's rules in a system block marked for caching, effort
+  low, no sampling settings). Caching applies only above the model's minimum cacheable
+  prompt (512 tokens on current Claude models, 1,024 to 4,096 on older ones): Nova's rules
+  are about 510 tokens and the distress check's about 810, so whether they cache depends on
+  the model, and `usage.cache_read_input_tokens` confirms it. A Claude refusal gets Nova's own fallback line. No server-side
   refusal fallback for now; we add it if and when Nova switches to Claude.
 - **Instructions and data never mix.** Nova's rules are the system prompt. Each task is
   one instruction we wrote, naming daters by seat, then one `<data>` block of JSON with

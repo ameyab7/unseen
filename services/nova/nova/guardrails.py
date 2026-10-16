@@ -12,6 +12,14 @@ from collections.abc import Collection, Iterable
 from enum import StrEnum
 
 from nova.questions import OffLimits
+from nova.text import (
+    STRAIGHT_QUOTES,
+    WORD,
+    any_of,
+    capitalised_mid_sentence,
+    mask_names,
+    starts_sentence,
+)
 
 
 class Violation(StrEnum):
@@ -32,12 +40,8 @@ class Violation(StrEnum):
     OPENS_WITH_NAMES = "opens_with_names"  # both daters' names first (lightning questions)
 
 
-def _any(*patterns: str, flags: int = re.IGNORECASE) -> re.Pattern[str]:
-    return re.compile("|".join(f"(?:{p})" for p in patterns), flags)
-
-
 # Nova never claims to be human, or gives itself a body, family or past.
-CLAIMS_HUMAN = _any(
+CLAIMS_HUMAN = any_of(
     r"\bi(?:'m| am)\s+(?:a\s+)?(?:real\s+)?(?:human|person|man|woman|guy|girl)\b",
     r"\bi(?:'m| am)\s+not\s+(?:an?\s+)?(?:ai|bot|robot|machine|computer|program)\b",
     r"\bas a (?:human|person|woman|man)\b",
@@ -50,7 +54,7 @@ CLAIMS_HUMAN = _any(
 )
 
 # Nova never reveals, guesses or hints at a decision, and never pushes anyone to reveal.
-DECISION = _any(
+DECISION = any_of(
     r"\breveal(?:s|ed|ing)?\b",
     r"\bunseen\b",
     r"\bmutual\b",
@@ -78,7 +82,7 @@ DECISION = _any(
 )
 
 # Nova never comments on looks or voices.
-LOOKS_OR_VOICE = _any(
+LOOKS_OR_VOICE = any_of(
     r"\b(?:gorgeous|handsome|sexy|attractive|ugly|stunning|good-looking)\b",
     r"\blook(?:s|ing|ed)?\s+(?:so\s+)?(?:great|good|gorgeous|beautiful|handsome|cute|pretty|hot"
     r"|amazing|stunning|nice|lovely|sharp|fit|tired|old|young)\b",
@@ -91,7 +95,7 @@ LOOKS_OR_VOICE = _any(
 )
 
 # Nova never asks a listener to spend.
-SPENDING = _any(
+SPENDING = any_of(
     r"\bcoins?\b",
     r"\bgestures?\b",
     r"\bgifts?\b",
@@ -108,7 +112,7 @@ SPENDING = _any(
 )
 
 # Teasing is fine; humiliation is not.
-UNKIND = _any(
+UNKIND = any_of(
     r"\b(?:stupid|idiot|idiotic|dumb|loser|pathetic|desperate|creepy|ugly|fat|cringe|cringey"
     r"|lame)\b",
     r"\bshut up\b",
@@ -117,7 +121,7 @@ UNKIND = _any(
 )
 
 # A line that talks about its own rules or the data was probably steered by an injection.
-INSTRUCTIONS = _any(
+INSTRUCTIONS = any_of(
     r"\binstructions?\b",
     r"\b(?:my|new|the|these|those|your)\s+rules\b",
     r"\bignore\b.{0,24}\b(?:rules|instructions|above|previous)\b",
@@ -165,7 +169,7 @@ _CONTACT_AND_HOME = (
 _SPOT = r"(?:spot|place|bar|pub|cafe|café|restaurant|hangout|haunt|neighbou?rhood)"
 
 # Never repeat a workplace, address, surname, school, phone number or social handle.
-PERSONAL_DETAIL = _any(
+PERSONAL_DETAIL = any_of(
     *_CONTACT_AND_HOME,
     r"\b(?:school|university|uni|college|campus|class of|graduated)\b",
     # Nova asking for one: "where do you work?", "a favourite local spot?"
@@ -176,7 +180,7 @@ PERSONAL_DETAIL = _any(
 # What identifies a dater in what they said, capitalised or not (speech-to-text often
 # doesn't capitalise): up to SLOT_WORDS words after one of these cues, stopping at
 # punctuation or a function word. "i work at northwind bank" gives northwind and bank.
-SLOT_CUE = _any(
+SLOT_CUE = any_of(
     r"\b(?:work|works|worked|working)\s+(?:at|for)\b",
     r"\bemployed\s+by\b",
     r"\bmy\s+(?:job|boss|office)(?:\s+is)?\s+at\b",
@@ -220,7 +224,7 @@ STREET = re.compile(
 # Audience questions the screen holds back. Moderator approval is the main gate (decision
 # 0005), so these are narrow enough to let harmless approved questions through: "your lucky
 # number", "a job you'd do for free", "favourite subject at school", "face to face".
-QUESTION_PERSONAL_DETAIL = _any(
+QUESTION_PERSONAL_DETAIL = any_of(
     *_CONTACT_AND_HOME,
     # "where do you work", "where does Theo live", "where did Maya's sister grow up"
     r"\bwhere\s+(?:do|does|did)\s+(?:[\w']+\s+){1,2}?(?:work|live|study|stay|grow up"
@@ -236,7 +240,7 @@ QUESTION_PERSONAL_DETAIL = _any(
     rf"\blocal\s+{_SPOT}\b",
     rf"\bfavou?rite\s+{_SPOT}\b.{{0,30}}\b(?:near|nearby|in town|around here|in the city)\b",
 )
-QUESTION_LOOKS = _any(
+QUESTION_LOOKS = any_of(
     r"\blooks?\s+like\b",
     r"\bwhat\s+(?:do|does)\s+\w+(?:\s+\w+)?\s+look\b",
     r"\b(?:attractive|hot|cute|pretty|handsome|beautiful|gorgeous|sexy|ugly)\b",
@@ -247,7 +251,7 @@ QUESTION_LOOKS = _any(
 )
 
 # Audience questions that try to give Nova instructions: the screen holds them back.
-INSTRUCTING_NOVA = _any(
+INSTRUCTING_NOVA = any_of(
     r"\bignore\b.{0,30}\b(?:rules|instructions|above|previous|prompt)\b",
     r"\b(?:forget|override|bypass|disregard)\b.{0,20}\b(?:rules|instructions|prompt)\b",
     r"\bnew (?:rules?|instructions?)\b",
@@ -274,9 +278,7 @@ MONTHS = (
 )  # fmt: skip
 CALENDAR = frozenset(DAYS + MONTHS)
 SENTENCE_END = re.compile(r"[.?!]+(?=\s|$)")
-WORD = re.compile(r"[^\W\d_][\w'-]*")
 ALLOWED_PUNCTUATION = set(".,?;:'\"()-–—…")
-STRAIGHT_QUOTES = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"'})
 
 
 def clean(text: str) -> str:
@@ -345,7 +347,7 @@ def check(
     # Word checks run with the daters' own names masked, so a dater called Rose or Hope
     # doesn't trip the spending or any other word list, and with the show's name masked
     # where it names the show.
-    masked = _mask_show_name(_mask_names(text, names))
+    masked = _mask_show_name(mask_names(text, names, "Name"))
     for violation, pattern in (
         (Violation.CLAIMS_HUMAN, CLAIMS_HUMAN),
         (Violation.DECISION, DECISION),
@@ -387,19 +389,12 @@ def card_words(cards: Iterable[str]) -> frozenset[str]:
     words mid-sentence, one card's text per item. A card that tries to give Nova
     instructions lends none, so an injected name ("a host called Kate") never becomes
     sayable."""
-    words: set[str] = set()
-    for card in cards:
-        if INSTRUCTING_NOVA.search(card):
-            continue
-        for match in WORD.finditer(card):
-            base = match.group(0).split("'")[0]
-            if (
-                base[:1].isupper()
-                and base not in ALWAYS_ALLOWED
-                and not _starts_sentence(card, match.start())
-            ):
-                words.add(base)
-    return frozenset(words)
+    return frozenset(
+        word
+        for card in cards
+        if not INSTRUCTING_NOVA.search(card)
+        for word in capitalised_mid_sentence(card, ALWAYS_ALLOWED)
+    )
 
 
 def _opens_with_both_names(text: str, names: Collection[str]) -> bool:
@@ -424,19 +419,13 @@ def _mask_show_name(text: str) -> str:
 
     def masked(match: re.Match[str]) -> str:
         names_the_show = (
-            _starts_sentence(text, match.start())
+            starts_sentence(text, match.start())
             or SHOW_NAME_BEFORE.search(text, 0, match.start()) is not None
             or text.startswith(("'s", "’s"), match.end())
         )
         return "Show" if names_the_show else match.group(0)
 
     return re.sub(rf"\b{SHOW_NAME}\b", masked, text)
-
-
-def _mask_names(text: str, names: Collection[str]) -> str:
-    for name in sorted(names, key=len, reverse=True):
-        text = re.sub(rf"\b{re.escape(name)}\b", "Name", text)
-    return text
 
 
 def _allowed_words(names: Collection[str]) -> set[str]:
@@ -479,17 +468,7 @@ def slot_words(texts: Iterable[str], known: Collection[str] = ()) -> set[str]:
 def _proper_nouns(texts: Iterable[str], allowed: set[str]) -> set[str]:
     """Capitalised words in the middle of a sentence, lowercased: likely names, places,
     workplaces or schools. Words capitalised only because they start a sentence are not."""
-    nouns: set[str] = set()
-    for text in texts:
-        for match in WORD.finditer(text):
-            base = match.group(0).split("'")[0]
-            if (
-                base[:1].isupper()
-                and base not in allowed
-                and not _starts_sentence(text, match.start())
-            ):
-                nouns.add(base.lower())
-    return nouns
+    return {word.lower() for text in texts for word in capitalised_mid_sentence(text, allowed)}
 
 
 def _name_problems(
@@ -533,11 +512,6 @@ def _name_problems(
             continue
         if base.isupper() and len(base) > 1:
             problems.add(Violation.UNKNOWN_NAME)  # an acronym: a company, school or place
-        elif not _starts_sentence(text, match.start()):
+        elif not starts_sentence(text, match.start()):
             problems.add(Violation.UNKNOWN_NAME)
     return problems
-
-
-def _starts_sentence(text: str, index: int) -> bool:
-    before = text[:index].rstrip(" \"'(")
-    return not before or before[-1] in ".?!:…"

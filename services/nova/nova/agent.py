@@ -73,9 +73,10 @@ class RedactPii(logging.Filter):
 
 
 def redact_logs() -> None:
-    redact = RedactPii()
+    """Adds the redaction to every root handler, once: calling it again adds nothing."""
     for handler in logging.getLogger().handlers:
-        handler.addFilter(redact)
+        if not any(isinstance(existing, RedactPii) for existing in handler.filters):
+            handler.addFilter(RedactPii())
 
 
 def voice_parts(voice: str) -> tuple[str, str | None]:

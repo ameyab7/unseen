@@ -229,3 +229,14 @@ async def test_the_model_is_warmed_up_before_set_pieces_are_prepared(monkeypatch
     rehearsal = FakeRehearsal.last
     assert rehearsal is not None and rehearsal.order == ["warm_up", "prepare"]
     assert rehearsal.options["prep_budget"] == SETTINGS.prep_budget
+
+
+def test_redaction_is_added_once_however_often_the_agent_starts():
+    handler = logging.Handler()
+    logging.getLogger().addHandler(handler)
+    try:
+        agent.redact_logs()
+        agent.redact_logs()
+        assert sum(isinstance(f, RedactPii) for f in handler.filters) == 1
+    finally:
+        logging.getLogger().removeHandler(handler)

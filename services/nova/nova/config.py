@@ -37,11 +37,9 @@ class LlmChoice:
     def parse(cls, value: str) -> Self:
         provider, _, model = value.strip().partition("/")
         if not provider or not model:
-            raise ConfigError(f'NOVA_LLM must look like "provider/model", got {value!r}')
+            raise ConfigError('NOVA_LLM must look like "provider/model"')
         if provider not in PROVIDERS:
-            raise ConfigError(
-                f"NOVA_LLM provider must be one of {', '.join(PROVIDERS)}, got {provider!r}"
-            )
+            raise ConfigError(f"NOVA_LLM's provider must be one of {', '.join(PROVIDERS)}")
         return cls(provider, model)
 
 
@@ -56,13 +54,14 @@ class Settings:
     # smaller one can label without queueing behind live lines on the same Ollama.
     classifier: LlmChoice | None = None
     ollama_base_url: str = "http://localhost:11434"
-    # How long a live reaction may take before Nova uses a fallback line instead. Measured:
-    # warm Gemma writes a line in about 0.4 s, so 2 s is roughly 4x that. It caps the wait
-    # for the model, not the silence the room hears: the voice's first audio adds about 0.2
-    # to 0.5 s, and a reply also waits for the end of the dater's sentence and its transcript.
+    # How long a live reaction may take before Nova uses a fallback line instead. Measured
+    # (decision 0005): warm Gemma's live lines took a median of 321-342 ms and at most 565 ms
+    # over 60 runs, so 2 s is about 3.5x the worst case. It caps the wait for the model, not
+    # the silence the room hears: the voice's first audio adds about 0.2 to 0.5 s, and a
+    # reply also waits for the end of the dater's sentence and its transcript.
     live_timeout: float = 2.0
-    # How long a set piece may take before the date. Loading Gemma cold took 28 s, so 60 s
-    # covers a cold start plus the line; the date only starts once these are ready.
+    # How long one request for a set piece may take before the date. Loading Gemma cold took
+    # 20-28 s (decision 0005), so 60 s covers a cold start plus the line.
     prep_timeout: float = 60.0
     # How long preparing all of a date's set pieces may take. When it runs out, every set
     # piece not yet chosen gets its fallback and the date can start, so a model that hangs
@@ -143,7 +142,7 @@ class Settings:
             utterance_grace=grace,
             utterance_max_wait=max_wait,
             voice=_voice(env.get("NOVA_VOICE", "").strip() or cls.voice),
-            stt=env.get("NOVA_STT", "").strip() or cls.stt,
+            stt=_stt(env.get("NOVA_STT", "").strip() or cls.stt),
         )
 
 
@@ -151,7 +150,14 @@ def _voice(value: str) -> str:
     model = value.partition(":")[0]
     provider, _, name = model.partition("/")
     if not provider or not name:
-        raise ConfigError(f'NOVA_VOICE must look like "provider/model:voice", got {value!r}')
+        raise ConfigError('NOVA_VOICE must look like "provider/model:voice"')
+    return value
+
+
+def _stt(value: str) -> str:
+    provider, _, model = value.partition("/")
+    if not provider or not model or ":" in value:
+        raise ConfigError('NOVA_STT must look like "provider/model"')
     return value
 
 
@@ -164,7 +170,7 @@ def _seconds(env: Mapping[str, str], name: str, default: float) -> float:
     except ValueError:
         value = math.nan
     if not math.isfinite(value) or value <= 0:
-        raise ConfigError(f"{name} must be a positive number of seconds, got {raw!r}")
+        raise ConfigError(f"{name} must be a positive number of seconds")
     return value
 
 

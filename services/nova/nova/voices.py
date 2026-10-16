@@ -21,8 +21,9 @@ import aiohttp
 from livekit.agents import inference
 
 from nova import script
-from nova.config import Settings, load_settings
+from nova.config import DEFAULT_VOICE, Settings, load_settings
 from nova.fixtures import MAYA, REHEARSAL_PAIR
+from nova.measure import ms
 from nova.rehearsal import TTS_PER_CHARACTER, price
 
 SAMPLES = Path(__file__).parents[1] / "voice-samples"
@@ -44,8 +45,7 @@ class Candidate:
 # From LiveKit's suggested voices, matched to the brand book's description.
 CANDIDATES = (
     Candidate(
-        "cartesia/sonic-3",
-        "f31cc6a7-c1e8-4764-980c-60a361443dd1",
+        *DEFAULT_VOICE.split(":", 1),  # the default voice (nova/config.py), written once
         "Cartesia Sonic 3, Robyn: neutral, mature (Australian English)",
     ),
     Candidate(
@@ -122,7 +122,7 @@ async def record(
                     sample_rate = frame.sample_rate
                     speech += frame.samples_per_channel / frame.sample_rate
                     chunks.append(bytes(frame.data))
-            first_audio.append(round(((first or asked) - asked) * 1000))
+            first_audio.append(ms((first or asked) - asked))
             chunks.append(b"\x00\x00" * int(sample_rate * GAP_SECONDS))
     except Exception as error:  # a voice that fails is reported, not fatal
         return Sample(candidate, first_audio, speech, 0, None, type(error).__name__)

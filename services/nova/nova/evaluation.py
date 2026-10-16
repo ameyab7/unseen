@@ -71,6 +71,7 @@ from nova.fixtures import (
     THEO,
 )
 from nova.lines import CANDIDATES, ErrorKind, LineWriter, Source
+from nova.measure import ms_since
 from nova.models import LineModel, build_classifier, build_model, warm_up
 from nova.on_air import OnAirCues, OnAirListener
 from nova.rehearsal import ms_text
@@ -494,7 +495,7 @@ async def run_case(
     classifier: LineModel | None = None,
     live: float,
     prep: float,
-    distress: float = 2.0,
+    distress: float = Settings.distress_timeout,
     grace: float = Settings.utterance_grace,
     max_wait: float = Settings.utterance_max_wait,
 ) -> CaseResult:
@@ -582,7 +583,7 @@ async def run_cases(
     classifier: LineModel | None = None,
     live_timeout: float,
     prep_timeout: float,
-    distress_timeout: float = 2.0,
+    distress_timeout: float = Settings.distress_timeout,
     grace: float = Settings.utterance_grace,
     max_wait: float = Settings.utterance_max_wait,
     repeat: int = 1,
@@ -1087,7 +1088,7 @@ async def run_night(
         )
         started = time.monotonic()
         await writer.prepare()
-        prep_ms.append(round((time.monotonic() - started) * 1000))
+        prep_ms.append(ms_since(started))
         exhausted += writer.budget_exhausted
         names = [card.first_name for p in (pair, next_pair) if p for card in (p.left, p.right)]
         for say in date_cues(pair, next_pair, n):
