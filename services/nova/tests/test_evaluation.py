@@ -6,18 +6,27 @@ import re
 
 import pytest
 
-from nova.cues import Moment
+from nova.cards import Seat
+from nova.cues import Moment, Say
 from nova.distress import is_unmistakable
 from nova.distress_dev import DEV_SET
 from nova.distress_set import DISTRESS_SET
 from nova.evaluation import (
     CASES,
     DEV,
+    EITHER_OR,
+    FINISH_THE_SENTENCE,
+    ONE_WORD,
     CaseResult,
     FakeClock,
+    Night,
+    NightLine,
     Repetition,
     distress_summary,
     fallback_rates,
+    form_problems,
+    main,
+    night_misses,
     night_summary,
     rate_text,
     render,
@@ -30,8 +39,8 @@ from nova.evaluation import (
     spoken,
     wilson,
 )
-from nova.fixtures import NIGHT
-from nova.lines import LIVE_REACTIONS, SET_PIECES
+from nova.fixtures import NIGHT, REHEARSAL_PAIR
+from nova.lines import LIVE_REACTIONS, SET_PIECES, Source
 
 EXPECTED = {
     "intro from a blind card",
@@ -74,6 +83,14 @@ def well_behaved(prompt: str) -> str:
         return "Up next, Sam and Priya."
     if "Talk to the room" in prompt:
         return "Room, stay with us. You've been lovely company tonight."
+    if "first prompt" in prompt:
+        return "Maya, tell us about your worst haircut."
+    if "two short options" in prompt:
+        return "Quick one: mountains or sea?"
+    if "finish, ending in an ellipsis" in prompt:
+        return "The best part of a Sunday is..."
+    if "answer in one word" in prompt:
+        return "This week in one word?"
     return "I'm the AI host, Maya and Theo, so over to you two."
 
 
@@ -481,3 +498,110 @@ def test_the_dev_and_held_out_sets_are_reported_apart():
     assert render_distress([], model_name="m", set_name=DEV).startswith(
         "Nova distress check, dev set (nova/distress_dev.py)"
     )
+
+
+# --- The evaluation as a gate -----------------------------------------------------------------
+
+
+def a_night(*lines: NightLine) -> Night:
+    return Night(lines, prep_ms=(1000,))
+
+
+def test_a_night_that_repeats_itself_fails_its_targets():
+    same = [
+        NightLine(d, Moment.SILENCE, "[name], [name], tea or coffee?", Source.MODEL)
+        for d in (1, 2, 3)
+    ]
+    night = a_night(*same)
+    misses = night_misses(night)
+    assert any("near-duplicates 2 of 3" in miss for miss in misses)
+    assert any("same opening 2 of 3" in miss for miss in misses)
+    report = render_night(night, model_name="fake")
+    assert "fallbacks at most 25%: FAILED" in report
+
+
+def test_a_night_with_too_many_fallbacks_fails():
+    lines = [NightLine(1, Moment.OUTRO, f"Line {n}.", Source.FALLBACK) for n in range(3)]
+    lines.append(NightLine(1, Moment.OUTRO, "Thanks, everyone, a lovely date.", Source.PREPARED))
+    assert any("fallbacks 3 of 4" in miss for miss in night_misses(a_night(*lines)))
+
+
+def test_a_varied_night_passes():
+    lines = [
+        NightLine(1, Moment.SILENCE, "[name], [name], tea or coffee?", Source.MODEL),
+        NightLine(
+            2, Moment.SILENCE, "What's the best meal you've had, [name] and [name]?", Source.MODEL
+        ),
+    ]
+    assert night_misses(a_night(*lines)) == []
+
+
+@pytest.mark.parametrize(
+    "flags", [["--night", "--distress"], ["--dev", "--conduct"], ["--night", "--dev"]]
+)
+def test_one_run_at_a_time(flags):
+    with pytest.raises(SystemExit) as exit_:
+        main(flags)
+    assert exit_.value.code == 2
+
+
+@pytest.mark.parametrize(
+    ("form", "text", "problem"),
+    [
+        (EITHER_OR, "Quick one: sunrise, sunset?", "not an either/or"),
+        (FINISH_THE_SENTENCE, "My perfect Sunday starts with coffee.", "no ellipsis to finish"),
+        (ONE_WORD, "Describe your week in one word.", "not a question"),
+    ],
+)
+def test_a_lightning_question_in_the_wrong_form_is_caught(form, text, problem):
+    say = Say(Moment.LIGHTNING_QUESTION, number=1, of=3)
+    assert form_problems(say, text, pair=REHEARSAL_PAIR, form=form) == [problem]
+
+
+def test_a_lightning_question_in_the_right_form_passes():
+    say = Say(Moment.LIGHTNING_QUESTION, number=1, of=3)
+    assert (
+        form_problems(say, "Quick one: sunrise or sunset?", pair=REHEARSAL_PAIR, form=EITHER_OR)
+        == []
+    )
+    assert (
+        form_problems(
+            say, "The best Sunday starts with…", pair=REHEARSAL_PAIR, form=FINISH_THE_SENTENCE
+        )
+        == []
+    )
+
+
+def test_a_first_question_must_use_the_daters_own_prompt():
+    say = Say(Moment.FIRST_QUESTION, about=Seat.LEFT, detail="Ask me about my worst haircut.")
+    assert form_problems(say, "Maya, what's your worst haircut?", pair=REHEARSAL_PAIR) == []
+    assert form_problems(say, "Maya, what did you have for lunch?", pair=REHEARSAL_PAIR) == [
+        "not built on the dater's prompt"
+    ]
+
+
+def test_an_outro_names_both_daters():
+    say = Say(Moment.OUTRO)
+    assert form_problems(say, "Thank you, Maya.", pair=REHEARSAL_PAIR) == [
+        "doesn't name both daters"
+    ]
+
+
+def test_the_night_report_estimates_airtime_and_live_latency():
+    lines = [NightLine(1, Moment.SILENCE, "word " * 150, Source.MODEL, ms=400)]
+    report = render_night(a_night(*lines), model_name="fake")
+    assert "Nova's airtime, estimated at 150 words a minute: 10% of a ten-minute date" in report
+    assert "Live lines: median 400 ms on date 1" in report
+
+
+def test_openings_are_compared_without_the_daters_masked_names():
+    """Every silence prompt opens with both daters' names, as the rules ask."""
+    lines = [
+        NightLine(1, Moment.SILENCE, "[name], [name], tea or coffee tonight?", Source.MODEL),
+        NightLine(
+            2, Moment.SILENCE, "[name], [name], what's the best meal you've had?", Source.MODEL
+        ),
+        NightLine(3, Moment.SILENCE, "[name], [name], tea or coffee, honestly?", Source.MODEL),
+    ]
+    _, repeats = night_summary(a_night(*lines))
+    assert repeats[Moment.SILENCE].same_opening == 1, "only the third opens like the first"

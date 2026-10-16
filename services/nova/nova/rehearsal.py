@@ -184,6 +184,7 @@ class Rehearsal:
         self.spoken: list[Spoken] = []
         self.alerts = 0
         self.characters_spoken = 0
+        self.nova_seconds = 0.0  # how long Nova's voice played, measured
         self.prep_ms = 0
         self.warm_up_ms: int | None = None
 
@@ -402,6 +403,8 @@ class Rehearsal:
                 return
             try:
                 started = await self.speaker.speak(line.text)
+                if started is not None:
+                    self.nova_seconds += max(0.0, self._clock() - started)
             except Exception:  # the voice failed: this line never played, the date goes on
                 started = None
                 self._events.emit(Event.VOICE_ERROR, moment=line.moment)
@@ -542,7 +545,7 @@ def render_report(rehearsal: Rehearsal) -> str:
             f"{ms_text(s.from_free_ms):>11}{ms_text(s.from_sentence_end_ms):>19}"
             f"{ms_text(s.grace_ms):>9}{ms_text(s.model_ms or None):>8}"
         )
-    lines += ["", _utterance_row(r)]
+    lines += ["", _utterance_row(r), _airtime_row(r)]
     lines += [
         "",
         "Targets, as set (from the cue; replies from the end of the dater's sentence, grace "
@@ -591,6 +594,16 @@ def _utterance_row(r: Rehearsal) -> str:
     return (
         f"Utterances: {len(r.utterances)} ({instant} by the instant layer), "
         f"{_per_minute(len(r.utterances), r.listened_seconds)} a minute{waited} {settings}"
+    )
+
+
+def _airtime_row(r: Rehearsal) -> str:
+    """The brand book keeps Nova's share of the date well under a fifth."""
+    total = r.listened_seconds
+    share = f"{r.nova_seconds / total:.0%}" if total > 0 else "-"
+    return (
+        f"Nova's airtime: {r.nova_seconds:.0f} s of a {total:.0f} s date, {share} "
+        "(brand book: well under a fifth)"
     )
 
 

@@ -20,6 +20,9 @@ from nova.cues import Moment
 
 NAME = "[name]"  # stands in for a dater's first name
 SHOWN = 24  # lines per moment shown to the model: about three a date for eight dates
+# Live moments (a silence, talk to the room) show fewer, so a late-night prompt stays small
+# and quick: the silence prompt grew from 777 characters on date 1 to 2,437 on date 8.
+SHOWN_LIVE = 8
 
 
 @dataclass(eq=False)
@@ -71,9 +74,9 @@ class Tonight:
         for moment, kept in self._lines.items():
             self._lines[moment] = [line for line in kept if id(line) not in unspoken]
 
-    def said(self, moment: Moment) -> list[str]:
+    def said(self, moment: Moment, *, limit: int = SHOWN) -> list[str]:
         """The most recent lines for this moment, oldest first, names masked."""
-        return [line.text for line in self._lines.get(moment, [])[-SHOWN:]]
+        return [line.text for line in self._lines.get(moment, [])[-limit:]]
 
     def closeness(self, moment: Moment, text: str, *, names: Iterable[str]) -> float:
         """How close a line is to the most similar line said tonight for this moment."""

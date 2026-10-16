@@ -31,7 +31,7 @@ from nova.distress import has_warning, is_unmistakable
 from nova.events import Event, EventLog
 from nova.guardrails import Violation, card_words, check, clean, question_is_off_limits
 from nova.models import LineModel, ModelRefused, warm_up
-from nova.tonight import Remembered, Tonight
+from nova.tonight import SHOWN, SHOWN_LIVE, Remembered, Tonight
 
 SET_PIECES = frozenset(
     {
@@ -265,6 +265,10 @@ class LineWriter:
         attempt = await self._attempt(say, self._prompt_for(say), self._live_timeout)
         return self._settle(say, attempt, Source.MODEL)
 
+    def lightning_form(self, number: int) -> str:
+        """The format this date's lightning question number asks for (prompts.LIGHTNING_FORMS)."""
+        return self._lightning_forms[(number - 1) % len(self._lightning_forms)]
+
     # --- After the date -------------------------------------------------------------------
 
     def finish(self) -> None:
@@ -427,7 +431,8 @@ class LineWriter:
         return min(options, key=lambda o: self._tonight.closeness(say.moment, o, names=self._names))
 
     def _prompt_for(self, say: Say) -> str:
-        pair, tonight = self._pair, self._tonight.said(say.moment)
+        limit = SHOWN_LIVE if say.moment in LIVE_REACTIONS else SHOWN
+        pair, tonight = self._pair, self._tonight.said(say.moment, limit=limit)
         match say.moment:
             case Moment.DOORS_INTRO:
                 return prompts.doors_intro(pair, tonight=tonight)
@@ -435,7 +440,7 @@ class LineWriter:
                 return prompts.first_question(pair, _seat(say), tonight=tonight)
             case Moment.LIGHTNING_QUESTION:
                 n, total = _place(say)
-                form = self._lightning_forms[(n - 1) % len(self._lightning_forms)]
+                form = self.lightning_form(n)
                 return prompts.lightning_question(pair, n, total=total, form=form, tonight=tonight)
             case Moment.LAST_WORD:
                 return prompts.last_word(pair, _seat(say), tonight=tonight)

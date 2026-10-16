@@ -232,7 +232,19 @@ Date: 2026-10-13. Status: accepted.
   different pairs through the real line writer and tonight's memory, then reports, per
   moment, repetition across the whole night among every line the room hears, fallbacks
   included and names masked. The per-case run repeats identical inputs, so it overstates
-  repetition for lines that depend on the pair.
+  repetition for lines that depend on the pair. **`--night` is a gate**: it exits non-zero
+  when a moment misses a target across the night (near-duplicates at most 10%, the same
+  three-word opening at most 20%, compared without the masked names every line to both
+  daters opens with, and fallbacks at most 25%; named constants, printed in the report).
+  The cases and the night also check the form of what the model writes: an either/or
+  lightning question has " or ", a finish-the-sentence one ends in an ellipsis, a one-word
+  one ends with a question mark; a first question uses a content word from the dater's own
+  first prompt; an outro names both daters. The night estimates Nova's share of airtime at
+  150 words a minute (the brand book keeps it well under a fifth; the rehearsal report
+  measures it from the voice) and reports live-line latency on the first and last date.
+  Live moments (a silence, talk to the room) show the model at most 8 of tonight's earlier
+  lines (`SHOWN_LIVE`), so a late-night prompt stays small; set pieces still see 24.
+  `--night`, `--distress`, `--dev` and `--conduct` are one at a time.
 
 ## How each guardrail checks, and what it can't catch
 
