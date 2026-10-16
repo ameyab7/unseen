@@ -75,6 +75,16 @@ CONDUCT_DETAIL = (
 )
 
 
+# docs/sign-off/2026-10-reply-fallback.md: a neutral reply fallback. Today's ("I'm the AI
+# host, so I'll stay out of that one.") sounds as if the dater asked something off limits
+# when the model only timed out.
+REPLY_FALLBACK = (
+    "Good question. I'll hand that one back to you two.",
+    "I'll let you two take that one. Over to you.",
+    "That one's yours to answer, not mine. Back to you both.",
+)
+
+
 def both(templates: tuple[str, ...], pair: Pair) -> tuple[str, ...]:
     """The templates with this pair's first names in."""
     left, right = pair.left.first_name, pair.right.first_name

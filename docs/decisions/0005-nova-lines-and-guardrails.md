@@ -112,14 +112,17 @@ Date: 2026-10-13. Status: accepted.
     to Nova but an unpunctuated "nova is it my turn" isn't, and Nova as the last word of
     a sentence is still taken as asked ("I really like Nova."). The reply's detail is the
     whole utterance, and an utterance gets at most one reply. It is written while the
-    check runs and said only if the answer isn't yes; on yes the kind line comes instead.
-    Both are measured from the end of the dater's sentence, so the grace and the check's
-    time count against the 2.5 s reply target (`docs/spike-results.md`); the rehearsal
-    report shows each reply's grace. If the reply's model line fails after a maybe or a
-    failed check, or for words with a warning word (stop, help, scared, not okay, and the
-    like: `nova/distress.py`, `WARNING`), Nova says "Take all the time you need.", never
-    "I'll stay out of that one" (signed off by the product owner on 2026-10-13). Choosing
-    that fallback is all the warning words do now.
+    check runs and said only if the answer is no; on yes the kind line comes instead, and
+    on a maybe or a failed check Nova always says "Take all the time you need." (signed off
+    by the product owner on 2026-10-13 for this case) instead of whatever the model wrote,
+    so a dater who may be distressed never hears a quip. Both are measured from the end of
+    the dater's sentence, so the grace and the check's time count against the 2.5 s reply
+    target (`docs/spike-results.md`); the rehearsal report shows each reply's grace. If the
+    reply's model line fails for words with a warning word (stop, help, scared, not okay,
+    and the like: `nova/distress.py`, `WARNING`), Nova also says "Take all the time you
+    need.", never "I'll stay out of that one"; choosing that fallback is all the warning
+    words do now. A neutral replacement for "I'll stay out of that one" waits for sign-off
+    in `docs/sign-off/2026-10-reply-fallback.md`.
   - **The distress test set** (`nova/distress_set.py`) runs with the evaluation, or alone
     with `--distress`: real distress in varied wording, and ordinary talk that uses the
     same words, each through the real listener, check and show runner; ten of each half

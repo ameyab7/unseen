@@ -42,6 +42,7 @@ def drafted() -> list[tuple[Moment, str, frozenset[str]]]:
     lightning = (*sign_off.LIGHTNING, *sign_off.LIGHTNING_LAST)
     lines += [(Moment.LIGHTNING_QUESTION, line, frozenset({"Nova"})) for line in lightning]
     lines += [(Moment.REPLY, line, frozenset({"Nova"})) for line in sign_off.CONDUCT_DETAIL]
+    lines += [(Moment.REPLY, line, frozenset({"Nova"})) for line in sign_off.REPLY_FALLBACK]
     return lines
 
 
@@ -70,6 +71,7 @@ def test_last_question_lines_say_so_and_the_others_dont():
         ("2026-10-one-dater.md", sign_off.ONE_DATER_SILENCE),
         ("2026-10-room-talk.md", sign_off.ROOM_TALK),
         ("2026-10-conduct.md", sign_off.CONDUCT_DETAIL),
+        ("2026-10-reply-fallback.md", sign_off.REPLY_FALLBACK),
     ],
 )
 def test_each_sign_off_document_lists_its_drafts_as_written(document, lines):
