@@ -14,7 +14,7 @@ import unicodedata
 from collections.abc import Mapping, Sequence
 
 from nova.cards import BlindCard, Pair, Seat
-from nova.cues import RoomFacts, Segment
+from nova.cues import RoomFacts, Situation
 
 SYSTEM_PROMPT = """\
 You are Nova, the AI host of Unseen, a live, audio-only dating show. Two strangers talk on \
@@ -29,7 +29,8 @@ Always:
 - Say only the line your task asks for, in one to three short spoken sentences unless the \
 task says otherwise.
 - Use the daters' first names exactly as they are written in the data, and their pronouns \
-as written.
+as written. When a dater's pronouns are null, use their first name instead, never a guessed \
+he, she or they.
 - If anyone asks, say plainly that you are an AI.
 - End every question with a question mark.
 
@@ -95,13 +96,13 @@ def _card(card: BlindCard) -> dict[str, object]:
     return {
         "first_name": card.first_name,
         "age": card.age,
-        "pronouns": card.pronouns,
+        "pronouns": card.pronouns or None,  # null: none given, so Nova uses the first name
         "blind_card": [{"prompt": p.question, "answer": p.answer} for p in card.prompts],
     }
 
 
 def _name(card: BlindCard) -> dict[str, object]:
-    return {"first_name": card.first_name, "pronouns": card.pronouns}
+    return {"first_name": card.first_name, "pronouns": card.pronouns or None}
 
 
 def _seats(pair: Pair, card=_card) -> dict[str, object]:
@@ -142,9 +143,12 @@ LIGHTNING_FORMS = (
 )
 
 
-def lightning_question(pair: Pair, n: int, *, form: str, tonight: Sequence[str] = ()) -> str:
+def lightning_question(
+    pair: Pair, n: int, *, total: int, form: str, tonight: Sequence[str] = ()
+) -> str:
     return _task(
-        f"the lightning round, question {n} of 3: something quick and light for both daters. "
+        f"the lightning round, question {n} of {total}: something quick and light for both "
+        "daters. "
         f"{form} Don't open with their names. One short sentence.",
         _seats(pair, _name),
         tonight,
@@ -203,6 +207,19 @@ def silence(pair: Pair, *, tonight: Sequence[str] = ()) -> str:
     )
 
 
+def silence_to_one(pair: Pair, seat: Seat, *, tonight: Sequence[str] = ()) -> str:
+    """A long silence while the other dater is away (the moderator resumed without them):
+    their card isn't in the data, so their name can't come up."""
+    return _task(
+        "there's been a long silence in free talk, and one of the daters is off air for now. "
+        f"Give the dater in the {seat} seat one open, light question to talk about, addressed "
+        "only to them by first name. Don't mention the other dater or why they're away. One "
+        "or two sentences.",
+        {"dater": _card(pair.card(seat))},
+        tonight,
+    )
+
+
 def from_the_room(pair: Pair, question: str, *, tonight: Sequence[str] = ()) -> str:
     return _task(
         "read this approved audience question to the daters. Keep its meaning and phrase it "
@@ -221,16 +238,23 @@ ROOM_TALK_OPENINGS = (
 
 
 def room_talk(facts: RoomFacts, *, opening: str, tonight: Sequence[str] = ()) -> str:
-    if facts.segment is Segment.TIME:
-        situation = (
-            "the daters are deciding privately, off air. Talk to the room for one or two "
-            "sentences while they decide. Don't guess or hint at what they'll choose."
-        )
-    else:
-        situation = (
-            "one of the daters is taking a short moment off air. Talk to the room for one or "
-            "two sentences. Don't say who stepped away or why."
-        )
+    match facts.situation:
+        case Situation.DECIDING:
+            situation = (
+                "the daters are deciding privately, off air. Talk to the room for one or two "
+                "sentences while they decide. Don't guess or hint at what they'll choose."
+            )
+        case Situation.PAUSE:
+            situation = (
+                "one of the daters is taking a short moment off air. Talk to the room for one "
+                "or two sentences. Don't say who stepped away or why."
+            )
+        case Situation.ENDED_EARLY:
+            situation = (
+                "this date has ended early. Thank the room for listening, in one or two "
+                "sentences. Never say who left, why, or that anyone left, and say nothing "
+                "about the daters."
+            )
     return _task(
         f"{situation} Work only from the facts about the show in the data; don't describe a "
         "place, lights or music. Never mention the outcome, spending or anyone's looks. "

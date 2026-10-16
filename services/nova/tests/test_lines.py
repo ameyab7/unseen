@@ -8,10 +8,10 @@ import time
 
 import pytest
 
-from nova import prompts, script
+from nova import prompts, running_order, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
-from nova.cues import Moment, RoomFacts, Say, Segment
-from nova.fixtures import EVERYDAY_PAIR, MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
+from nova.cues import Moment, RoomFacts, Say, Segment, Situation
+from nova.fixtures import EVERYDAY_PAIR, MAYA, NEXT_PAIR, NO_PRONOUNS_PAIR, REHEARSAL_PAIR, THEO
 from nova.guardrails import Violation, check
 from nova.lines import ErrorKind, LineWriter, Source, fallback_lines, names_for, rules_for
 from nova.models import ModelRefused
@@ -60,17 +60,17 @@ def data(prompt: str) -> str:
     return prompt.split("<data>")[1]
 
 
-PAUSE_TALK = Say(Moment.ROOM_TALK, room=RoomFacts(Segment.FREE_TALK, False, 0))
-DECIDING_TALK = Say(Moment.ROOM_TALK, room=RoomFacts(Segment.TIME, True, 1))
+PAUSE_TALK = Say(Moment.ROOM_TALK, room=RoomFacts(Segment.FREE_TALK, False, 0, Situation.PAUSE))
+DECIDING_TALK = Say(Moment.ROOM_TALK, room=RoomFacts(Segment.TIME, True, 1, Situation.DECIDING))
 
 
 SET_PIECES = [
     Say(Moment.DOORS_INTRO),
     Say(Moment.FIRST_QUESTION, about=LEFT, detail=MAYA.prompts[0].text),
     Say(Moment.FIRST_QUESTION, about=RIGHT, detail=THEO.prompts[0].text),
-    Say(Moment.LIGHTNING_QUESTION, detail="1 of 3"),
-    Say(Moment.LIGHTNING_QUESTION, detail="2 of 3"),
-    Say(Moment.LIGHTNING_QUESTION, detail="3 of 3"),
+    Say(Moment.LIGHTNING_QUESTION, number=1, of=3),
+    Say(Moment.LIGHTNING_QUESTION, number=2, of=3),
+    Say(Moment.LIGHTNING_QUESTION, number=3, of=3),
     Say(Moment.LAST_WORD, about=LEFT),
     Say(Moment.LAST_WORD, about=RIGHT),
     Say(Moment.OUTRO),
@@ -265,7 +265,7 @@ async def test_a_lightning_question_never_opens_with_both_daters_names():
     model = FakeModel("Maya, Theo, mountains or sea?")
     w = writer(model)
     await w.prepare()
-    line = await w.line_for(Say(Moment.LIGHTNING_QUESTION, detail="1 of 3"))
+    line = await w.line_for(Say(Moment.LIGHTNING_QUESTION, number=1, of=3))
     assert line.source is Source.FALLBACK
     assert Violation.OPENS_WITH_NAMES in line.violations
 
@@ -360,6 +360,31 @@ async def test_a_line_that_breaks_a_guardrail_is_never_spoken():
     assert line.text == script.ROOM_TALK_FALLBACK
 
 
+# --- One dater away (the moderator resumed without them) -----------------------------------
+
+ONE_DATER_SILENCE = Say(Moment.SILENCE, about=RIGHT)  # Maya is away
+
+
+async def test_a_silence_while_one_dater_is_away_is_for_the_one_whos_here():
+    model = FakeModel("Theo, what's a small thing that made you smile this week?")
+    line = await writer(model).line_for(ONE_DATER_SILENCE)
+    assert line.source is Source.MODEL and line.text.startswith("Theo")
+    prompt = model.prompts[0]
+    assert "one of the daters is off air" in instructions(prompt)
+    assert "Maya" not in prompt, "the dater who's away isn't even in the data"
+
+
+async def test_with_one_dater_away_nova_says_nothing_rather_than_a_two_dater_fallback():
+    """Every silence fallback names both daters; one-dater fallbacks wait for sign-off."""
+    line = await writer(FakeModel(error=RuntimeError("down"))).line_for(ONE_DATER_SILENCE)
+    assert (line.text, line.source) == ("", Source.FALLBACK)
+
+
+async def test_a_line_that_names_the_dater_whos_away_is_never_said():
+    line = await writer(FakeModel("Theo, what would Maya say?")).line_for(ONE_DATER_SILENCE)
+    assert line.text == "" and Violation.UNKNOWN_NAME in line.violations
+
+
 async def test_silence_fallbacks_take_turns():
     w = writer(FakeModel(error=RuntimeError("down")))
     texts = [(await w.line_for(Say(Moment.SILENCE))).text for _ in range(4)]
@@ -398,19 +423,29 @@ async def test_lightning_fallbacks_take_turns_across_the_whole_night():
     w = writer(FakeModel(error=RuntimeError("down")), tonight=tonight)
     await w.prepare()
     texts = [
-        (await w.line_for(Say(Moment.LIGHTNING_QUESTION, detail=f"{n} of 3"))).text
-        for n in (1, 2, 3)
+        (await w.line_for(Say(Moment.LIGHTNING_QUESTION, number=n, of=3))).text for n in (1, 2, 3)
     ]
     assert texts[0] == script.LIGHTNING_FALLBACKS[1], "not the one an earlier date heard"
     assert texts[2] == script.LIGHTNING_FALLBACKS[2], '"Last quick one" only ever comes last'
     assert not any(text.startswith("Last") for text in texts[:2])
 
 
+async def test_the_number_of_lightning_questions_lives_in_the_running_order(monkeypatch):
+    """With "1 of 3" as a string, a fourth question silently lost its prepared line."""
+    monkeypatch.setattr(running_order, "LIGHTNING_QUESTIONS", 4)
+    w = writer(FakeModel(error=RuntimeError("down")))
+    await w.prepare()
+    lines = [await w.line_for(running_order.lightning_question(n)) for n in (1, 2, 3, 4)]
+    assert all(line.error is ErrorKind.ERROR for line in lines), "all four were prepared"
+    assert lines[3].text == script.LIGHTNING_FALLBACKS[2], '"Last quick one" comes fourth'
+    assert not any(line.text.startswith("Last") for line in lines[:3])
+
+
 async def test_a_lightning_question_is_one_sentence():
     model = FakeModel("Time for the lightning round. Mountains or sea?")
     w = writer(model)
     await w.prepare()
-    line = await w.line_for(Say(Moment.LIGHTNING_QUESTION, detail="1 of 3"))
+    line = await w.line_for(Say(Moment.LIGHTNING_QUESTION, number=1, of=3))
     assert line.source is Source.FALLBACK and Violation.TOO_LONG in line.violations
 
 
@@ -453,6 +488,26 @@ async def test_room_talk_is_told_its_earlier_lines_so_it_opens_differently():
     await w.line_for(PAUSE_TALK)
     await w.line_for(DECIDING_TALK)
     assert "Room, stay with us while we pause." in model.prompts[-1].split("<data>")[1]
+
+
+def hold_line(n: int) -> Say:
+    facts = RoomFacts(Segment.FREE_TALK, False, 0, Situation.PAUSE)
+    return Say(Moment.ROOM_TALK, room=facts, number=n, of=3)
+
+
+async def test_a_hold_never_hears_the_same_fallback_twice():
+    w = writer(FakeModel(error=RuntimeError("down")))
+    lines = [(await w.line_for(hold_line(n))).text for n in (1, 2, 3)]
+    assert lines == [script.ROOM_TALK_FALLBACK, "", ""], "then Nova says nothing"
+    again = await w.line_for(hold_line(1))
+    assert again.text == script.ROOM_TALK_FALLBACK, "a new hold may hear it once"
+
+
+async def test_a_model_line_in_a_hold_leaves_the_fallback_for_later():
+    lines = iter(["Room, you've been great company tonight.", ""])
+    w = writer(FakeModel(lambda prompt: next(lines)))
+    assert (await w.line_for(hold_line(1))).source is Source.MODEL
+    assert (await w.line_for(hold_line(2))).text == script.ROOM_TALK_FALLBACK
 
 
 async def test_room_talk_needs_the_show_facts():
@@ -590,6 +645,8 @@ async def test_a_framed_question_that_breaks_a_guardrail_gets_todays_fallback(mo
         *((*line, REHEARSAL_PAIR) for line in fallback_lines(REHEARSAL_PAIR, NEXT_PAIR)),
         # Daters called Will and Hope: fallbacks use those words too ("will", "hope").
         *((*line, EVERYDAY_PAIR) for line in fallback_lines(EVERYDAY_PAIR, NEXT_PAIR)),
+        # Daters who gave no pronouns: no fallback needs one.
+        *((*line, NO_PRONOUNS_PAIR) for line in fallback_lines(NO_PRONOUNS_PAIR, NEXT_PAIR)),
     ],
 )
 def test_every_fallback_line_passes_the_guardrails(moment, text, pair):

@@ -571,6 +571,24 @@ async def test_an_approved_question_the_screen_catches_is_never_spoken_or_declin
     assert "question_skipped reason=looks" in caplog.text
 
 
+async def test_the_first_question_waits_for_the_dater_to_finish_their_sentence():
+    """The voice detector's events reach the show runner through the on-air listener."""
+    clock = Clock()
+    r = await started(clock)  # REHEARSAL: the first question is due at 13.5 s
+
+    def first_questions() -> list:
+        return [c for c in r.cues if getattr(c, "moment", None) is Moment.FIRST_QUESTION]
+
+    clock.now = 13.0
+    r.speech_started()
+    clock.now = 14.0
+    r.tick()
+    assert first_questions() == [], "Maya is mid-sentence"
+    clock.now = 15.0
+    r.speech_ended()
+    assert len(first_questions()) == 1
+
+
 # --- Chat drives the show ------------------------------------------------------------------
 
 

@@ -18,7 +18,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from nova import script
+from nova import running_order, script
 from nova.cards import Pair, Seat
 from nova.cues import (
     AlertModerator,
@@ -41,7 +41,9 @@ from nova.cues import (
     Segment,
     SegmentStarted,
     ShowVerdict,
+    Situation,
     Sound,
+    StopFallbackSegment,
     StopSpeaking,
 )
 from nova.decisions import DecisionDesk, Outcome
@@ -63,9 +65,18 @@ ON_AIR = frozenset(
 )
 # Segments where a long silence brings a prompt from Nova.
 SILENCE_RULE = frozenset({Segment.FREE_TALK, Segment.FROM_THE_ROOM})
+# Lines that go out at once even over a dater mid-sentence: safety, and the result.
+NEVER_HELD = frozenset(
+    {
+        Moment.NEED_A_MOMENT,  # the need-a-moment cover and the distress pause's kind line
+        Moment.BEAR_WITH_US,
+        Moment.WELCOME_BACK,
+        Moment.DATER_LEFT,
+        Moment.MODERATOR_END,
+        Moment.RESULT,
+    }
+)
 
-LIGHTNING_QUESTIONS = 3
-AUDIENCE_QUESTIONS = 2
 # Below this, a percentage says too much about too few people, so the verdict stays hidden.
 MIN_VOTES_FOR_VERDICT = 5
 
@@ -133,6 +144,13 @@ class ShowRunner:
         self._away: Seat | None = None  # the dater on a "need a moment"
         self._overdue = False  # not back in time: the moderator decides what happens next
         self._report_hold = False  # the pause is for a report: only the moderator lifts it
+        self._cover_lines = 0  # lines Nova has said to the room in this hold
+        self._segment_playing = False  # the fallback segment is covering this hold
+        # A dater the moderator resumed the show without: their turns are skipped, silence
+        # prompts go to the other dater, and if they come back, Nova welcomes them back. Not
+        # after a report: the reporter's date ends in the app.
+        self._absent: Seat | None = None
+        self._absent_reported = False
         self._pauses: dict[Seat, int] = dict.fromkeys(Seat, 0)
         self._poll_open = False
         self._meter_open = True
@@ -143,6 +161,9 @@ class ShowRunner:
         self._questions_asked = 0
         self._quiet_since = 0.0  # show time of the last word from a dater
         self._last_nudge: float | None = None
+        self._speaking: set[Seat] = set()  # daters the voice detector hears right now
+        self._waiting: list[Cue] = []  # a beat's lines and sounds, held while one speaks
+        self._waiting_until: float | None = None  # wall time they go out whatever happens
 
         self.segment: Segment | None = None
         self.end_reason: EndReason | None = None
@@ -166,7 +187,7 @@ class ShowRunner:
             (t.lightning, "lightning", None),
             *(
                 (t.lightning + n * t.lightning_gap, "lightning_question", n + 1)
-                for n in range(1, LIGHTNING_QUESTIONS)
+                for n in range(1, running_order.LIGHTNING_QUESTIONS)
             ),
             (t.last_word, "last_word", None),
             (t.last_word + t.second_last_word_after, "second_last_word", None),
@@ -188,12 +209,22 @@ class ShowRunner:
     # Daters, the moderator and the room can do these at any time, so none of them raises
     # before start() or after the date. Moderator alerts never depend on the show clock.
 
-    def speech(self, now: float, seat: Seat) -> list[Cue]:
-        """A dater spoke (voice activity), which resets the silence clock."""
+    def speech_started(self, now: float, seat: Seat) -> list[Cue]:
+        """The voice detector hears a dater start speaking. Until they stop, a beat's lines
+        and sounds wait (up to timing.talk_over_grace), and no silence prompt comes."""
         cues = self._due(now)
+        self._speaking.add(seat)
         if self._live and self._held_since is None:
             self._quiet_since = self._show_time(now)
         return cues
+
+    def speech_stopped(self, now: float, seat: Seat) -> list[Cue]:
+        """The voice detector hears a dater stop. The silence clock counts from now, and
+        once nobody is speaking, anything that waited goes out, in order."""
+        self._speaking.discard(seat)
+        if self._live and self._held_since is None:
+            self._quiet_since = self._show_time(now)
+        return self._due(now)
 
     def need_a_moment(self, now: float, seat: Seat) -> list[Cue]:
         """Nova covers without naming anyone, and the show clock holds until the same dater
@@ -207,11 +238,15 @@ class ShowRunner:
         return cues
 
     def back(self, now: float, seat: Seat) -> list[Cue]:
-        """The dater who paused is back: the only time Nova says "And we're back.". Not
-        after a report: the reporter's date ends in the app, and the moderator decides."""
+        """The dater who paused is back, during the pause or after the moderator resumed
+        without them: the only time Nova says "And we're back.". Not after a report: the
+        reporter's date ends in the app, and the moderator decides."""
         cues = self._due(now)
         if self._live and self._away is seat and not self._report_hold:
-            self._clear_pause(now)
+            cues += self._clear_pause(now)
+            cues.append(Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK))
+        elif self._live and self._absent is seat and not self._absent_reported:
+            self._absent = None
             cues.append(Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK))
         return cues
 
@@ -220,24 +255,34 @@ class ShowRunner:
         return self._due(now)
 
     def moderator_resume(self, now: float) -> list[Cue]:
-        """The show carries on without the dater who paused. Nova says nothing: nobody is back."""
+        """The show carries on without the dater who paused. Nova says nothing: nobody is
+        back. While they're away, their first-question prompt and last word are skipped (the
+        other dater's turn comes on time), and silence prompts go to the other dater only.
+        Their decision is unchanged: they can still decide in the app."""
         cues = self._due(now)
         if self._live and self._away is not None:
-            self._clear_pause(now)
+            absent, reported = self._away, self._report_hold
+            cues += self._clear_pause(now)
+            self._absent, self._absent_reported = absent, reported
         return cues
 
     def dater_left(self, now: float, seat: Seat) -> list[Cue]:
-        """Nova closes kindly, with no reason and no blame; the show moves to the next pair."""
+        """Nova closes kindly, with no reason and no blame, then one line thanking the room;
+        Next up follows after timing.next_up_after_leave, or the fallback segment if
+        there's no next pair."""
         cues = self._due(now)
         if not self._live:
             return cues
-        self._clear_pause(now)
+        segment = self.segment or Segment.FREE_TALK
+        cues += self._clear_pause(now)
         leaver, other = self._pair.card(seat), self._pair.card(seat.other)
         cues += [StopSpeaking(), Say(Moment.DATER_LEFT, text=script.dater_left(leaver, other))]
         cues += self._close_poll()
         cues += self._end_date(EndReason.DATER_LEFT, None)
+        facts = RoomFacts(segment, False, self._questions_asked, Situation.ENDED_EARLY)
+        cues.append(Say(Moment.ROOM_TALK, room=facts))
         self._beats.clear()
-        self._schedule(self._show_time(now) + self._timing.next_up_after_result, "next_up")
+        self._schedule(self._show_time(now) + self._timing.next_up_after_leave, "next_up", "left")
         return cues
 
     def moderator_end(self, now: float) -> list[Cue]:
@@ -247,7 +292,7 @@ class ShowRunner:
         cues = self._due(now)
         if self.finished or not self.started:
             return cues
-        self._clear_pause(now)
+        cues += self._clear_pause(now)
         cues.append(StopSpeaking())
         if self.end_reason is None:
             cues.append(Say(Moment.MODERATOR_END, text=script.MODERATOR_END))
@@ -266,7 +311,8 @@ class ShowRunner:
             return cues + self._close_meter()
         if self._live and not self._lightning_decided and not self._lightning_unlocked:
             self._lightning_unlocked = True
-            cues.append(Say(Moment.LIGHTNING_UNLOCKED, text=script.LIGHTNING_UNLOCKED))
+            unlocked: list[Cue] = [Say(Moment.LIGHTNING_UNLOCKED, text=script.LIGHTNING_UNLOCKED)]
+            cues += self._wait_for_speech(now, unlocked)
             cues += self._close_meter()
         return cues
 
@@ -349,9 +395,12 @@ class ShowRunner:
 
     def _pause(self, now: float, seat: Seat, line: str, *, repeatable: bool = True) -> list[Cue]:
         """Nova says the line and covers with talk to the room; the show clock holds until
-        the same dater is back. repeatable: counts towards the repeated-pause alert."""
+        the same dater is back. Anything still waiting for a dater to finish is dropped.
+        repeatable: counts towards the repeated-pause alert."""
         self._away, self._held_since, self._overdue = seat, now, False
-        cues: list[Cue] = [Say(Moment.NEED_A_MOMENT, text=line), self._room_talk()]
+        self._waiting, self._waiting_until = [], None
+        self._cover_lines = 1
+        cues: list[Cue] = [Say(Moment.NEED_A_MOMENT, text=line), self._cover_line()]
         if repeatable:
             self._pauses[seat] += 1
             if self._pauses[seat] > 1:
@@ -366,12 +415,19 @@ class ShowRunner:
             cues += [StopSpeaking(), *self._pause(now, seat, script.DISTRESS_PAUSE)]
         return cues
 
-    def _room_talk(self) -> Say:
+    def _room_talk(self, situation: Situation, **place: int) -> Say:
         """Nova talks to the room, working only from safe facts about the show."""
         if self.segment is None:
             raise RuntimeError("Nova only talks to the room during a segment")
-        facts = RoomFacts(self.segment, self._poll_open, self._questions_asked)
-        return Say(Moment.ROOM_TALK, room=facts)
+        facts = RoomFacts(self.segment, self._poll_open, self._questions_asked, situation)
+        return Say(Moment.ROOM_TALK, room=facts, **place)
+
+    def _cover_line(self) -> Say:
+        """One of the hold's lines to the room, numbered, so the line writer never says
+        the same fallback twice in one hold."""
+        return self._room_talk(
+            Situation.PAUSE, number=self._cover_lines, of=self._timing.cover_lines
+        )
 
     def _show_time(self, now: float) -> float:
         if self._started_at is None:
@@ -389,13 +445,10 @@ class ShowRunner:
     def _advance(self, now: float) -> list[Cue]:
         """Runs every beat and silence prompt due by now, in show-time order."""
         self._show_time(now)  # raises if not started
-        cues: list[Cue] = []
+        cues = self._done_waiting(now)
         while not self.finished:
             if self._held_since is not None:
-                # The show clock is stopped: the only thing that can happen is the alert.
-                due = self._held_since + self._timing.moment_alert_after
-                if not self._overdue and due <= now:
-                    cues += self._not_back_in_time()
+                cues += self._cover(now)  # the show clock is stopped: Nova covers
                 break
             shown = self._show_time(now)
             beat_at = self._beats[0].at if self._beats else math.inf
@@ -403,7 +456,7 @@ class ShowRunner:
             if min(beat_at, silence_at) > shown:
                 break
             if beat_at <= silence_at:
-                cues += self._run(heapq.heappop(self._beats))
+                cues += self._wait_for_speech(now, self._run(heapq.heappop(self._beats)))
             else:
                 cues += self._nudge(silence_at)
         return cues
@@ -425,9 +478,12 @@ class ShowRunner:
                     cues.append(Say(Moment.LIGHTNING_UNLOCKED, text=script.LIGHTNING_UNLOCKED))
                 return cues
             case "first_question":
-                return [*self._enter(Segment.FIRST_QUESTION, at), self._prompt(first)]
+                return [
+                    *self._enter(Segment.FIRST_QUESTION, at),
+                    *self._present(self._prompt(first)),
+                ]
             case "second_prompt":
-                return [self._prompt(second)]
+                return self._present(self._prompt(second))
             case "free_talk":
                 return self._enter(Segment.FREE_TALK, at)
             case "from_the_room":
@@ -444,22 +500,25 @@ class ShowRunner:
                 return [
                     *closed,
                     *self._enter(Segment.LIGHTNING_ROUND, at),
-                    self._lightning_question(1),
+                    running_order.lightning_question(1),
                 ]
             case "lightning_question":
                 if self.segment is not Segment.LIGHTNING_ROUND:
                     return []
-                return [self._lightning_question(int(str(beat.arg)))]
+                return [running_order.lightning_question(int(str(beat.arg)))]
             case "last_word":
-                return [*self._enter(Segment.LAST_WORD, at), Say(Moment.LAST_WORD, about=first)]
+                return [
+                    *self._enter(Segment.LAST_WORD, at),
+                    *self._present(running_order.last_word(first)),
+                ]
             case "second_last_word":
-                return [Say(Moment.LAST_WORD, about=second)]
+                return self._present(running_order.last_word(second))
             case "time":
                 return self._time(at)
             case "result":
                 return self._result(at)
             case "next_up":
-                return self._next_up(at)
+                return self._next_up(at, after_a_leave=beat.arg == "left")
         raise ValueError(f"Unknown beat {beat.action!r}")
 
     def _enter(self, segment: Segment, at: float) -> list[Cue]:
@@ -467,9 +526,12 @@ class ShowRunner:
         self._quiet_since = at
         return [SegmentStarted(segment)]
 
+    def _present(self, say: Say) -> list[Cue]:
+        """A dater's turn, unless they're away after the moderator resumed without them."""
+        return [] if say.about is not None and say.about is self._absent else [say]
+
     def _prompt(self, seat: Seat) -> Say:
-        card = self._pair.card(seat)
-        return Say(Moment.FIRST_QUESTION, about=seat, detail=card.prompts[0].text)
+        return running_order.first_question(self._pair, seat)
 
     def _audience_question(self, at: float) -> list[Cue]:
         """The next approved question the screen lets through. One it catches is skipped
@@ -477,7 +539,7 @@ class ShowRunner:
         something off limits: the console gets a code, and the next in the queue takes the
         slot."""
         cues: list[Cue] = []
-        while self._questions and self._questions_asked < AUDIENCE_QUESTIONS:
+        while self._questions and self._questions_asked < running_order.AUDIENCE_QUESTIONS:
             question = self._questions.popleft()
             reasons = screen_question(question)
             if reasons:
@@ -489,9 +551,6 @@ class ShowRunner:
             break
         return cues
 
-    def _lightning_question(self, n: int) -> Say:
-        return Say(Moment.LIGHTNING_QUESTION, detail=f"{n} of {LIGHTNING_QUESTIONS}")
-
     def _time(self, at: float) -> list[Cue]:
         self._desk.open_window()
         self._poll_open = True
@@ -501,7 +560,7 @@ class ShowRunner:
             DecisionWindowOpened(seconds=self._timing.decision_window),
             PollOpened(script.POLL_QUESTION),
             Say(Moment.TIME, text=script.time_line(self._pair)),
-            self._room_talk(),
+            self._room_talk(Situation.DECIDING),
         ]
 
     def _result(self, at: float) -> list[Cue]:
@@ -527,15 +586,43 @@ class ShowRunner:
         self._schedule(at + self._timing.next_up_after_result, "next_up")
         return cues
 
-    def _next_up(self, at: float) -> list[Cue]:
+    def _next_up(self, at: float, *, after_a_leave: bool = False) -> list[Cue]:
         cues: list[Cue] = []
         if self._next_pair is not None:
             cues += self._enter(Segment.NEXT_UP, at)
-            cues.append(Say(Moment.NEXT_UP, detail=self._next_pair.label))
+            cues.append(running_order.next_up(self._next_pair))
+        elif after_a_leave:
+            cues.append(PlayFallbackSegment())  # the date ended early, and nobody's next
         return cues + self._finish()
 
+    def _wait_for_speech(self, now: float, cues: list[Cue]) -> list[Cue]:
+        """A beat's lines and sounds wait while a dater is speaking (or behind others that
+        already wait, so they keep their order), for up to timing.talk_over_grace. State
+        changes go on time: segments, the decision window, the poll, the meter, the desk.
+        Safety lines and the result never wait (NEVER_HELD)."""
+        if not self._speaking and not self._waiting:
+            return cues
+        on_time: list[Cue] = []
+        for cue in cues:
+            if _waits_for_speech(cue):
+                if self._waiting_until is None:
+                    self._waiting_until = now + self._timing.talk_over_grace
+                self._waiting.append(cue)
+            else:
+                on_time.append(cue)
+        return on_time
+
+    def _done_waiting(self, now: float) -> list[Cue]:
+        """What waited goes out once nobody is speaking, or once the grace is over."""
+        if not self._waiting:
+            return []
+        if self._speaking and self._waiting_until is not None and now < self._waiting_until:
+            return []
+        cues, self._waiting, self._waiting_until = self._waiting, [], None
+        return cues
+
     def _silence_due(self) -> float:
-        if not self._live or self.segment not in SILENCE_RULE:
+        if not self._live or self.segment not in SILENCE_RULE or self._speaking:
             return math.inf
         due = self._quiet_since + self._timing.silence_after
         if self._last_nudge is not None:
@@ -543,9 +630,36 @@ class ShowRunner:
         return due
 
     def _nudge(self, at: float) -> list[Cue]:
-        """An open prompt to both daters: nobody is singled out for being quiet."""
+        """An open prompt to both daters: nobody is singled out for being quiet. With one
+        away after the moderator resumed without them, to the one who's here."""
         self._last_nudge = at
+        if self._absent is not None:
+            return [Say(Moment.SILENCE, about=self._absent.other)]
         return [Say(Moment.SILENCE)]
+
+    def _cover(self, now: float) -> list[Cue]:
+        """While the show is held: a line to the room every timing.cover_every seconds, up
+        to timing.cover_lines in all (the first came with the pause); the alert at
+        timing.moment_alert_after; and the fallback segment once the lines run out, or at
+        the alert, whichever is first."""
+        if self._held_since is None:
+            return []
+        t, held = self._timing, self._held_since
+        alert_at = held + t.moment_alert_after
+        cues: list[Cue] = []
+        while self._cover_lines < t.cover_lines:
+            due = held + self._cover_lines * t.cover_every
+            if due > now or due >= alert_at:
+                break
+            self._cover_lines += 1
+            cues.append(self._cover_line())
+        if not self._overdue and alert_at <= now:
+            cues += self._not_back_in_time()
+        segment_at = min(held + t.cover_lines * t.cover_every, alert_at)
+        if not self._segment_playing and segment_at <= now:
+            self._segment_playing = True
+            cues.append(PlayFallbackSegment())
+        return cues
 
     def _not_back_in_time(self) -> list[Cue]:
         """Said once. The show stays on hold until the moderator keeps waiting, resumes or
@@ -556,8 +670,10 @@ class ShowRunner:
             alert.append(AlertModerator(ModeratorAlert.PAUSE_NOT_BACK, self._away))
         return [*alert, Say(Moment.BEAR_WITH_US, text=script.BEAR_WITH_US)]
 
-    def _clear_pause(self, now: float) -> None:
-        """Ends any pause and restarts the show clock; silence counts from now."""
+    def _clear_pause(self, now: float) -> list[Cue]:
+        """Ends any pause and restarts the show clock; silence counts from now. Stops the
+        fallback segment first if it was covering, so it never plays under Nova."""
+        stop: list[Cue] = [StopFallbackSegment()] if self._segment_playing else []
         if self._held_since is not None:
             self._held += now - self._held_since
             self._held_since = None
@@ -565,6 +681,8 @@ class ShowRunner:
         self._away = None
         self._overdue = False
         self._report_hold = False
+        self._cover_lines, self._segment_playing = 0, False
+        return stop
 
     def _close_poll(self) -> list[Cue]:
         if not self._poll_open:
@@ -582,6 +700,7 @@ class ShowRunner:
         self.end_reason = reason
         self.outcome = outcome
         self.segment = None
+        self._waiting, self._waiting_until = [], None  # never said after the date ends
         return [*self._close_meter(), DateEnded(reason, outcome)]
 
     def _finish(self) -> list[Cue]:
@@ -589,4 +708,14 @@ class ShowRunner:
         self._beats.clear()
         self._held_since, self._away, self._overdue = None, None, False
         self._report_hold = False
+        self._absent, self._absent_reported = None, False
+        self._cover_lines, self._segment_playing = 0, False
         return [Finished()]
+
+
+def _waits_for_speech(cue: Cue) -> bool:
+    """Lines and sounds wait for a dater to finish; NEVER_HELD lines and everything else go
+    on time."""
+    if isinstance(cue, PlaySound | PlayVoiceIntro):
+        return True
+    return isinstance(cue, Say) and cue.moment not in NEVER_HELD

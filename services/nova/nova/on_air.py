@@ -164,15 +164,17 @@ class OnAirListener:
         self._close_due(now)
         dater = self._daters[seat]
         dater.speaking, dater.ended = True, None
-        self._send(self._runner.speech(now, seat))
+        self._send(self._runner.speech_started(now, seat))
 
     def speech_ended(self, seat: Seat) -> None:
         """The voice detector heard a dater stop: the end of their sentence, and the grace
-        starts once the last final is in."""
+        starts once the last final is in. The show runner hears it too: a beat's lines and
+        sounds that waited for them go out once nobody is speaking."""
         now = self._clock()
         self._close_due(now)
         dater = self._daters[seat]
         dater.speaking, dater.ended = False, now
+        self._send(self._runner.speech_stopped(now, seat))
 
     def hear(self, seat: Seat, text: str) -> None:
         """A final transcript of what a dater said, to Nova or not. It joins their open

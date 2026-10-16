@@ -24,7 +24,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
-from nova import prompts, script
+from nova import prompts, running_order, script
 from nova.cards import BlindCard, Pair, Seat
 from nova.config import Settings
 from nova.cues import Moment, RoomFacts, Say
@@ -180,10 +180,11 @@ class LineWriter:
         self._names = {pair.left.first_name, pair.right.first_name}
         if next_pair is not None:
             self._names |= {next_pair.left.first_name, next_pair.right.first_name}
-        self._prepared: dict[tuple[Moment, Seat | None, str | None], Line] = {}
+        self._prepared: dict[_Key, Line] = {}
         # Set pieces in tonight's memory as planned: kept once spoken, dropped by finish().
-        self._planned: dict[tuple[Moment, Seat | None, str | None], Remembered] = {}
+        self._planned: dict[_Key, Remembered] = {}
         self.budget_exhausted = False  # the prep budget ran out before every piece was ready
+        self._fallback_in_hold = False  # the room-talk fallback was said in this hold
 
     # --- Before the date ------------------------------------------------------------------
 
@@ -234,7 +235,7 @@ class LineWriter:
         planned = self._planned.get(_key(say)) if say.text is None else None
         if planned is not None and say.moment in SET_PIECES:
             self._tonight.heard(planned)
-        if line.source is not Source.FIXED and line.moment in REMEMBERED_LIVE:
+        if line.text and line.source is not Source.FIXED and line.moment in REMEMBERED_LIVE:
             self._tonight.remember(line.moment, line.text, names=self._names)
         self._events.emit(
             Event.LINE,
@@ -255,6 +256,8 @@ class LineWriter:
         return await self._attempt(say, self._prompt_for(say), timeout)
 
     async def _line_for(self, say: Say) -> Line:
+        if say.moment is Moment.ROOM_TALK and say.number == 1:
+            self._fallback_in_hold = False  # a new hold
         if say.text is not None:
             return Line(say.text, Source.FIXED, say.moment)
         if say.moment in SET_PIECES:
@@ -334,10 +337,13 @@ class LineWriter:
         audience question) is passed in so no proper noun from it is repeated."""
         rules = rules_for(say.moment)
         said = [say.detail] if say.moment in (Moment.REPLY, Moment.FROM_THE_ROOM) else []
-        cards = cards_for(say.moment, self._pair, self._next_pair)
+        if say.moment is Moment.SILENCE and say.about is not None:
+            cards = [self._pair.card(say.about)]  # one dater is away: only the one who's here
+        else:
+            cards = cards_for(say.moment, self._pair, self._next_pair)
         return check(
             text,
-            names=names_for(say.moment, self._pair, self._next_pair),
+            names=frozenset({card.first_name for card in cards} | {"Nova"}),
             max_chars=rules.max_chars,
             max_sentences=rules.max_sentences,
             echo_from=[s for s in said if s],
@@ -372,10 +378,9 @@ class LineWriter:
             case Moment.FIRST_QUESTION:
                 return script.first_question_fallback(pair.card(_seat(say)))
             case Moment.LIGHTNING_QUESTION:
-                n, total = _lightning_position(say)
-                # "Last quick one: ..." only ever comes last.
+                last = say.number == say.of  # "Last quick one: ..." only ever comes last
                 options = [
-                    o for o in script.LIGHTNING_FALLBACKS if n == total or not o.startswith("Last")
+                    o for o in script.LIGHTNING_FALLBACKS if last or not o.startswith("Last")
                 ]
                 return self._least_like_tonight(say, options)
             case Moment.LAST_WORD:
@@ -385,6 +390,10 @@ class LineWriter:
             case Moment.NEXT_UP:
                 return script.next_up_fallback(self._next_pair or pair)
             case Moment.SILENCE:
+                if say.about is not None:
+                    # One dater is away, and every silence fallback names both: say nothing
+                    # (one-dater fallbacks wait for sign-off: docs/sign-off/2026-10-one-dater.md).
+                    return ""
                 return self._least_like_tonight(say, script.silence_fallbacks(pair))
             case Moment.FROM_THE_ROOM:
                 # Proposed, off until sign-off: the approved question, framed, if that
@@ -395,6 +404,10 @@ class LineWriter:
                         return framed
                 return script.from_the_room_fallback(pair)
             case Moment.ROOM_TALK:
+                if say.number is not None:  # a hold's cover line
+                    if self._fallback_in_hold:
+                        return ""  # never the same fallback twice in one hold
+                    self._fallback_in_hold = True
                 return script.ROOM_TALK_FALLBACK
             case Moment.REPLY:
                 words = say.detail or ""
@@ -416,9 +429,9 @@ class LineWriter:
             case Moment.FIRST_QUESTION:
                 return prompts.first_question(pair, _seat(say), tonight=tonight)
             case Moment.LIGHTNING_QUESTION:
-                n = _lightning_number(say)
+                n, total = _place(say)
                 form = self._lightning_forms[(n - 1) % len(self._lightning_forms)]
-                return prompts.lightning_question(pair, n, form=form, tonight=tonight)
+                return prompts.lightning_question(pair, n, total=total, form=form, tonight=tonight)
             case Moment.LAST_WORD:
                 return prompts.last_word(pair, _seat(say), tonight=tonight)
             case Moment.OUTRO:
@@ -427,6 +440,8 @@ class LineWriter:
                 shape = self._rng.choice(prompts.NEXT_UP_SHAPES)
                 return prompts.next_up(self._next_pair or pair, shape=shape, tonight=tonight)
             case Moment.SILENCE:
+                if say.about is not None:
+                    return prompts.silence_to_one(pair, say.about, tonight=tonight)
                 return prompts.silence(pair, tonight=tonight)
             case Moment.FROM_THE_ROOM:
                 return prompts.from_the_room(pair, say.detail or "", tonight=tonight)
@@ -438,25 +453,15 @@ class LineWriter:
         raise ValueError(f"No prompt for {say.moment}")
 
     def _set_piece_cues(self) -> list[Say]:
-        pair = self._pair
-        cues = [
-            Say(Moment.DOORS_INTRO),
-            *(
-                Say(Moment.FIRST_QUESTION, about=seat, detail=pair.card(seat).prompts[0].text)
-                for seat in Seat
-            ),
-            *(Say(Moment.LIGHTNING_QUESTION, detail=f"{n} of 3") for n in (1, 2, 3)),
-            *(Say(Moment.LAST_WORD, about=seat) for seat in Seat),
-            Say(Moment.OUTRO),
-        ]
-        if self._next_pair is not None:
-            cues.append(Say(Moment.NEXT_UP, detail=self._next_pair.label))
-        return cues
+        return running_order.set_pieces(self._pair, self._next_pair)
 
 
-def _key(say: Say) -> tuple[Moment, Seat | None, str | None]:
+type _Key = tuple[Moment, Seat | None, int | None]
+
+
+def _key(say: Say) -> _Key:
     if say.moment is Moment.LIGHTNING_QUESTION:
-        return (say.moment, None, say.detail)
+        return (say.moment, None, _place(say)[0])
     if say.moment in (Moment.FIRST_QUESTION, Moment.LAST_WORD):
         return (say.moment, say.about, None)
     return (say.moment, None, None)
@@ -474,14 +479,11 @@ def _room(say: Say) -> RoomFacts:
     return say.room
 
 
-def _lightning_number(say: Say) -> int:
-    return _lightning_position(say)[0]
-
-
-def _lightning_position(say: Say) -> tuple[int, int]:
-    """("2 of 3") -> (2, 3)."""
-    n, _, total = (say.detail or "1 of 3").split()
-    return int(n), int(total)
+def _place(say: Say) -> tuple[int, int]:
+    """A question's place in its round: (number, of)."""
+    if say.number is None or say.of is None:
+        raise ValueError(f"{say.moment} needs its place in the round")
+    return say.number, say.of
 
 
 def _ms_since(started: float) -> int:

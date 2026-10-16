@@ -33,7 +33,16 @@ Date: 2026-10-13. Status: accepted.
   only when the dater who paused actually returns. If they aren't back after 30 seconds,
   Nova says "Bear with us a little longer, room." once, the show stays on hold, and the
   moderator is alerted and chooses: keep waiting, resume without the dater (Nova says
-  nothing), or end the date. There is no limit on how often a dater can pause, but the
+  nothing), or end the date. While a dater is away after a resume, their first-question
+  prompt and last word are skipped (the other dater's turn comes on time, never earlier),
+  and a long silence brings a prompt for the dater who's on air only, written by the
+  model from that dater's card alone; if the model fails, Nova says nothing, since every
+  silence fallback names both daters (one-dater fallbacks wait for sign-off in
+  `docs/sign-off/2026-10-one-dater.md`). If the dater comes back while the date is live,
+  Nova says "And we're back.", which is true then (before, a return after a resume got
+  nothing). Their decision is unchanged: they can still decide in the app, and no answer
+  counts as keep it unseen. After a report, the reporter isn't welcomed back: their date
+  ended in the app. There is no limit on how often a dater can pause, but the
   moderator is also alerted when the same dater pauses a second time (counted per dater).
   Alerts go to the moderator console only, never to the room.
 - **A report pauses the date** until the moderator resumes or ends it (the prototype's
@@ -55,11 +64,40 @@ Date: 2026-10-13. Status: accepted.
   when the date ends early (the runner's `LightningMeterClosed` cue). No listener can pay
   toward an unlock that will be ignored. The gesture work must follow this: once the meter
   closes, gestures stop counting toward the unlock, and the app says so before anyone pays.
+- **No dead air while the show is held.** A pause (need a moment, a distress pause or a
+  report) used to get one line to the room, then about 25 s of silence until "Bear with
+  us", then silence for as long as the moderator took. Now Nova talks to the room every
+  `cover_every` seconds (10), at most `cover_lines` lines a hold (3, the first with the
+  pause), written by the model from the show facts; if the model fails, the room-talk
+  fallback is said at most once a hold, and after that Nova says nothing rather than
+  repeat it. Once the lines run out, or at the 30-second alert if that's first, the
+  recorded fallback segment plays (`PlayFallbackSegment`), and when the hold ends (the
+  dater is back, the moderator resumes or ends the date) it stops (`StopFallbackSegment`)
+  before Nova speaks again. Talk to the room is told its situation explicitly
+  (`RoomFacts.situation`: a pause, the daters deciding, or a date that ended early),
+  instead of guessing it from the segment.
+- **After a dater leaves,** Nova says the approved leave line, then one line thanking the
+  room for listening (the ended-early situation: it never says who left or why), and Next
+  up comes `next_up_after_leave` later (12 s; it reused the 30 s after a result, which
+  left the room in silence). With no next pair, the fallback segment plays. Six more
+  room-talk fallbacks wait for sign-off in `docs/sign-off/2026-10-room-talk.md`.
 - **After the moderator ends a date,** Nova says only the approved closing line, then the
   recorded fallback segment from the technical plan plays until the moderator chooses what
   happens next. The room never sits in silence. (Not yet in the Agents Playground
   rehearsal, which plays Nova's lines only: no sounds, voice intros or fallback segment;
   see `docs/spike-results.md`.)
+- **Nova never talks over a dater.** The brand book says sounds never play over someone
+  speaking, and beats used to fire at their exact show time. The runner hears the voice
+  detector (`speech_started`, `speech_stopped`, through the on-air listener): while a
+  dater is speaking, a beat's lines and sounds (the first question, audience and
+  lightning questions, the last word, the time's-up sound and line, the lightning-unlocked
+  line) wait until nobody is, or at most `talk_over_grace` (5 s, the same in rehearsals),
+  in their order. State changes in the same beat go on time: the segment, the decision
+  window, the poll, the meter and the desk. Safety lines and the result never wait (the
+  kind line, the need-a-moment cover, "Bear with us", "And we're back", a dater leaving,
+  the moderator ending, the result). What's waiting is dropped if a pause starts or the
+  date ends. No silence prompt comes while a dater is speaking, and silence counts from
+  when they stop.
 - **Fairness:** who answers first (first question, last word) is chosen at random for each
   date, and the long-silence prompt is an open one to both daters, so nobody is singled out
   for being quiet.
@@ -78,3 +116,5 @@ Date: 2026-10-13. Status: accepted.
   back or who reported, three controls: keep waiting,
   resume without them, and end the date (the runner's `moderator_keep_waiting`,
   `moderator_resume` and `moderator_end`). It also needs a control to stop the fallback.
+- The audio side plays the fallback segment on `PlayFallbackSegment` and stops it on
+  `StopFallbackSegment`, before Nova's next line.

@@ -67,6 +67,22 @@ EVERYDAY_PAIR = Pair(
     ),
 )  # fmt: skip
 
+# Daters who give no pronouns (the prototype makes them optional): Nova uses their names.
+NO_PRONOUNS_PAIR = Pair(
+    _card(
+        "Robin", 32, "",
+        # Not a boat: the model said "lived on a narrowboat", which the address check
+        # rightly stops, and this pair tests pronouns.
+        ("Ask me about", "the summer I learned to surf."),
+        ("My hidden talent", "is remembering every film I've seen."),
+    ),
+    _card(
+        "Sasha", 27, "",
+        ("I'm weirdly good at", "spotting a typo from across the room."),
+        ("My perfect Sunday", "is a long bath and a longer book."),
+    ),
+)  # fmt: skip
+
 
 # Six more pairs, so the evaluation's full night has eight dates with different pairs.
 NIGHT = (
