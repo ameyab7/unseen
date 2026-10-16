@@ -11,7 +11,7 @@ import pytest
 from nova import prompts, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
 from nova.cues import Moment, RoomFacts, Say, Segment
-from nova.fixtures import MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
+from nova.fixtures import EVERYDAY_PAIR, MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
 from nova.guardrails import Violation, check
 from nova.lines import ErrorKind, LineWriter, Source, fallback_lines, names_for, rules_for
 from nova.models import ModelRefused
@@ -554,10 +554,17 @@ async def test_if_the_model_fails_nova_never_reads_the_question_itself(model):
 # --- Every fallback line passes the guardrails --------------------------------------------
 
 
-@pytest.mark.parametrize(("moment", "text"), fallback_lines(REHEARSAL_PAIR, NEXT_PAIR))
-def test_every_fallback_line_passes_the_guardrails(moment, text):
+@pytest.mark.parametrize(
+    ("moment", "text", "pair"),
+    [
+        *((*line, REHEARSAL_PAIR) for line in fallback_lines(REHEARSAL_PAIR, NEXT_PAIR)),
+        # Daters called Will and Hope: fallbacks use those words too ("will", "hope").
+        *((*line, EVERYDAY_PAIR) for line in fallback_lines(EVERYDAY_PAIR, NEXT_PAIR)),
+    ],
+)
+def test_every_fallback_line_passes_the_guardrails(moment, text, pair):
     rules = rules_for(moment)
-    names = names_for(moment, REHEARSAL_PAIR, NEXT_PAIR)
+    names = names_for(moment, pair, NEXT_PAIR)
     # Two signed-off outro fallbacks are two short sentences; one sentence is the model's rule.
     sentences = 2 if moment is Moment.OUTRO else rules.max_sentences
     assert (

@@ -52,6 +52,22 @@ def _card(name: str, age: int, pronouns: str, *prompts: tuple[str, str]) -> Blin
     return BlindCard(first_name=name, age=age, pronouns=pronouns, prompts=(first, second))
 
 
+# Daters whose first names are everyday words, which Nova's lines also use ("I hope you
+# will..."). Not in NIGHT, so the tracked full-night number stays comparable.
+EVERYDAY_PAIR = Pair(
+    _card(
+        "Will", 30, "he/him",
+        ("Ask me about", "the summer I worked on a lighthouse boat."),
+        ("My perfect Sunday", "is a long lunch that turns into dinner."),
+    ),
+    _card(
+        "Hope", 28, "she/her",
+        ("I claim I can", "find the best seat in any cinema."),
+        ("The way to win me over", "is a really good sandwich."),
+    ),
+)  # fmt: skip
+
+
 # Six more pairs, so the evaluation's full night has eight dates with different pairs.
 NIGHT = (
     REHEARSAL_PAIR,

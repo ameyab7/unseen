@@ -100,7 +100,9 @@ SPENDING = _any(
     r"\bmembership\b",
     r"\bsubscri\w*",
     r"\bencores?\b",
-    r"\broses?\b",
+    # Roses as a gift, not the verb ("who rose earliest", for a dater called Rose too).
+    r"\broses\b",
+    r"\b(?:a|one|send|sent|give|gave|throw|threw)\s+(?:them\s+|her\s+|him\s+)?(?:a\s+)?rose\b",
 )
 
 # Teasing is fine; humiliation is not.
@@ -363,9 +365,13 @@ def _name_problems(
     and fixed words) may follow, so a card word is never said as a surname."""
     problems: set[Violation] = set()
 
+    # A name in the wrong case: the voice may spell out MAYA, and captions show names as
+    # written. All lowercase it's an ordinary word, which sounds the same either way, so a
+    # dater called Will, Hope or May doesn't lose every line that says will, hope or may.
     for name in names:
         for match in re.finditer(rf"\b{re.escape(name)}\b", text, re.IGNORECASE):
-            if match.group(0) != name:
+            word = match.group(0)
+            if word != name and not word.islower():
                 problems.add(Violation.NAME_CASE)
 
     tokens = list(WORD.finditer(text))

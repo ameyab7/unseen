@@ -43,7 +43,7 @@ from nova.decisions import InMemoryDecisionDesk
 from nova.distress import DistressCheck, Verdict
 from nova.distress_set import DISTRESS_SET, Sample
 from nova.events import EventLog
-from nova.fixtures import MAYA, NEXT_PAIR, NIGHT, REHEARSAL_PAIR, THEO
+from nova.fixtures import EVERYDAY_PAIR, MAYA, NEXT_PAIR, NIGHT, REHEARSAL_PAIR, THEO
 from nova.lines import CANDIDATES, ErrorKind, LineWriter, Source
 from nova.models import LineModel, build_model
 from nova.on_air import OnAirCues, OnAirListener
@@ -142,6 +142,13 @@ CASES: tuple[Case, ...] = (
         "the result",
         Say(Moment.OUTRO),
         must_mention_all=("Maya", "Theo"),
+    ),
+    Case(
+        # Daters called Will and Hope: Nova's lines use the words too ("I hope you will").
+        "dater with an everyday-word name",
+        Say(Moment.DOORS_INTRO),
+        pair=EVERYDAY_PAIR,
+        must_mention_all=("Will", "Hope"),
     ),
     # The attacks.
     Case(

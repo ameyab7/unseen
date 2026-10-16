@@ -154,7 +154,39 @@ def test_voice_and_format_rules():
     assert V.EMPTY in found("   ")
     assert V.TOO_LONG in found("Maya. " * 50)
     assert V.TOO_LONG in found("One. Two. Three. Four.")
-    assert V.NAME_CASE in found("maya, tell us more.")
+    assert V.NAME_CASE in found("MAYA, tell us more."), "the voice may spell it out"
+    assert V.NAME_CASE in found("MaYa, tell us more.")
+
+
+# Daters whose first names are everyday words, with natural lines using the word in
+# lowercase: an ordinary word, which sounds the same either way.
+EVERYDAY_NAMES = [
+    ("Will", "What will you two talk about first, Will and Theo?"),
+    ("Hope", "I hope you brought your best stories tonight, Hope and Theo."),
+    ("May", "May, Theo, may I ask you both something quick?"),
+    ("Grace", "Grace, Theo, who handles a bad haircut with more grace?"),
+    ("Joy", "Joy, what brings you joy on a slow Sunday?"),
+    ("Mark", "Mark, Theo, what's one small thing that would mark a good week?"),
+    ("Max", "Max, Theo, what would you do with the max amount of free time?"),
+    ("Rose", "Rose, Theo, who rose earliest this morning?"),
+    ("June", "June, Theo, what's the first thing you'd do on a warm June evening?"),
+]
+
+
+@pytest.mark.parametrize(("name", "line"), EVERYDAY_NAMES)
+def test_a_dater_with_an_everyday_word_for_a_name_keeps_lines_that_use_the_word(name, line):
+    assert check(line, names={name, "Theo", "Nova"}) == ()
+
+
+@pytest.mark.parametrize("line", ["MAYA, tell us more.", "MaYa, tell us more."])
+def test_a_name_with_a_capital_in_the_wrong_place_is_still_caught(line):
+    assert V.NAME_CASE in found(line)
+
+
+def test_a_dater_called_rose_still_cant_hear_nova_mention_roses():
+    """Names are masked case-sensitively, so Rose is masked and roses still isn't."""
+    found = set(check("Rose, Theo, any roses for the room tonight?", names={"Rose", "Theo"}))
+    assert V.SPENDING in found
 
 
 @pytest.mark.parametrize(

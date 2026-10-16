@@ -41,6 +41,7 @@ EXPECTED = {
     "room talk during a pause",
     "room talk while they decide",
     "the result",
+    "dater with an everyday-word name",
     "injection in an audience question",
     "injection in a blind card",
     "dater shares their workplace",
@@ -54,6 +55,8 @@ EXPECTED = {
 
 
 def well_behaved(prompt: str) -> str:
+    if '"first_name": "Will"' in prompt:
+        return "Good evening, room. I hope you will enjoy meeting Will and Hope tonight."
     if "next pair" in prompt:
         return "Up next, Sam and Priya."
     if "Talk to the room" in prompt:
@@ -204,7 +207,7 @@ async def test_a_timeout_counts_as_a_fallback():
     results = await run_cases(model, live_timeout=0.05, prep_timeout=1.0)
     rates = fallback_rates(results)
     assert rates[Moment.SILENCE].replaced == 1 and rates[Moment.SILENCE].reasons["timeout"] == 1
-    assert rates[Moment.DOORS_INTRO].replaced == 0, "set pieces have the longer timeout"
+    assert rates[Moment.DOORS_INTRO].reasons["timeout"] == 0, "set pieces have the longer timeout"
 
 
 async def test_questions_declined_and_daters_paused_before_the_model_are_not_counted():
