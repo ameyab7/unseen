@@ -69,6 +69,18 @@ Date: 2026-10-13. Status: accepted.
   happens next. The room never sits in silence. (Not yet in the Agents Playground
   rehearsal, which plays Nova's lines only: no sounds, voice intros or fallback segment;
   see `docs/spike-results.md`.)
+- **Nova never talks over a dater.** The brand book says sounds never play over someone
+  speaking, and beats used to fire at their exact show time. The runner hears the voice
+  detector (`speech_started`, `speech_stopped`, through the on-air listener): while a
+  dater is speaking, a beat's lines and sounds (the first question, audience and
+  lightning questions, the last word, the time's-up sound and line, the lightning-unlocked
+  line) wait until nobody is, or at most `talk_over_grace` (5 s, the same in rehearsals),
+  in their order. State changes in the same beat go on time: the segment, the decision
+  window, the poll, the meter and the desk. Safety lines and the result never wait (the
+  kind line, the need-a-moment cover, "Bear with us", "And we're back", a dater leaving,
+  the moderator ending, the result). What's waiting is dropped if a pause starts or the
+  date ends. No silence prompt comes while a dater is speaking, and silence counts from
+  when they stop.
 - **Fairness:** who answers first (first question, last word) is chosen at random for each
   date, and the long-silence prompt is an open one to both daters, so nobody is singled out
   for being quiet.

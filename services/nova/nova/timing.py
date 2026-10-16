@@ -35,6 +35,10 @@ class Timing:
     silence_after: float = 8.0
     silence_cooldown: float = 20.0
 
+    # A beat's lines and sounds wait while a dater is mid-sentence (the brand book: sounds
+    # never play over someone speaking), but never longer than this.
+    talk_over_grace: float = 5.0
+
     def __post_init__(self) -> None:
         starts = [
             self.first_question,
@@ -48,9 +52,10 @@ class Timing:
             raise ValueError("Segment starts must be in running-order sequence")
 
     def scaled(self, factor: float) -> Timing:
-        """Shrinks every beat by factor, except the silence rule: people need the same
-        few seconds to fill a silence whether or not it's a rehearsal."""
-        keep = {"silence_after", "silence_cooldown"}
+        """Shrinks every beat by factor, except the silence rule and the talk-over grace:
+        people need the same few seconds to fill a silence or finish a sentence whether or
+        not it's a rehearsal."""
+        keep = {"silence_after", "silence_cooldown", "talk_over_grace"}
         return replace(
             self,
             **{

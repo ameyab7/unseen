@@ -249,11 +249,87 @@ def test_a_long_silence_brings_an_open_prompt_to_both_daters_then_waits():
     assert all(c == Say(Moment.SILENCE) for _, c in nudges), "no dater is singled out"
 
 
-def test_talking_resets_the_silence_clock():
+def test_talking_resets_the_silence_clock_which_counts_from_when_they_stop():
     show = Show()
-    show.at(95, "speech", LEFT)
+    show.at(95, "speech_started", LEFT)
+    show.at(97, "speech_stopped", LEFT)
     show.until(110)
-    assert show.says(Moment.SILENCE) == [(103.0, Say(Moment.SILENCE))]
+    assert show.says(Moment.SILENCE) == [(105.0, Say(Moment.SILENCE))]
+
+
+def test_no_silence_prompt_comes_while_a_dater_is_still_speaking():
+    show = Show()
+    show.at(95, "speech_started", LEFT)
+    show.until(120)
+    assert show.says(Moment.SILENCE) == [], "a long story is not a silence"
+    show.at(120, "speech_stopped", LEFT)
+    show.until(130)
+    assert show.says(Moment.SILENCE) == [(128.0, Say(Moment.SILENCE))]
+
+
+# --- Nova never talks over a dater -----------------------------------------------------------
+
+
+def test_a_beat_waits_while_a_dater_is_mid_sentence_and_goes_out_when_they_stop():
+    show = Show()
+    show.at(40, "speech_started", LEFT)
+    show.until(46)
+    assert (45.0, "first_question") in show.segments(), "the segment starts on time"
+    assert show.says(Moment.FIRST_QUESTION) == []
+    show.at(47, "speech_stopped", LEFT)
+    assert [t for t, _ in show.says(Moment.FIRST_QUESTION)] == [47.0]
+
+
+def test_a_beat_goes_out_after_the_grace_if_the_dater_keeps_talking():
+    show = Show()
+    show.at(44, "speech_started", LEFT)
+    show.until(60)
+    assert [t for t, _ in show.says(Moment.FIRST_QUESTION)] == [50.0], "5 s after it was due"
+
+
+def test_the_times_up_sound_and_line_wait_while_the_decision_window_opens_on_time():
+    show = Show()
+    show.at(479, "speech_started", RIGHT)
+    show.until(481)
+    assert show.times(DecisionWindowOpened) == [480.0], "the window opens on time"
+    assert show.cues(PollOpened) and show.cues(PlaySound, since=470) == []
+    assert show.says(Moment.TIME) == []
+    show.at(482, "speech_stopped", RIGHT)
+    assert show.cues(PlaySound, since=470) == [PlaySound(Sound.TIMES_UP)]
+    assert [t for t, _ in show.says(Moment.TIME)] == [482.0]
+
+
+def test_an_unlock_while_a_dater_is_speaking_is_announced_after_they_stop():
+    show = Show()
+    show.at(200, "speech_started", LEFT)
+    unlocked = show.at(201, "unlock_lightning_round")
+    assert unlocked == [LightningMeterClosed()], "the meter closes at once"
+    stopped = show.at(203, "speech_stopped", LEFT)
+    assert Say(Moment.LIGHTNING_UNLOCKED, text=script.LIGHTNING_UNLOCKED) in stopped
+
+
+def test_safety_lines_never_wait_for_a_dater_to_finish():
+    show = Show()
+    show.at(100, "speech_started", RIGHT)  # Theo is mid-sentence
+    cues = show.at(101, "dater_said", LEFT, "I want to stop.")
+    assert Say(Moment.NEED_A_MOMENT, text=script.DISTRESS_PAUSE) in cues
+    assert StopSpeaking() in cues
+
+
+def test_the_result_never_waits():
+    show = Show()
+    show.at(539, "speech_started", LEFT)
+    show.until(541)
+    assert [t for t, _ in show.says(Moment.RESULT)] == [540.0]
+
+
+def test_what_waited_is_dropped_when_a_dater_leaves():
+    show = Show()
+    show.at(44, "speech_started", LEFT)
+    show.until(46)
+    show.at(46, "dater_left", RIGHT)
+    show.until(80)
+    assert show.says(Moment.FIRST_QUESTION) == [], "never said after the date ended"
 
 
 def test_nova_stays_quiet_in_segments_without_the_silence_rule():
@@ -757,7 +833,7 @@ def test_moderator_end_stops_nova_at_once_with_only_the_approved_line_then_the_f
     ]
     later = []
     for t, event, args in [
-        (301, "speech", (LEFT,)),
+        (301, "speech_started", (LEFT,)),
         (302, "need_a_moment", (LEFT,)),
         (303, "unlock_lightning_round", ()),
         (304, "dater_left", (RIGHT,)),
@@ -993,7 +1069,8 @@ ANY_TIME = [
     ("distress_check", (LEFT, Verdict.UNCHECKED), [UNCHECKED]),
     ("distress_check", (LEFT, Verdict.NO), []),
     ("dater_reported", (LEFT,), [REPORTED]),
-    ("speech", (LEFT,), []),
+    ("speech_started", (LEFT,), []),
+    ("speech_stopped", (LEFT,), []),
     ("need_a_moment", (LEFT,), []),
     ("back", (LEFT,), []),
     ("dater_left", (LEFT,), []),
