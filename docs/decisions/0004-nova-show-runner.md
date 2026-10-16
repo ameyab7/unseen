@@ -17,8 +17,10 @@ Date: 2026-10-13. Status: accepted.
 - **The result always comes when the window closes**, even if both decided early. Otherwise
   the timing would tell a dater who chose quickly whether the other one answered. The
   room's verdict comes after the result line, never before both decisions are locked, and
-  is hidden when fewer than 5 people voted: a percentage of a handful of listeners says
-  too much about each of them.
+  is hidden when fewer than 20 people voted, and rounded to the nearest 10%: a percentage
+  of a handful of listeners says too much about each of them, and the daters see it again
+  in their recap ("81% of the room said yes"). *Proposed, until the product owner agrees*:
+  the threshold was 5 votes and the share exact; the code already uses 20 and 10%.
 - **Safety-critical lines are fixed, never generated:** the result, a dater leaving, the
   moderator ending the date, the need-a-moment cover and the invitation (`nova/script.py`).
   Each names its source; lines not in the brand book or prototype need the product
