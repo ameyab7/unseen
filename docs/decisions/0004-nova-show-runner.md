@@ -102,7 +102,12 @@ Date: 2026-10-13. Status: accepted.
   when they stop.
 - **Fairness:** who answers first (first question, last word) is chosen at random for each
   date, and the long-silence prompt is an open one to both daters, so nobody is singled out
-  for being quiet.
+  for being quiet. *Proposed, for the product owner*: the brand book's example silence
+  line addresses one dater with a detail from their card ("Theo, you say you can parallel
+  park anything. Defend that."), and CLAUDE.md says the design system wins. Nova keeps
+  this rule (both daters) but now builds the question on a light detail from each card, so
+  it keeps the brand book's specificity without singling anyone out; whether to follow the
+  example instead is the product owner's call.
 
 ## Consequences
 

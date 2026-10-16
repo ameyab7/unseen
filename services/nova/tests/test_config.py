@@ -153,3 +153,31 @@ def test_env_example_lists_exactly_the_names_settings_reads():
     example = Path(__file__).parents[1] / ".env.example"
     names = set(re.findall(r"^([A-Z][A-Z0-9_]*)=", example.read_text(encoding="utf-8"), re.M))
     assert names == set(Settings.ENV_NAMES)
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("NOVA_LLM", "gemma-secret-value"),
+        ("NOVA_LLM", "openai/gpt-secret-value"),
+        ("NOVA_VOICE", "secret-voice-value"),
+        ("NOVA_STT", "secret-stt-value"),
+        ("NOVA_LIVE_TIMEOUT_SECONDS", "secret-timeout-value"),
+    ],
+)
+def test_a_config_error_names_the_setting_never_its_value(name, value):
+    """ConfigError's promise: a value may be a key pasted into the wrong line."""
+    with pytest.raises(ConfigError, match=name) as raised:
+        Settings.from_env({**GOOD, name: value})
+    assert "secret" not in str(raised.value)
+
+
+@pytest.mark.parametrize("stt", ["deepgram/nova-3", "assemblyai/universal-streaming"])
+def test_speech_recognition_is_provider_slash_model(stt):
+    assert Settings.from_env({**GOOD, "NOVA_STT": stt}).stt == stt
+
+
+@pytest.mark.parametrize("stt", ["deepgram", "/nova-3", "deepgram/", "deepgram/nova-3:en"])
+def test_a_malformed_speech_recognition_setting_is_caught(stt):
+    with pytest.raises(ConfigError, match="NOVA_STT"):
+        Settings.from_env({**GOOD, "NOVA_STT": stt})

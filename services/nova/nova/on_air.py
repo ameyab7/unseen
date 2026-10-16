@@ -38,6 +38,7 @@ from nova.config import Settings
 from nova.cues import Conduct, Cue
 from nova.distress import Checked, DistressCheck, Listener, Verdict
 from nova.show_runner import ShowRunner
+from nova.text import straight_quotes
 
 # A request the instant layer heard waits this long for the dater to stop speaking, then
 # the words so far are checked again.
@@ -64,7 +65,7 @@ def addresses_nova(*finals: str) -> bool:
     Speech recognition splits sentences at pauses and an utterance joins them, so Nova is
     looked for in each sentence of the whole and in each final: "That's so funny." then
     "Nova, what do you think?" is to Nova."""
-    finals = tuple(final.lower().replace("’", "'") for final in finals)
+    finals = tuple(straight_quotes(final.lower()) for final in finals)
     text = " ".join(finals)
     words = list(_WORD.finditer(text))
     starts = [word.start() for word in words]

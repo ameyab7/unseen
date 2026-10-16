@@ -12,6 +12,8 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Third-party actions are pinned to a full commit SHA, with the version beside it, so a
+# moved or compromised tag can't change what runs.
 # Typecheck, lint and tests only. pgTAP joins once supabase/ exists; a Maestro smoke
 # test joins once the first real screens do. Nothing here talks to staging or production.
 jobs:
@@ -19,12 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Reads the pnpm version from packageManager in package.json.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
@@ -45,11 +47,10 @@ jobs:
       run:
         working-directory: services/nova
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Installs uv; uv then installs the Python version in .python-version.
-      # setup-uv publishes exact version tags only (no "v10"), so pin the full version.
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: '0.13.0'
           enable-cache: true

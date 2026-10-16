@@ -14,6 +14,7 @@ from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
 from nova.config import LlmChoice, Settings
+from nova.measure import ms_since
 
 
 class ModelError(Exception):
@@ -99,7 +100,11 @@ class OllamaModel:
 class AnthropicModel:
     """Claude through the official Anthropic SDK.
 
-    Nova's rules go in a cached system block. No temperature or other sampling settings
+    Nova's rules go in a system block marked for caching. Caching only applies above the
+    model's minimum cacheable prompt (512 tokens on current Claude models, 1,024 to 4,096 on
+    older ones); Nova's rules are about 510 tokens and the distress check's about 810, so
+    it depends on the model: usage.cache_read_input_tokens says whether it did. No
+    temperature or other sampling settings
     (current Claude models reject them), and effort "low": these are short spoken lines.
     A refusal raises, and Nova says its own fallback line. No server-side refusal fallback
     for now; decision 0005 adds it back if and when Nova switches to Claude.
@@ -158,7 +163,7 @@ async def warm_up(model: LineModel, *, timeout: float = WARM_UP_TIMEOUT) -> int:
     started = time.monotonic()
     with contextlib.suppress(Exception):
         await asyncio.wait_for(model.label(system=WARM_UP_SYSTEM, prompt="Say ok."), timeout)
-    return round((time.monotonic() - started) * 1000)
+    return ms_since(started)
 
 
 def build_model(settings: Settings, choice: LlmChoice | None = None) -> LineModel:

@@ -200,8 +200,8 @@ def next_up(pair: Pair, *, shape: str, tonight: Sequence[str] = ()) -> str:
 def silence(pair: Pair, *, tonight: Sequence[str] = ()) -> str:
     return _task(
         "there's been a long silence in free talk. Give both daters one open, light question "
-        "to talk about, addressed to both by first name. Don't single either of them out. "
-        "One or two sentences.",
+        "to talk about, built on a light detail from each of their blind cards, addressed to "
+        "both by first name. Don't single either of them out. One or two sentences.",
         _seats(pair),
         tonight,
     )

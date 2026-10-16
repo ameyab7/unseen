@@ -27,6 +27,7 @@ from nova.decisions import Choice, DecisionError, InMemoryDecisionDesk
 from nova.distress import Checked, DistressCheck, Verdict
 from nova.events import Event, EventLog
 from nova.lines import LIVE_REACTIONS, Line, LineWriter, Source
+from nova.measure import ms
 from nova.models import LineModel, warm_up
 from nova.on_air import Closed, OnAirCues, OnAirListener
 from nova.questions import AudienceQuestion, QuestionStatus
@@ -132,10 +133,10 @@ class Rehearsal:
         timing: Timing = REHEARSAL,
         next_pair: Pair | None = None,
         first_up: Seat | None = None,
-        live_timeout: float = 2.0,
-        prep_timeout: float = 60.0,
+        live_timeout: float = Settings.live_timeout,
+        prep_timeout: float = Settings.prep_timeout,
         prep_budget: float = Settings.prep_budget,
-        distress_timeout: float = 2.0,
+        distress_timeout: float = Settings.distress_timeout,
         utterance_grace: float = Settings.utterance_grace,
         utterance_max_wait: float = Settings.utterance_max_wait,
         events: EventLog | None = None,
@@ -184,6 +185,7 @@ class Rehearsal:
         self.spoken: list[Spoken] = []
         self.alerts = 0
         self.characters_spoken = 0
+        self.nova_seconds = 0.0  # how long Nova's voice played, measured
         self.prep_ms = 0
         self.warm_up_ms: int | None = None
 
@@ -227,7 +229,7 @@ class Rehearsal:
     async def prepare(self) -> None:
         started = self._clock()
         await self._writer.prepare()
-        self.prep_ms = _ms(self._clock() - started)
+        self.prep_ms = ms(self._clock() - started)
 
     def start(self) -> None:
         self._started_at = self._clock()
@@ -360,8 +362,8 @@ class Rehearsal:
                 self._events.emit(Event.QUESTION_SKIPPED, reason=cue.reason)
             if not isinstance(cue, Say):
                 continue
-            if reply_due:
-                kind, reply_due = Kind.REPLY, False
+            if reply_due and (cue.moment is Moment.REPLY or cue.text == script.DISTRESS_PAUSE):
+                kind, reply_due = Kind.REPLY, False  # the line that answers the dater
             elif cue.text is None and cue.moment in LIVE_REACTIONS:
                 kind = Kind.LIVE
             else:
@@ -402,10 +404,13 @@ class Rehearsal:
                 return
             try:
                 started = await self.speaker.speak(line.text)
+                if started is not None:
+                    self.nova_seconds += max(0.0, self._clock() - started)
             except Exception:  # the voice failed: this line never played, the date goes on
                 started = None
                 self._events.emit(Event.VOICE_ERROR, moment=line.moment)
-            self.characters_spoken += len(line.text)
+            if started is not None:  # only what played is billed and counted
+                self.characters_spoken += len(line.text)
             spoken = Spoken(
                 moment=line.moment,
                 kind=item.kind,
@@ -542,7 +547,7 @@ def render_report(rehearsal: Rehearsal) -> str:
             f"{ms_text(s.from_free_ms):>11}{ms_text(s.from_sentence_end_ms):>19}"
             f"{ms_text(s.grace_ms):>9}{ms_text(s.model_ms or None):>8}"
         )
-    lines += ["", _utterance_row(r)]
+    lines += ["", _utterance_row(r), _airtime_row(r)]
     lines += [
         "",
         "Targets, as set (from the cue; replies from the end of the dater's sentence, grace "
@@ -578,7 +583,7 @@ def _utterance_row(r: Rehearsal) -> str:
         f"(grace {r.utterance_grace:g} s after the last transcript, at most "
         f"{r.utterance_max_wait:g} s after the dater stopped)"
     )
-    waits = [_ms(u.waited) for u in r.utterances if u.waited is not None]
+    waits = [ms(u.waited) for u in r.utterances if u.waited is not None]
     if not r.utterances:
         return f"Utterances: none {settings}"
     instant = sum(u.instant for u in r.utterances)
@@ -594,6 +599,16 @@ def _utterance_row(r: Rehearsal) -> str:
     )
 
 
+def _airtime_row(r: Rehearsal) -> str:
+    """The brand book keeps Nova's share of the date well under a fifth."""
+    total = r.listened_seconds
+    share = f"{r.nova_seconds / total:.0%}" if total > 0 else "-"
+    return (
+        f"Nova's airtime: {r.nova_seconds:.0f} s of a {total:.0f} s date, {share} "
+        "(brand book: well under a fifth)"
+    )
+
+
 def _target_row(t: TargetResult) -> str:
     verdict = {True: "PASSED", False: "FAILED", None: "no lines"}[t.passed]
     return (
@@ -603,11 +618,7 @@ def _target_row(t: TargetResult) -> str:
 
 
 def _since(start: float | None, end: float | None) -> int | None:
-    return None if start is None or end is None else _ms(end - start)
-
-
-def _ms(seconds: float) -> int:
-    return round(seconds * 1000)
+    return None if start is None or end is None else ms(end - start)
 
 
 def ms_text(ms: int | None) -> str:

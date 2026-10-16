@@ -611,6 +611,28 @@ async def test_the_first_question_waits_for_the_dater_to_finish_their_sentence()
     assert len(first_questions()) == 1
 
 
+async def test_only_the_line_that_answers_the_dater_is_measured_as_a_reply():
+    """A beat that comes due while the check runs arrives in the same batch as the kind
+    line; it used to take the reply's place, leaving the kind line measured as prepared."""
+    words = "He keeps looking at me in a way I really hate."
+    clock = Clock()
+    r = await started(clock, model=FakeModel(labels={words: "yes"}, clock=clock, check_takes=1.0))
+    clock.now = 19.5  # Theo's first question is due at 20.25 s
+    r.speech_ended()
+    r.transcript(words)
+    close(r, clock)  # the check runs from 20.1 s to 21.1 s
+    await r.heard()
+    await r.speak_queued()
+    kind = lines(r, Moment.NEED_A_MOMENT)[0]
+    assert kind.kind is Kind.REPLY, "the kind line answers the dater"
+
+
+async def test_characters_count_only_lines_that_played():
+    clock = Clock()
+    r = await started(clock, speaker=SilentSpeaker(clock))
+    assert r.spoken and r.characters_spoken == 0, "nothing played, nothing billed"
+
+
 # --- Chat drives the show ------------------------------------------------------------------
 
 

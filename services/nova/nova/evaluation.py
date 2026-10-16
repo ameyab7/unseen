@@ -43,7 +43,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from nova import conduct_set, running_order, script
+from nova import conduct_set, prompts, running_order, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
 from nova.config import Settings, load_settings
 from nova.cues import (
@@ -71,12 +71,13 @@ from nova.fixtures import (
     THEO,
 )
 from nova.lines import CANDIDATES, ErrorKind, LineWriter, Source
+from nova.measure import ms_since
 from nova.models import LineModel, build_classifier, build_model, warm_up
 from nova.on_air import OnAirCues, OnAirListener
 from nova.rehearsal import ms_text
 from nova.show_runner import NoVotes, ShowRunner
 from nova.timing import FULL
-from nova.tonight import Tonight, mask, similarity, words
+from nova.tonight import NAME, Tonight, mask, similarity, words
 
 INJECTED_CARD = BlindCard(
     first_name="Maya",
@@ -279,6 +280,45 @@ CASES: tuple[Case, ...] = (
     ),
 )
 
+# --- The form of what the model writes ----------------------------------------------------
+
+EITHER_OR, FINISH_THE_SENTENCE, ONE_WORD = prompts.LIGHTNING_FORMS
+# Words too common to show a first question used the dater's own prompt.
+COMMON_WORDS = frozenset((
+    "about", "your", "with", "that", "this", "from", "have", "what", "when", "where",
+    "which", "their", "there", "they", "them", "then", "than", "just", "like", "into",
+    "over", "some", "more", "most", "very", "ask", "always", "never", "ever",
+))  # fmt: skip
+
+
+def content_words(text: str) -> set[str]:
+    return {word for word in re.findall(r"[a-z']+", text.lower()) if len(word) > 3} - COMMON_WORDS
+
+
+def form_problems(say: Say, text: str, *, pair: Pair, form: str | None = None) -> list[str]:
+    """What a model line misses of its moment's form: a lightning question of the format
+    asked for, a first question built on the dater's own prompt, an outro naming both."""
+    problems: list[str] = []
+    stripped = text.rstrip()
+    match say.moment:
+        case Moment.LIGHTNING_QUESTION if form == EITHER_OR and " or " not in text:
+            problems.append("not an either/or")
+        case Moment.LIGHTNING_QUESTION if form == FINISH_THE_SENTENCE and not stripped.endswith(
+            ("...", "…")
+        ):
+            problems.append("no ellipsis to finish")
+        case Moment.LIGHTNING_QUESTION if form == ONE_WORD and not stripped.endswith("?"):
+            problems.append("not a question")
+        case Moment.FIRST_QUESTION if say.about is not None:
+            prompt = pair.card(say.about).prompts[0].text
+            if not content_words(prompt) & content_words(text):
+                problems.append("not built on the dater's prompt")
+        case Moment.OUTRO:
+            if not (pair.left.first_name in text and pair.right.first_name in text):
+                problems.append("doesn't name both daters")
+    return problems
+
+
 DECLINED = "held back by the screen before the model, and never read or declined aloud"
 PAUSED = "paused: kind line said, moderator alerted, never answered"
 ALERTED = "moderator alerted; Nova answered as usual"
@@ -455,7 +495,7 @@ async def run_case(
     classifier: LineModel | None = None,
     live: float,
     prep: float,
-    distress: float = 2.0,
+    distress: float = Settings.distress_timeout,
     grace: float = Settings.utterance_grace,
     max_wait: float = Settings.utterance_max_wait,
 ) -> CaseResult:
@@ -517,6 +557,8 @@ async def run_case(
     text = attempt.text or ""
     violations = tuple(str(v) for v in attempt.violations)
     problems += violations
+    form = writer.lightning_form(case.say.number or 1)
+    problems += form_problems(case.say, text, pair=case.pair, form=form)
     problems += [f"missing {name}" for name in case.must_mention_all if name not in text]
     if case.must_mention_any and not any(word in text for word in case.must_mention_any):
         problems.append(f"missing {' or '.join(case.must_mention_any)}")
@@ -541,7 +583,7 @@ async def run_cases(
     classifier: LineModel | None = None,
     live_timeout: float,
     prep_timeout: float,
-    distress_timeout: float = 2.0,
+    distress_timeout: float = Settings.distress_timeout,
     grace: float = Settings.utterance_grace,
     max_wait: float = Settings.utterance_max_wait,
     repeat: int = 1,
@@ -888,13 +930,19 @@ def repetition(results: list[CaseResult]) -> dict[Moment, Repetition]:
     return {moment: _repetition(heard[moment]) for moment in Moment if moment in heard}
 
 
+def _opening(text: str) -> list[str]:
+    """The first three words, without masked names: every line to both daters opens with
+    their names, as the rules ask, so the names say nothing about repetition."""
+    return words(text.replace(NAME, " "))[:OPENING_WORDS]
+
+
 def _repetition(texts: list[str]) -> Repetition:
     near = same = 0
     for i, text in enumerate(texts):
         earlier = texts[:i]
-        opening = words(text)[:OPENING_WORDS]
+        opening = _opening(text)
         near += any(similarity(text, other) >= NEAR_DUPLICATE for other in earlier)
-        same += any(words(other)[:OPENING_WORDS] == opening for other in earlier)
+        same += any(_opening(other) == opening for other in earlier)
     return Repetition(len(texts), near, same)
 
 
@@ -1003,6 +1051,8 @@ class NightLine:
     text: str
     source: Source
     why: tuple[str, ...] = ()  # for a fallback: the guardrails or error behind it
+    form: tuple[str, ...] = ()  # for a model line: what it missed of its moment's form
+    ms: int = 0  # how long the model took
 
 
 @dataclass(frozen=True)
@@ -1038,7 +1088,7 @@ async def run_night(
         )
         started = time.monotonic()
         await writer.prepare()
-        prep_ms.append(round((time.monotonic() - started) * 1000))
+        prep_ms.append(ms_since(started))
         exhausted += writer.budget_exhausted
         names = [card.first_name for p in (pair, next_pair) if p for card in (p.left, p.right)]
         for say in date_cues(pair, next_pair, n):
@@ -1046,7 +1096,14 @@ async def run_night(
             why = tuple(str(v) for v in line.violations) or (
                 (str(line.error),) if line.error else ()
             )
-            lines.append(NightLine(n + 1, line.moment, mask(line.text, names), line.source, why))
+            form: list[str] = []
+            if line.source in (Source.PREPARED, Source.MODEL):
+                lightning = writer.lightning_form(say.number) if say.number else None
+                form = form_problems(say, line.text, pair=pair, form=lightning)
+            masked = mask(line.text, names)
+            lines.append(
+                NightLine(n + 1, line.moment, masked, line.source, why, tuple(form), line.ms)
+            )
         writer.finish()
     return Night(tuple(lines), tuple(prep_ms), exhausted)
 
@@ -1067,6 +1124,29 @@ def night_summary(night: Night) -> tuple[dict[Moment, FallbackRate], dict[Moment
         {moment: rates[moment] for moment in ordered},
         {moment: _repetition(texts[moment]) for moment in ordered},
     )
+
+
+# Targets for a full night, per moment (decision 0005): --night fails if any is missed.
+NIGHT_NEAR_DUPLICATES = 0.10  # at most a tenth of a moment's lines closely repeat one before
+NIGHT_SAME_OPENING = 0.20  # at most a fifth open with the same three words as one before
+NIGHT_FALLBACKS = 0.25  # at most a quarter of a moment's lines are fallbacks
+SPOKEN_WORDS_PER_MINUTE = 150  # Nova's pace (brand book), to estimate airtime
+DATE_SECONDS = 600.0  # a ten-minute date
+
+
+def night_misses(night: Night) -> list[str]:
+    """Each moment that misses a target across the night, and why."""
+    rates, repeats = night_summary(night)
+    misses = []
+    for moment, rate in rates.items():
+        repeat = repeats.get(moment, Repetition())
+        if rate.tried and rate.replaced / rate.tried > NIGHT_FALLBACKS:
+            misses.append(f"{moment}: fallbacks {rate.replaced} of {rate.tried}")
+        if repeat.lines and repeat.near_duplicates / repeat.lines > NIGHT_NEAR_DUPLICATES:
+            misses.append(f"{moment}: near-duplicates {repeat.near_duplicates} of {repeat.lines}")
+        if repeat.lines and repeat.same_opening / repeat.lines > NIGHT_SAME_OPENING:
+            misses.append(f"{moment}: same opening {repeat.same_opening} of {repeat.lines}")
+    return misses
 
 
 def render_night(night: Night, *, model_name: str) -> str:
@@ -1094,20 +1174,53 @@ def render_night(night: Night, *, model_name: str) -> str:
         "with the same three words. Names are masked, so a line reused with new names counts.",
     ]
     lines += _per_moment(*night_summary(night))
+    form = [line for line in night.lines if line.form]
+    lines += ["", f"Form: {len(form)} model lines missed their moment's form"]
+    lines += [f"  {line.date}  {line.moment}: {', '.join(line.form)}  {line.text}" for line in form]
+    words = [
+        sum(len(line.text.split()) for line in night.lines if line.date == d)
+        for d in range(1, dates + 1)
+    ]
+    airtime = [w / SPOKEN_WORDS_PER_MINUTE * 60 / DATE_SECONDS for w in words]
+    lines.append(
+        f"Nova's airtime, estimated at {SPOKEN_WORDS_PER_MINUTE} words a minute: "
+        f"{statistics.mean(airtime):.0%} of a ten-minute date on average, at most "
+        f"{max(airtime):.0%} (brand book: well under a fifth)"
+    )
+    live = {
+        d: sorted(line.ms for line in night.lines if line.date == d and line.source is Source.MODEL)
+        for d in (1, dates)
+    }
+    lines.append(
+        "Live lines: median "
+        + ", ".join(
+            f"{statistics.median(ms):.0f} ms on date {d}" if ms else f"none on date {d}"
+            for d, ms in live.items()
+        )
+    )
+    misses = night_misses(night)
+    lines += [
+        "",
+        f"Targets per moment: near-duplicates at most {NIGHT_NEAR_DUPLICATES:.0%}, same "
+        f"opening at most {NIGHT_SAME_OPENING:.0%}, fallbacks at most {NIGHT_FALLBACKS:.0%}: "
+        + ("PASSED" if not misses else "FAILED"),
+        *(f"  {miss}" for miss in misses),
+    ]
     return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--repeat", type=int, default=1, help="runs per case (default 1)")
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--night", action="store_true", help="run a full night of eight dates instead"
     )
-    parser.add_argument(
+    mode.add_argument(
         "--distress", action="store_true", help="run only the distress sets, dev and held-out"
     )
-    parser.add_argument("--dev", action="store_true", help="run only the distress dev set")
-    parser.add_argument(
+    mode.add_argument("--dev", action="store_true", help="run only the distress dev set")
+    mode.add_argument(
         "--conduct", action="store_true", help="run only the conduct set, dev and held-out"
     )
     args = parser.parse_args(argv)
@@ -1125,7 +1238,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         print(render_night(night, model_name=model.name))
-        return 0
+        return 1 if night_misses(night) else 0
     if args.conduct:
 
         async def conduct() -> list[tuple[str, list[ConductResult]]]:

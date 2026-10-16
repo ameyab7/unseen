@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from nova.cues import Conduct
 from nova.guardrails import SPELLED_NUMBER, slot_words
+from nova.text import straight_quotes
 
 # Details that identify someone, in a dater's own words. Narrower than the guardrails on
 # Nova's lines: a dater may say "I hated school", "my favourite place" or "I live in
@@ -69,7 +70,7 @@ class Slipped:
 
 def personal_detail(words: str) -> Slipped | None:
     """A personal detail in what a dater said, if one slipped, as a code."""
-    plain = words.replace("’", "'")
+    plain = straight_quotes(words)
     if STREET_SAID.search(plain) or (HOME_CUE.search(plain) and slot_words([plain])):
         return Slipped(Conduct.PERSONAL_DETAIL, street=True)
     if DETAIL_SAID.search(plain) or slot_words([plain]):
