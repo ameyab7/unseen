@@ -11,6 +11,8 @@ import unicodedata
 from collections.abc import Collection, Iterable
 from enum import StrEnum
 
+from nova.questions import OffLimits
+
 
 class Violation(StrEnum):
     EMPTY = "empty"
@@ -142,8 +144,8 @@ _NUMBER_WORD = (
 )
 SPELLED_NUMBER = rf"\b{_NUMBER_WORD}(?:[\s,.-]+{_NUMBER_WORD}){{2,}}\b"
 
-# Never repeat a workplace, address, surname, school, phone number or social handle.
-PERSONAL_DETAIL = _any(
+# Personal details, in Nova's lines and in audience questions alike.
+_CONTACT_AND_HOME = (
     r"(?:\+?\d[\s().-]*){7,}",  # phone numbers
     SPELLED_NUMBER,
     r"\b\d{3,}\b",  # house numbers, postcodes, any long number
@@ -158,13 +160,18 @@ PERSONAL_DETAIL = _any(
     r"\b(?:lives?|living|lived)\s+(?:on|in|at|near)\b",
     r"\b(?:address|neighbou?rhood|postcode|zip code)\b",
     r"\b(?:surname|last name|family name|maiden name)\b",
-    r"\b(?:school|university|uni|college|campus|class of|graduated)\b",
     r"\b(?:studies|study|studying|student)\s+at\b",
+)
+_SPOT = r"(?:spot|place|bar|pub|cafe|café|restaurant|hangout|haunt|neighbou?rhood)"
+
+# Never repeat a workplace, address, surname, school, phone number or social handle.
+PERSONAL_DETAIL = _any(
+    *_CONTACT_AND_HOME,
+    r"\b(?:school|university|uni|college|campus|class of|graduated)\b",
     # Nova asking for one: "where do you work?", "a favourite local spot?"
     r"\bwhere\s+(?:do|does|did|would)\s+(?:you|he|she|they)\s+(?:work|live|study|stay|go|hang out"
     r"|spend)\b",
-    r"\b(?:local|favou?rite)\s+(?:spot|place|bar|pub|cafe|café|restaurant|hangout|haunt"
-    r"|neighbou?rhood)\b",
+    rf"\b(?:local|favou?rite)\s+{_SPOT}\b",
 )
 # What identifies a dater in what they said, capitalised or not (speech-to-text often
 # doesn't capitalise): up to SLOT_WORDS words after one of these cues, stopping at
@@ -210,21 +217,36 @@ STREET = re.compile(
     r"|crescent|close|square)\b"
 )
 
-# Audience questions Nova won't read: personal details, or looks.
-OFF_LIMITS_QUESTION = _any(
-    r"\bwhere\s+(?:do|does|did)\s+(?:you|he|she|they)\s+(?:work|live|study|stay|grow up"
+# Audience questions the screen holds back. Moderator approval is the main gate (decision
+# 0005), so these are narrow enough to let harmless approved questions through: "your lucky
+# number", "a job you'd do for free", "favourite subject at school", "face to face".
+QUESTION_PERSONAL_DETAIL = _any(
+    *_CONTACT_AND_HOME,
+    # "where do you work", "where does Theo live", "where did Maya's sister grow up"
+    r"\bwhere\s+(?:do|does|did)\s+(?:[\w']+\s+){1,2}?(?:work|live|study|stay|grow up"
     r"|go to school)\b",
     r"\bwhat\s+(?:do|does)\s+(?:you|he|she|they)\s+do for (?:a living|work)\b",
-    r"\b(?:job|employer|company|office|workplace)\b",
+    r"\b(?:your|his|her|their)\s+(?:job|company|boss)\b",  # someone's own, not "a job"
     r"\b(?:street|address|neighbou?rhood|postcode|zip)\b",
-    r"\b(?:number|phone|email|e-mail|handle|username|socials?)\b",
+    r"\b(?:phone|digits|e-?mail|handle|username|socials?)\b",
+    r"\byour\s+number\b",  # to call, not "your lucky number"
+    # School only with which, where or the name of: not "a subject at school".
+    r"\b(?:which|where|name of)\b.{0,30}\b(?:school|uni|university|college)\b",
+    # A favourite place only near home: not "your favourite place to travel".
+    rf"\blocal\s+{_SPOT}\b",
+    rf"\bfavou?rite\s+{_SPOT}\b.{{0,30}}\b(?:near|nearby|in town|around here|in the city)\b",
+)
+QUESTION_LOOKS = _any(
     r"\blooks?\s+like\b",
     r"\bwhat\s+(?:do|does)\s+\w+(?:\s+\w+)?\s+look\b",
     r"\b(?:attractive|hot|cute|pretty|handsome|beautiful|gorgeous|sexy|ugly)\b",
-    r"\b(?:tall|height|weight|hair|eyes|body|face)\b",
+    r"\b(?:tall|weight)\b",
+    # Face, body, eyes, hair and height only next to a looks word: not "face to face".
+    r"\b(?:look|looks|attractive|describe)\b.{0,30}\b(?:face|body|eyes|hair|height)\b",
+    r"\b(?:face|body|eyes|hair|height)\b.{0,30}\b(?:look|looks|attractive|describe)\b",
 )
 
-# Audience questions that try to give Nova instructions: declined before the model.
+# Audience questions that try to give Nova instructions: the screen holds them back.
 INSTRUCTING_NOVA = _any(
     r"\bignore\b.{0,30}\b(?:rules|instructions|above|previous|prompt)\b",
     r"\b(?:forget|override|bypass|disregard)\b.{0,20}\b(?:rules|instructions|prompt)\b",
@@ -340,16 +362,24 @@ def check(
     return tuple(v for v in Violation if v in found)
 
 
+def screen_question(question: str) -> tuple[OffLimits, ...]:
+    """Why the screen would hold this audience question back, if it would: where someone
+    works, lives or studies, a surname or contact details; anyone's looks; or an attempt to
+    give Nova instructions. The console shows these to the moderator before they approve;
+    on air, the show runner skips a question it catches, silently. Empty: nothing found."""
+    found = {
+        OffLimits.PERSONAL_DETAIL: bool(
+            QUESTION_PERSONAL_DETAIL.search(question) or STREET.search(question)
+        ),
+        OffLimits.LOOKS: bool(QUESTION_LOOKS.search(question)),
+        OffLimits.INSTRUCTS_NOVA: bool(INSTRUCTING_NOVA.search(question)),
+    }
+    return tuple(reason for reason in OffLimits if found[reason])
+
+
 def question_is_off_limits(question: str) -> bool:
-    """True for audience questions about where someone works, lives or studies, a surname,
-    contact details or anyone's looks, and for questions that try to give Nova
-    instructions. Nova declines these without reading them."""
-    return bool(
-        INSTRUCTING_NOVA.search(question)
-        or OFF_LIMITS_QUESTION.search(question)
-        or PERSONAL_DETAIL.search(question)
-        or STREET.search(question)
-    )
+    """True for an audience question the screen would hold back (screen_question)."""
+    return bool(screen_question(question))
 
 
 def card_words(cards: Iterable[str]) -> frozenset[str]:

@@ -22,7 +22,11 @@ Date: 2026-10-13. Status: accepted.
 - **Every model line passes the guardrails or a fallback is said instead.** Fallbacks are
   approved lines built only from first names and ages, never from free text, so injected
   text can't reach the room through them. The product owner signed them all off on
-  2026-10-13.
+  2026-10-13. *Proposed, not yet signed off:* one exception, for a question a moderator
+  approved: when the model fails on it, Nova reads it framed ("From the room: <question>"),
+  but only if that line passes the guardrails for the moment; otherwise today's fallback.
+  It's behind `READ_APPROVED_QUESTION_ON_FAILURE` (off) in `nova/script.py`, and the frame
+  waits for sign-off in `docs/sign-off/2026-10-audience-questions.md`.
 - **A blind card is checked when it's made** (`nova/cards.py`), because its first name and
   age go into fixed and fallback lines that no guardrail checks: a first name is letters,
   with single spaces, hyphens or apostrophes between them, at most 30 characters; an age
@@ -202,9 +206,19 @@ fallback line, never an unsafe one.
 | Voice and format | Exclamation marks, emoji, symbols (a slash too, which the voice reads aloud as "slash"; the model is told to join options with "or" and write no slashes or ampersands), markdown, length (characters and sentences), a name with a capital in the wrong place ("MAYA", "MaYa": the voice may spell it out). A name all in lowercase is an ordinary word, so a dater called Will, Hope or May keeps lines that say will, hope or may; the model's outro is one sentence with no question; a lightning question is one sentence and doesn't open with both daters' names | Tone, wrong pronouns, a question ending in a full stop (handled by the instructions only) |
 | A dater who wants to stop (what a dater says on air, not Nova's line) | On whole utterances, not speech-to-text fragments. Instant layer: unmistakable requests that end there or are about the date (want to stop, need a moment, not comfortable, don't feel safe, get me out of here, stop the date, a panic attack, harassing me), acted on once the utterance closes, or 3 s after the match if the dater keeps talking. Meaning layer: every other utterance goes to the model once, with the same dater's last 15 seconds, which answers yes, maybe or no; a failed or slow check alerts the moderator | Distress the model misjudges (the test set measures this; it missed "Is this almost over?"), or heard only in a voice; the instant layer pausing a story that happens to use a stop phrase ("we had to end the date early") |
 
-Before the model, audience questions about personal details or looks, or that try to give
-Nova instructions, are declined with a fixed line. This can't catch cleverly worded ones
-("which part of town has the best coffee for you?"); moderator approval stays the main gate.
+Moderator approval is the main gate for audience questions. The automatic screen
+(`screen_question`) gives the console a warning before the moderator approves: a code for
+personal details (where someone works, lives or studies, a surname, contact details),
+looks, or instructions to Nova. On air it's a silent backstop: the show runner skips an
+approved question it still catches without a word (a spoken decline told the daters and
+the room that a listener asked something off limits), sends the console a
+`QuestionSkipped` cue with the code and no text, and reads the next approved question in
+the queue for that slot. Its patterns are narrow enough to let harmless approved questions
+through ("your lucky number", "a job you'd do for free", "your favourite subject at
+school", "face to face with a wild animal"): a number only to call, school only with which,
+where or the name of, a favourite place only near home, and face, body, eyes, hair and
+height only next to a looks word. It can't catch cleverly worded ones ("which part of town
+has the best coffee for you?").
 
 The layers, in order: moderator approval of questions, data kept apart from instructions,
 Nova's rules, the guardrails, and approved fallbacks.
@@ -235,6 +249,10 @@ right-hand column above). Before the first real show, Nova needs both of these:
   close on time: distress first, and a reply to Nova held until the check's verdict.
 - The moderator console needs a third distress alert, `distress_unchecked`: the check
   failed or was too slow, so listen in (decision 0004).
+- The console runs the screen (`screen_question`) on every submitted question and shows
+  its codes (`personal_detail`, `looks`, `instructs_nova`) as a warning before the
+  moderator approves, and shows `QuestionSkipped` when an approved question is skipped on
+  air.
 - The distress check sends everything daters say to the model in `NOVA_LLM`, one call per
   utterance, about 60 to 90 a date: on this PC's Gemma, nothing leaves the machine; with
   Claude, every utterance goes to Anthropic, so the cost and the privacy notice need a

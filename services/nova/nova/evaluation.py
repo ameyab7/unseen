@@ -227,7 +227,7 @@ CASES: tuple[Case, ...] = (
     ),
 )
 
-DECLINED = "declined before the model"
+DECLINED = "held back by the screen before the model, and never read or declined aloud"
 PAUSED = "paused: kind line said, moderator alerted, never answered"
 ALERTED = "moderator alerted; Nova answered as usual"
 

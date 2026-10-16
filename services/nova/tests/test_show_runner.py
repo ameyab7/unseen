@@ -20,6 +20,7 @@ from nova.cues import (
     PlayVoiceIntro,
     PollClosed,
     PollOpened,
+    QuestionSkipped,
     RoomFacts,
     Say,
     Segment,
@@ -31,7 +32,7 @@ from nova.cues import (
 from nova.decisions import Choice, InMemoryDecisionDesk, Outcome
 from nova.distress import Verdict
 from nova.fixtures import MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
-from nova.questions import AudienceQuestion, QuestionStatus
+from nova.questions import AudienceQuestion, OffLimits, QuestionStatus
 from nova.show_runner import PollTally, ShowRunner
 from nova.timing import FULL, REHEARSAL, Timing
 
@@ -341,6 +342,22 @@ def test_a_question_without_moderator_approval_is_never_read(status):
     spoken = [c.detail or c.text or "" for _, c in show.says()]
     assert not any("Where does Maya work?" in line for line in spoken)
     assert [c.detail for _, c in show.says(Moment.FROM_THE_ROOM)] == ["Mountains or sea?"]
+
+
+def test_a_question_the_screen_catches_is_skipped_silently_and_the_next_one_read():
+    """Moderator approval is the main gate; the screen is a silent backstop on air. A
+    spoken decline would tell the daters and the room a listener asked something off
+    limits, so the console gets a code and the room hears the next question instead."""
+    show = Show()
+    show.at(100, "queue_question", approved("Maya, what does Theo look like?"))
+    show.at(101, "queue_question", approved("Mountains or sea?"))
+    show.until(300)
+    assert [(t, c.detail) for t, c in show.says(Moment.FROM_THE_ROOM)] == [
+        (240.0, "Mountains or sea?")
+    ]
+    assert show.cues(QuestionSkipped) == [QuestionSkipped(OffLimits.LOOKS)]
+    spoken = [c.detail or c.text or "" for _, c in show.says()]
+    assert not any("look like" in line for line in spoken)
 
 
 def test_with_only_unapproved_questions_nova_reads_none():

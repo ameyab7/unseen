@@ -22,7 +22,7 @@ from typing import Protocol
 from nova import script
 from nova.cards import Pair, Seat
 from nova.config import Settings
-from nova.cues import AlertModerator, Cue, Moment, Say, StopSpeaking
+from nova.cues import AlertModerator, Cue, Moment, QuestionSkipped, Say, StopSpeaking
 from nova.decisions import Choice, DecisionError, InMemoryDecisionDesk
 from nova.distress import Checked, DistressCheck, Verdict
 from nova.events import Event, EventLog
@@ -349,6 +349,8 @@ class Rehearsal:
             if isinstance(cue, AlertModerator):
                 self.alerts += 1
                 self._events.emit(Event.ALERT, alert=cue.alert, seat=cue.seat)
+            if isinstance(cue, QuestionSkipped):
+                self._events.emit(Event.QUESTION_SKIPPED, reason=cue.reason)
             if not isinstance(cue, Say):
                 continue
             if reply_due:
@@ -382,6 +384,8 @@ class Rehearsal:
                 item.line.cancel()  # the dater wants to stop: never answer them
                 return
             line = await item.line
+            if not line.text:  # Nova says nothing for this cue
+                return
             if verdict in (Verdict.MAYBE, Verdict.UNCHECKED) and line.source is Source.FALLBACK:
                 line = replace(line, text=script.TAKE_YOUR_TIME)  # never "I'll stay out of it"
             try:

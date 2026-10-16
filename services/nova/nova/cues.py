@@ -9,6 +9,7 @@ from enum import StrEnum
 
 from nova.cards import Seat
 from nova.decisions import Outcome
+from nova.questions import OffLimits
 
 
 class Segment(StrEnum):
@@ -147,6 +148,14 @@ class AlertModerator:
 
 
 @dataclass(frozen=True)
+class QuestionSkipped:
+    """An approved audience question the screen caught on air, skipped without a word: for
+    the moderator console only, never the room. A code, never the question."""
+
+    reason: OffLimits
+
+
+@dataclass(frozen=True)
 class DateEnded:
     reason: EndReason
     outcome: Outcome | None
@@ -175,6 +184,7 @@ type Cue = (
     | ShowVerdict
     | LightningMeterClosed
     | AlertModerator
+    | QuestionSkipped
     | DateEnded
     | PlayFallbackSegment
     | Finished

@@ -57,7 +57,6 @@ LIGHTNING_FALLBACKS = (
     "Quick one: early bird or night owl?",
     "Last quick one: the best thing you ate this week?",
 )
-DECLINE_QUESTION = "Let's leave that one for another night. Back to you two."
 ROOM_TALK_FALLBACK = "Thanks for keeping the chat kind tonight, room."
 # Never for a dater who clearly wants to stop: they never get a reply cue at all.
 REPLY_FALLBACK = "I'm the AI host, so I'll stay out of that one. Back to you two."
@@ -103,6 +102,17 @@ def silence_fallbacks(pair: Pair) -> tuple[str, str, str]:
         f"{both}, one for you both: what's a small thing that reliably makes your day?",
         f"{both}, here's another: what would you do with a free day tomorrow?",
     )
+
+
+# Proposed, not signed off (docs/sign-off/2026-10-audience-questions.md): when the model
+# fails on a question a moderator approved, Nova reads it framed, if the framed line passes
+# the guardrails for the moment. The one fallback built from free text, so it stays off
+# until the product owner signs it off.
+READ_APPROVED_QUESTION_ON_FAILURE = False
+
+
+def from_the_room_framed(question: str) -> str:
+    return f"From the room: {question}"
 
 
 def from_the_room_fallback(pair: Pair) -> str:

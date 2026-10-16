@@ -553,6 +553,24 @@ async def test_the_model_is_warmed_up_with_one_tiny_request_whatever_it_answers(
     assert "Model warmed up in" in render_report(r)
 
 
+async def test_an_approved_question_the_screen_catches_is_never_spoken_or_declined(caplog):
+    """Nova says nothing about it; the console gets a code and the next question is read."""
+    caplog.set_level(logging.INFO, logger="nova")
+    clock = Clock()
+    r = rehearsal(clock)
+    r.command("ask Maya, what does Theo look like?")
+    r.command("ask Mountains or sea?")
+    await r.prepare()
+    r.start()
+    for t in range(1, 80):  # from the room starts at 72 s in a rehearsal
+        clock.now = float(t)
+        r.tick()
+        await r.speak_queued()
+    assert len(lines(r, Moment.FROM_THE_ROOM)) == 1
+    assert not any("look like" in text or "another night" in text for text in r.speaker.texts)
+    assert "question_skipped reason=looks" in caplog.text
+
+
 # --- Chat drives the show ------------------------------------------------------------------
 
 
