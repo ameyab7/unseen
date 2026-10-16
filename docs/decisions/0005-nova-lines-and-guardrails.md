@@ -179,8 +179,11 @@ Date: 2026-10-13. Status: accepted.
   spending or anyone's looks.
 - **Fixed fallbacks take turns across the night.** Silence, lightning and outro
   fallbacks each use the option least like what Nova has said tonight, so a night
-  doesn't hear the same fallback twice while another is unused. "Last quick one" only
-  ever comes last. The four outro fallbacks were signed off by the product owner on
+  doesn't hear the same fallback twice while another is unused. The last-question
+  lightning fallbacks are their own list (`LIGHTNING_LAST_FALLBACKS`) and only ever come
+  last. Bigger pools (15 lightning, 10 silence, 4 more outros) wait for sign-off in
+  `docs/sign-off/2026-10-nova-fallbacks.md`; every draft line is checked against the
+  guardrails by a test (`nova/sign_off.py`). The four outro fallbacks were signed off by the product owner on
   2026-10-13; two are two short sentences, which the one-sentence rule (for the model)
   allows for them.
 - **Timeouts are settings.** `NOVA_LIVE_TIMEOUT_SECONDS` (default 2) for live reactions:

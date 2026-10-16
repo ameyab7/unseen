@@ -58,6 +58,8 @@ def result_line(outcome: Outcome) -> str:
 LIGHTNING_FALLBACKS = (
     "Quick one: mountains or sea?",
     "Quick one: early bird or night owl?",
+)
+LIGHTNING_LAST_FALLBACKS = (  # only ever for the last question of the round
     "Last quick one: the best thing you ate this week?",
 )
 ROOM_TALK_FALLBACK = "Thanks for keeping the chat kind tonight, room."

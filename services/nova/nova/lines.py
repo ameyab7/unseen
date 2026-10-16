@@ -131,6 +131,7 @@ def fallback_lines(pair: Pair, next_pair: Pair | None) -> list[tuple[Moment, str
         (Moment.FIRST_QUESTION, script.first_question_fallback(pair.left)),
         (Moment.FIRST_QUESTION, script.first_question_fallback(pair.right)),
         *((Moment.LIGHTNING_QUESTION, q) for q in script.LIGHTNING_FALLBACKS),
+        *((Moment.LIGHTNING_QUESTION, q) for q in script.LIGHTNING_LAST_FALLBACKS),
         (Moment.LAST_WORD, script.last_word_fallback(pair.left)),
         (Moment.LAST_WORD, script.last_word_fallback(pair.right)),
         *((Moment.OUTRO, o) for o in script.outro_fallbacks(pair)),
@@ -368,10 +369,9 @@ class LineWriter:
             case Moment.FIRST_QUESTION:
                 return script.first_question_fallback(pair.card(_seat(say)))
             case Moment.LIGHTNING_QUESTION:
-                last = say.number == say.of  # "Last quick one: ..." only ever comes last
-                options = [
-                    o for o in script.LIGHTNING_FALLBACKS if last or not o.startswith("Last")
-                ]
+                options = script.LIGHTNING_FALLBACKS
+                if say.number == say.of:  # the last-question fallbacks only ever come last
+                    options = (*options, *script.LIGHTNING_LAST_FALLBACKS)
                 return self._least_like_tonight(say, options)
             case Moment.LAST_WORD:
                 return script.last_word_fallback(pair.card(_seat(say)))

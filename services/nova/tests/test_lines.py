@@ -126,7 +126,9 @@ async def test_a_model_that_hangs_holds_the_date_for_the_budget_not_every_timeou
     lines = [await w.line_for(say) for say in SET_PIECES]
     assert all(line.source is Source.FALLBACK for line in lines)
     assert all(line.error is ErrorKind.TIMEOUT for line in lines)
-    assert [line.text for line in lines[3:6]] == list(script.LIGHTNING_FALLBACKS), "in turn"
+    assert [line.text for line in lines[3:6]] == list(
+        (*script.LIGHTNING_FALLBACKS, *script.LIGHTNING_LAST_FALLBACKS)
+    ), "in turn"
     assert w.budget_exhausted and "budget_exhausted=True" in caplog.text
 
 
@@ -176,7 +178,9 @@ async def test_set_pieces_that_fail_fall_back_one_by_one():
     await w.prepare()
     lines = [await w.line_for(say) for say in SET_PIECES]
     assert all(line.source is Source.FALLBACK for line in lines)
-    assert [line.text for line in lines[3:6]] == list(script.LIGHTNING_FALLBACKS)
+    assert [line.text for line in lines[3:6]] == list(
+        (*script.LIGHTNING_FALLBACKS, *script.LIGHTNING_LAST_FALLBACKS)
+    )
 
 
 async def test_lightning_questions_are_told_about_earlier_ones_to_avoid_repeats():
@@ -426,7 +430,7 @@ async def test_lightning_fallbacks_take_turns_across_the_whole_night():
         (await w.line_for(Say(Moment.LIGHTNING_QUESTION, number=n, of=3))).text for n in (1, 2, 3)
     ]
     assert texts[0] == script.LIGHTNING_FALLBACKS[1], "not the one an earlier date heard"
-    assert texts[2] == script.LIGHTNING_FALLBACKS[2], '"Last quick one" only ever comes last'
+    assert texts[2] == script.LIGHTNING_LAST_FALLBACKS[0], '"Last quick one" only ever comes last'
     assert not any(text.startswith("Last") for text in texts[:2])
 
 
@@ -437,7 +441,7 @@ async def test_the_number_of_lightning_questions_lives_in_the_running_order(monk
     await w.prepare()
     lines = [await w.line_for(running_order.lightning_question(n)) for n in (1, 2, 3, 4)]
     assert all(line.error is ErrorKind.ERROR for line in lines), "all four were prepared"
-    assert lines[3].text == script.LIGHTNING_FALLBACKS[2], '"Last quick one" comes fourth'
+    assert lines[3].text == script.LIGHTNING_LAST_FALLBACKS[0], '"Last quick one" comes fourth'
     assert not any(line.text.startswith("Last") for line in lines[:3])
 
 
