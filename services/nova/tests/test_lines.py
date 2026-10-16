@@ -2,6 +2,7 @@
 line whenever the model is slow, fails, or writes something a guardrail rejects."""
 
 import asyncio
+import dataclasses
 import logging
 import random
 import time
@@ -11,6 +12,7 @@ import pytest
 from nova import prompts, running_order, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
 from nova.cues import Moment, RoomFacts, Say, Segment, Situation
+from nova.evaluation import INJECTED_CARD
 from nova.fixtures import EVERYDAY_PAIR, MAYA, NEXT_PAIR, NO_PRONOUNS_PAIR, REHEARSAL_PAIR, THEO
 from nova.guardrails import Violation, check
 from nova.lines import ErrorKind, LineWriter, Source, fallback_lines, names_for, rules_for
@@ -126,7 +128,9 @@ async def test_a_model_that_hangs_holds_the_date_for_the_budget_not_every_timeou
     lines = [await w.line_for(say) for say in SET_PIECES]
     assert all(line.source is Source.FALLBACK for line in lines)
     assert all(line.error is ErrorKind.TIMEOUT for line in lines)
-    assert [line.text for line in lines[3:6]] == list(script.LIGHTNING_FALLBACKS), "in turn"
+    assert [line.text for line in lines[3:6]] == list(
+        (*script.LIGHTNING_FALLBACKS, *script.LIGHTNING_LAST_FALLBACKS)
+    ), "in turn"
     assert w.budget_exhausted and "budget_exhausted=True" in caplog.text
 
 
@@ -176,7 +180,9 @@ async def test_set_pieces_that_fail_fall_back_one_by_one():
     await w.prepare()
     lines = [await w.line_for(say) for say in SET_PIECES]
     assert all(line.source is Source.FALLBACK for line in lines)
-    assert [line.text for line in lines[3:6]] == list(script.LIGHTNING_FALLBACKS)
+    assert [line.text for line in lines[3:6]] == list(
+        (*script.LIGHTNING_FALLBACKS, *script.LIGHTNING_LAST_FALLBACKS)
+    )
 
 
 async def test_lightning_questions_are_told_about_earlier_ones_to_avoid_repeats():
@@ -426,7 +432,7 @@ async def test_lightning_fallbacks_take_turns_across_the_whole_night():
         (await w.line_for(Say(Moment.LIGHTNING_QUESTION, number=n, of=3))).text for n in (1, 2, 3)
     ]
     assert texts[0] == script.LIGHTNING_FALLBACKS[1], "not the one an earlier date heard"
-    assert texts[2] == script.LIGHTNING_FALLBACKS[2], '"Last quick one" only ever comes last'
+    assert texts[2] == script.LIGHTNING_LAST_FALLBACKS[0], '"Last quick one" only ever comes last'
     assert not any(text.startswith("Last") for text in texts[:2])
 
 
@@ -437,7 +443,7 @@ async def test_the_number_of_lightning_questions_lives_in_the_running_order(monk
     await w.prepare()
     lines = [await w.line_for(running_order.lightning_question(n)) for n in (1, 2, 3, 4)]
     assert all(line.error is ErrorKind.ERROR for line in lines), "all four were prepared"
-    assert lines[3].text == script.LIGHTNING_FALLBACKS[2], '"Last quick one" comes fourth'
+    assert lines[3].text == script.LIGHTNING_LAST_FALLBACKS[0], '"Last quick one" comes fourth'
     assert not any(line.text.startswith("Last") for line in lines[:3])
 
 
@@ -694,3 +700,68 @@ async def test_logs_hold_events_and_timings_never_text(caplog):
     assert "line moment=reply" in caplog.text and "prepared" in caplog.text
     for secret in ("ZEBRA", "QUOKKA", "PANGOLIN", "555", "OKAPI", "Maya", "Theo"):
         assert secret not in caplog.text, secret
+
+
+# --- Card-based fallbacks (proposed, off until signed off) ----------------------------------
+
+
+def approved(pair: Pair) -> Pair:
+    return Pair(
+        dataclasses.replace(pair.left, approved_for_air=True),
+        dataclasses.replace(pair.right, approved_for_air=True),
+    )
+
+
+async def test_card_fallbacks_stay_off_until_signed_off():
+    assert script.CARD_FALLBACKS_ON is False
+    w = writer(FakeModel(error=RuntimeError("down")), pair=approved(REHEARSAL_PAIR))
+    line = await w.line_for(Say(Moment.DOORS_INTRO))
+    assert line.text == script.doors_fallback(REHEARSAL_PAIR)
+
+
+async def test_with_sign_off_an_approved_clean_card_is_quoted_in_the_daters_words(monkeypatch):
+    monkeypatch.setattr(script, "CARD_FALLBACKS_ON", True)
+    w = writer(FakeModel(error=RuntimeError("down")), pair=approved(REHEARSAL_PAIR))
+    line = await w.line_for(Say(Moment.DOORS_INTRO))
+    assert line.text == (
+        "Good evening, room. On my left, Maya, 29, whose card says: ask me about my worst "
+        "haircut. On my right, Theo, 31, whose card says: I claim I can parallel park anything."
+    )
+    assert line.source is Source.FALLBACK
+
+
+async def test_with_sign_off_next_up_quotes_the_next_pairs_cards(monkeypatch):
+    monkeypatch.setattr(script, "CARD_FALLBACKS_ON", True)
+    w = writer(FakeModel(error=RuntimeError("down")), next_pair=approved(NEXT_PAIR))
+    line = await w.line_for(Say(Moment.NEXT_UP, detail=NEXT_PAIR.label))
+    assert line.text.startswith("Up next, Sam, 29, whose card says: I'm weirdly good at")
+
+
+async def test_an_unapproved_card_gets_todays_fallback(monkeypatch):
+    monkeypatch.setattr(script, "CARD_FALLBACKS_ON", True)
+    pair = Pair(dataclasses.replace(MAYA, approved_for_air=True), THEO)  # Theo's isn't
+    line = await writer(FakeModel(error=RuntimeError("down")), pair=pair).line_for(
+        Say(Moment.DOORS_INTRO)
+    )
+    assert line.text == script.doors_fallback(pair)
+
+
+async def test_an_approved_card_with_injected_instructions_gets_todays_fallback(monkeypatch):
+    monkeypatch.setattr(script, "CARD_FALLBACKS_ON", True)
+    pair = approved(Pair(INJECTED_CARD, THEO))
+    line = await writer(FakeModel(error=RuntimeError("down")), pair=pair).line_for(
+        Say(Moment.DOORS_INTRO)
+    )
+    assert line.text == script.doors_fallback(pair), "the guardrails stop it"
+
+
+async def test_a_card_line_too_long_for_its_moment_gets_todays_fallback(monkeypatch):
+    monkeypatch.setattr(script, "CARD_FALLBACKS_ON", True)
+    long = Prompt("Ask me about", "the time " + "we walked and walked " * 5 + "home.")
+    maya = dataclasses.replace(MAYA, prompts=(long, MAYA.prompts[1]))
+    theo = dataclasses.replace(THEO, prompts=(long, THEO.prompts[1]))
+    pair = approved(Pair(maya, theo))  # each card fits; the line is over 320 characters
+    line = await writer(FakeModel(error=RuntimeError("down")), pair=pair).line_for(
+        Say(Moment.DOORS_INTRO)
+    )
+    assert line.text == script.doors_fallback(pair)

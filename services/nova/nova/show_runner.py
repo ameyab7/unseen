@@ -91,7 +91,10 @@ FLAGGED = frozenset(
 )
 
 # Below this, a percentage says too much about too few people, so the verdict stays hidden.
-MIN_VOTES_FOR_VERDICT = 5
+# Proposed (decision 0004): 20 votes, rounded to the nearest 10%, since the daters see the
+# share again in their recap and a share of a handful of votes is noise.
+MIN_VOTES_FOR_VERDICT = 20
+VERDICT_STEP = 0.1
 
 
 @dataclass(frozen=True)
@@ -640,7 +643,7 @@ class ShowRunner:
         ]
         tally = self._poll.tally()
         if tally.total >= MIN_VOTES_FOR_VERDICT:
-            cues.append(ShowVerdict(yes_share=tally.yes / tally.total))
+            cues.append(ShowVerdict(yes_share=rounded_share(tally.yes, tally.total)))
         # Written before the date, so it can't know or hint at the outcome.
         cues.append(Say(Moment.OUTRO))
         if self._invite:
@@ -776,6 +779,13 @@ class ShowRunner:
         self._cover_lines, self._segment_playing = 0, False
         self._show_paused = False
         return [Finished()]
+
+
+def rounded_share(yes: int, total: int) -> float:
+    """The yes share to the nearest 10%, halves up: 78% shows as 80%, 75% as 80%. Whole
+    numbers, so no float error rounds a half the wrong way."""
+    steps = (20 * yes + total) // (2 * total)  # tenths, rounded half up
+    return round(steps * VERDICT_STEP, 1)
 
 
 def _waits_for_speech(cue: Cue) -> bool:

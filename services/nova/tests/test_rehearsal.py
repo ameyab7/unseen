@@ -444,6 +444,28 @@ async def test_a_reply_to_nova_goes_ahead_after_a_no_or_a_maybe():
     await transcripts(r, clock, (40.0, topic), (45.0, lost))
     assert len(lines(r, Moment.REPLY)) == 2
     assert alerts(r) == [ModeratorAlert.POSSIBLE_DISTRESS]
+    assert r.speaker.texts[-1] == script.TAKE_YOUR_TIME, "after a maybe, the kind line"
+
+
+@pytest.mark.parametrize(
+    ("label", "said"),
+    [
+        ("maybe", script.TAKE_YOUR_TIME),
+        ("error", script.TAKE_YOUR_TIME),
+        ("no", "Here we go, Maya and Theo."),
+    ],
+)
+async def test_after_a_maybe_or_a_failed_check_nova_never_quips_whatever_the_model_wrote(
+    label, said
+):
+    """A model reply that worked used to play after a maybe; now only no lets it through."""
+    clock = Clock()
+    words = "Nova, he keeps asking where I live."
+    r = await started(clock, model=FakeModel(labels={words: label}))
+    await transcripts(r, clock, (40.0, words))
+    [reply] = lines(r, Moment.REPLY)
+    assert r.speaker.texts[-1] == said
+    assert (reply.source is Source.FALLBACK) is (label != "no")
 
 
 async def test_if_the_check_fails_the_moderator_listens_in_and_nova_still_answers():

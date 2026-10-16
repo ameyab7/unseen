@@ -19,7 +19,7 @@ timings only, never text.
 import asyncio
 import random
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -131,6 +131,7 @@ def fallback_lines(pair: Pair, next_pair: Pair | None) -> list[tuple[Moment, str
         (Moment.FIRST_QUESTION, script.first_question_fallback(pair.left)),
         (Moment.FIRST_QUESTION, script.first_question_fallback(pair.right)),
         *((Moment.LIGHTNING_QUESTION, q) for q in script.LIGHTNING_FALLBACKS),
+        *((Moment.LIGHTNING_QUESTION, q) for q in script.LIGHTNING_LAST_FALLBACKS),
         (Moment.LAST_WORD, script.last_word_fallback(pair.left)),
         (Moment.LAST_WORD, script.last_word_fallback(pair.right)),
         *((Moment.OUTRO, o) for o in script.outro_fallbacks(pair)),
@@ -364,21 +365,25 @@ class LineWriter:
         pair = self._pair
         match say.moment:
             case Moment.DOORS_INTRO:
+                if self._card_line(say, pair, script.doors_from_cards):
+                    return script.doors_from_cards(pair)
                 return script.doors_fallback(pair)
             case Moment.FIRST_QUESTION:
                 return script.first_question_fallback(pair.card(_seat(say)))
             case Moment.LIGHTNING_QUESTION:
-                last = say.number == say.of  # "Last quick one: ..." only ever comes last
-                options = [
-                    o for o in script.LIGHTNING_FALLBACKS if last or not o.startswith("Last")
-                ]
+                options = script.LIGHTNING_FALLBACKS
+                if say.number == say.of:  # the last-question fallbacks only ever come last
+                    options = (*options, *script.LIGHTNING_LAST_FALLBACKS)
                 return self._least_like_tonight(say, options)
             case Moment.LAST_WORD:
                 return script.last_word_fallback(pair.card(_seat(say)))
             case Moment.OUTRO:
                 return self._least_like_tonight(say, script.outro_fallbacks(pair))
             case Moment.NEXT_UP:
-                return script.next_up_fallback(self._next_pair or pair)
+                upcoming = self._next_pair or pair
+                if self._card_line(say, upcoming, script.next_up_from_cards):
+                    return script.next_up_from_cards(upcoming)
+                return script.next_up_fallback(upcoming)
             case Moment.SILENCE:
                 if say.about is not None:
                     # One dater is away, and every silence fallback names both: say nothing
@@ -405,6 +410,16 @@ class LineWriter:
                     return script.TAKE_YOUR_TIME  # never "I'll stay out of that one"
                 return script.REPLY_FALLBACK
         raise ValueError(f"No fallback for {say.moment}")
+
+    def _card_line(self, say: Say, pair: Pair, build: Callable[[Pair], str]) -> bool:
+        """Proposed, off until signed off (script.CARD_FALLBACKS_ON): a fallback quoting
+        the daters' cards, only if a person approved both cards for air and the line passes
+        the guardrails for its moment, card words allowed as for a model line."""
+        if not script.CARD_FALLBACKS_ON:
+            return False
+        if not (pair.left.approved_for_air and pair.right.approved_for_air):
+            return False
+        return not self._check(say, build(pair))
 
     def _least_like_tonight(self, say: Say, options: Sequence[str]) -> str:
         """The option least like what Nova has said tonight for this moment, so fixed

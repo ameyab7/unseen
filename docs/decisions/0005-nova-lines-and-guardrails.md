@@ -26,7 +26,12 @@ Date: 2026-10-13. Status: accepted.
   approved: when the model fails on it, Nova reads it framed ("From the room: <question>"),
   but only if that line passes the guardrails for the moment; otherwise today's fallback.
   It's behind `READ_APPROVED_QUESTION_ON_FAILURE` (off) in `nova/script.py`, and the frame
-  waits for sign-off in `docs/sign-off/2026-10-audience-questions.md`.
+  waits for sign-off in `docs/sign-off/2026-10-audience-questions.md`. *Also proposed:* the
+  doors and Next up fallbacks quote the daters' cards in their own words ("whose card says:
+  ask me about my worst haircut.") when a person at casting has approved both cards
+  (`BlindCard.approved_for_air`) and the line passes the guardrails for its moment;
+  otherwise today's line. Behind `CARD_FALLBACKS_ON` (off); the templates wait for sign-off
+  in `docs/sign-off/2026-10-card-fallbacks.md`.
 - **A blind card is checked when it's made** (`nova/cards.py`), because its first name and
   age go into fixed and fallback lines that no guardrail checks, and Nova can't put
   everything on air: a first name is letters, with single spaces, hyphens or apostrophes
@@ -112,14 +117,17 @@ Date: 2026-10-13. Status: accepted.
     to Nova but an unpunctuated "nova is it my turn" isn't, and Nova as the last word of
     a sentence is still taken as asked ("I really like Nova."). The reply's detail is the
     whole utterance, and an utterance gets at most one reply. It is written while the
-    check runs and said only if the answer isn't yes; on yes the kind line comes instead.
-    Both are measured from the end of the dater's sentence, so the grace and the check's
-    time count against the 2.5 s reply target (`docs/spike-results.md`); the rehearsal
-    report shows each reply's grace. If the reply's model line fails after a maybe or a
-    failed check, or for words with a warning word (stop, help, scared, not okay, and the
-    like: `nova/distress.py`, `WARNING`), Nova says "Take all the time you need.", never
-    "I'll stay out of that one" (signed off by the product owner on 2026-10-13). Choosing
-    that fallback is all the warning words do now.
+    check runs and said only if the answer is no; on yes the kind line comes instead, and
+    on a maybe or a failed check Nova always says "Take all the time you need." (signed off
+    by the product owner on 2026-10-13 for this case) instead of whatever the model wrote,
+    so a dater who may be distressed never hears a quip. Both are measured from the end of
+    the dater's sentence, so the grace and the check's time count against the 2.5 s reply
+    target (`docs/spike-results.md`); the rehearsal report shows each reply's grace. If the
+    reply's model line fails for words with a warning word (stop, help, scared, not okay,
+    and the like: `nova/distress.py`, `WARNING`), Nova also says "Take all the time you
+    need.", never "I'll stay out of that one"; choosing that fallback is all the warning
+    words do now. A neutral replacement for "I'll stay out of that one" waits for sign-off
+    in `docs/sign-off/2026-10-reply-fallback.md`.
   - **The distress test set** (`nova/distress_set.py`) runs with the evaluation, or alone
     with `--distress`: real distress in varied wording, and ordinary talk that uses the
     same words, each through the real listener, check and show runner; ten of each half
@@ -179,8 +187,11 @@ Date: 2026-10-13. Status: accepted.
   spending or anyone's looks.
 - **Fixed fallbacks take turns across the night.** Silence, lightning and outro
   fallbacks each use the option least like what Nova has said tonight, so a night
-  doesn't hear the same fallback twice while another is unused. "Last quick one" only
-  ever comes last. The four outro fallbacks were signed off by the product owner on
+  doesn't hear the same fallback twice while another is unused. The last-question
+  lightning fallbacks are their own list (`LIGHTNING_LAST_FALLBACKS`) and only ever come
+  last. Bigger pools (15 lightning, 10 silence, 4 more outros) wait for sign-off in
+  `docs/sign-off/2026-10-nova-fallbacks.md`; every draft line is checked against the
+  guardrails by a test (`nova/sign_off.py`). The four outro fallbacks were signed off by the product owner on
   2026-10-13; two are two short sentences, which the one-sentence rule (for the model)
   allows for them.
 - **Timeouts are settings.** `NOVA_LIVE_TIMEOUT_SECONDS` (default 2) for live reactions:
@@ -306,4 +317,5 @@ right-hand column above). Before the first real show, Nova needs these:
   exactly two prompts, each question 1 to 60 characters and each answer 1 to 120, not
   blank once trimmed; pronouns optional, and if given letters, slashes, spaces and
   hyphens, at most 20 characters. Casting must not pair two daters with the same first
-  name, ignoring case.
+  name, ignoring case. The schema and the console also carry `approved_for_air`, set when a
+  person at casting has approved the card's text (decision 0005's proposed card fallbacks).

@@ -15,7 +15,7 @@ import statistics
 import time
 from collections import Counter
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
@@ -390,11 +390,16 @@ class Rehearsal:
             if verdict is Verdict.YES:
                 item.line.cancel()  # the dater wants to stop: never answer them
                 return
-            line = await item.line
+            if verdict in (Verdict.MAYBE, Verdict.UNCHECKED):
+                # A dater who may be distressed never hears a quip, and never "I'll stay out
+                # of that one": the line already signed off for this case, whatever the model
+                # wrote (decision 0005).
+                item.line.cancel()
+                line = Line(script.TAKE_YOUR_TIME, Source.FALLBACK, Moment.REPLY)
+            else:
+                line = await item.line
             if not line.text:  # Nova says nothing for this cue
                 return
-            if verdict in (Verdict.MAYBE, Verdict.UNCHECKED) and line.source is Source.FALLBACK:
-                line = replace(line, text=script.TAKE_YOUR_TIME)  # never "I'll stay out of it"
             try:
                 started = await self.speaker.speak(line.text)
             except Exception:  # the voice failed: this line never played, the date goes on

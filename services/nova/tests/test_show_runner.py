@@ -36,7 +36,7 @@ from nova.decisions import Choice, InMemoryDecisionDesk, Outcome
 from nova.distress import Verdict
 from nova.fixtures import MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
 from nova.questions import AudienceQuestion, OffLimits, QuestionStatus
-from nova.show_runner import PollTally, ShowRunner
+from nova.show_runner import PollTally, ShowRunner, rounded_share
 from nova.timing import FULL, REHEARSAL, Timing
 
 LEFT, RIGHT = Seat.LEFT, Seat.RIGHT
@@ -210,7 +210,7 @@ def test_the_result_thanks_both_daters_with_an_outro_after_the_verdict():
         PollClosed(),
         SegmentStarted("result"),
         Say(Moment.RESULT, text=script.RESULT_NOT_MUTUAL),
-        ShowVerdict(yes_share=0.78),
+        ShowVerdict(yes_share=0.8),
         Say(Moment.OUTRO),
         Say(Moment.INVITATION, text=script.INVITATION),
         DateEnded(EndReason.COMPLETED, Outcome.NOT_MUTUAL),
@@ -986,17 +986,42 @@ def test_the_verdict_waits_until_both_decisions_are_locked():
         PollClosed(),
         SegmentStarted("result"),
         Say(Moment.RESULT, text=script.RESULT_MUTUAL),
-        ShowVerdict(yes_share=0.78),
+        ShowVerdict(yes_share=0.8),
     ]
 
 
 @pytest.mark.parametrize(
     ("yes", "no", "verdict"),
-    [(0, 0, None), (3, 1, None), (4, 1, ShowVerdict(yes_share=0.8)), (0, 5, ShowVerdict(0.0))],
+    [
+        (0, 0, None),
+        (4, 1, None),
+        (15, 4, None),
+        (16, 4, ShowVerdict(yes_share=0.8)),
+        (0, 20, ShowVerdict(0.0)),
+    ],
 )
-def test_the_verdict_is_hidden_when_fewer_than_five_people_voted(yes, no, verdict):
+def test_the_verdict_is_hidden_when_fewer_than_twenty_people_voted(yes, no, verdict):
+    """A share of a handful of votes is noise, and the daters see it again in their recap."""
     shown = full_date(poll=FakePoll(yes, no)).cues(ShowVerdict)
     assert shown == ([verdict] if verdict else [])
+
+
+@pytest.mark.parametrize(
+    ("yes", "total", "share"),
+    [
+        (78, 100, 0.8),
+        (75, 100, 0.8),
+        (74, 100, 0.7),
+        (81, 100, 0.8),
+        (5, 100, 0.1),
+        (4, 100, 0.0),
+        (100, 100, 1.0),
+        (13, 20, 0.7),
+        (0, 20, 0.0),
+    ],
+)
+def test_the_verdict_is_rounded_to_the_nearest_ten_percent(yes, total, share):
+    assert rounded_share(yes, total) == share
 
 
 # --- Guards -------------------------------------------------------------------------------
