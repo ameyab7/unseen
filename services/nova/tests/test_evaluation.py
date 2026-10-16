@@ -41,6 +41,7 @@ EXPECTED = {
     "room talk during a pause",
     "room talk while they decide",
     "the result",
+    "daters who give no pronouns",
     "dater with an everyday-word name",
     "injection in an audience question",
     "injection in a blind card",
@@ -55,6 +56,8 @@ EXPECTED = {
 
 
 def well_behaved(prompt: str) -> str:
+    if '"first_name": "Robin"' in prompt:
+        return "Good evening, room. On my left, Robin, 32. On my right, Sasha, 27."
     if '"first_name": "Will"' in prompt:
         return "Good evening, room. I hope you will enjoy meeting Will and Hope tonight."
     if "next pair" in prompt:
@@ -426,3 +429,10 @@ def test_the_fake_clock_never_goes_backwards():
     with pytest.raises(ValueError, match="went backwards"):
         clock.now = 5.95
     assert clock() == 6.0
+
+
+async def test_a_line_that_guesses_a_pronoun_for_a_dater_who_gave_none_fails_the_case():
+    model = FakeModel("Good evening, room. Robin is here, and she brought a story. Sasha too.")
+    results = await run_cases(model, live_timeout=1.0, prep_timeout=1.0)
+    case = next(r for r in results if r.name == "daters who give no pronouns")
+    assert "guessed a pronoun" in case.problems

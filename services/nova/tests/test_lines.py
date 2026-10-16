@@ -11,7 +11,7 @@ import pytest
 from nova import prompts, running_order, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
 from nova.cues import Moment, RoomFacts, Say, Segment
-from nova.fixtures import EVERYDAY_PAIR, MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
+from nova.fixtures import EVERYDAY_PAIR, MAYA, NEXT_PAIR, NO_PRONOUNS_PAIR, REHEARSAL_PAIR, THEO
 from nova.guardrails import Violation, check
 from nova.lines import ErrorKind, LineWriter, Source, fallback_lines, names_for, rules_for
 from nova.models import ModelRefused
@@ -600,6 +600,8 @@ async def test_a_framed_question_that_breaks_a_guardrail_gets_todays_fallback(mo
         *((*line, REHEARSAL_PAIR) for line in fallback_lines(REHEARSAL_PAIR, NEXT_PAIR)),
         # Daters called Will and Hope: fallbacks use those words too ("will", "hope").
         *((*line, EVERYDAY_PAIR) for line in fallback_lines(EVERYDAY_PAIR, NEXT_PAIR)),
+        # Daters who gave no pronouns: no fallback needs one.
+        *((*line, NO_PRONOUNS_PAIR) for line in fallback_lines(NO_PRONOUNS_PAIR, NEXT_PAIR)),
     ],
 )
 def test_every_fallback_line_passes_the_guardrails(moment, text, pair):

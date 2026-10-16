@@ -28,9 +28,17 @@ Date: 2026-10-13. Status: accepted.
   It's behind `READ_APPROVED_QUESTION_ON_FAILURE` (off) in `nova/script.py`, and the frame
   waits for sign-off in `docs/sign-off/2026-10-audience-questions.md`.
 - **A blind card is checked when it's made** (`nova/cards.py`), because its first name and
-  age go into fixed and fallback lines that no guardrail checks: a first name is letters,
-  with single spaces, hyphens or apostrophes between them, at most 30 characters; an age
-  is a whole number from 18 to 99.
+  age go into fixed and fallback lines that no guardrail checks, and Nova can't put
+  everything on air: a first name is letters, with single spaces, hyphens or apostrophes
+  between them, at most 30 characters, starting with a capital, and never the host's name
+  (Nova or AI, in any case); an age is a whole number from 18 to 99; there are exactly two
+  prompts, each with a question (at most 60 characters) and an answer (at most 120) that
+  aren't blank; pronouns are optional (the prototype's "Add your own"), and if given are
+  letters, slashes, spaces and hyphens, at most 20 characters. A pair needs two different
+  first names, ignoring case: on audio, "Alex and Alex are deciding, privately" means
+  nothing. When a dater gives no pronouns, the data says `"pronouns": null` and the rules
+  tell the model to use their first name, never a guessed he, she or they; the evaluation
+  has a case for it. The error names the field, never its value.
 - **A dater who wants to stop is never deflected. Distress is heard in two layers**
   (`nova/distress.py`), in everything a dater says on air, to Nova or to the other dater.
   A word-pattern-only check couldn't tell "I want to stop talking to him" (distress) from
@@ -258,5 +266,11 @@ right-hand column above). Before the first real show, Nova needs both of these:
   Claude, every utterance goes to Anthropic, so the cost and the privacy notice need a
   look first.
 - Each model change runs the evaluation first; a failing case blocks the change.
-- The blind card schema in `packages/shared` must apply the same first-name and age rules,
-  so the app never accepts a card Nova can't put on air.
+- The blind card schema in `packages/shared` must apply the same rules, so the app never
+  accepts a card Nova can't put on air: first name letters with single spaces, hyphens or
+  apostrophes, 1 to 30 characters, a capital first letter, and not "Nova" or "AI" in any
+  case (the app's name field should auto-capitalise); age a whole number from 18 to 99;
+  exactly two prompts, each question 1 to 60 characters and each answer 1 to 120, not
+  blank once trimmed; pronouns optional, and if given letters, slashes, spaces and
+  hyphens, at most 20 characters. Casting must not pair two daters with the same first
+  name, ignoring case.

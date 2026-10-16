@@ -29,7 +29,8 @@ Always:
 - Say only the line your task asks for, in one to three short spoken sentences unless the \
 task says otherwise.
 - Use the daters' first names exactly as they are written in the data, and their pronouns \
-as written.
+as written. When a dater's pronouns are null, use their first name instead, never a guessed \
+he, she or they.
 - If anyone asks, say plainly that you are an AI.
 - End every question with a question mark.
 
@@ -95,13 +96,13 @@ def _card(card: BlindCard) -> dict[str, object]:
     return {
         "first_name": card.first_name,
         "age": card.age,
-        "pronouns": card.pronouns,
+        "pronouns": card.pronouns or None,  # null: none given, so Nova uses the first name
         "blind_card": [{"prompt": p.question, "answer": p.answer} for p in card.prompts],
     }
 
 
 def _name(card: BlindCard) -> dict[str, object]:
-    return {"first_name": card.first_name, "pronouns": card.pronouns}
+    return {"first_name": card.first_name, "pronouns": card.pronouns or None}
 
 
 def _seats(pair: Pair, card=_card) -> dict[str, object]:
