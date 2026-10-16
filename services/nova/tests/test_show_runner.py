@@ -441,13 +441,68 @@ def test_the_moderator_can_keep_waiting_until_the_dater_is_back():
     assert (350.0, "from_the_room") in show.segments(), "the running order shifted by 110 s"
 
 
-def test_the_moderator_can_resume_without_the_dater():
+def test_the_moderator_can_resume_without_the_dater_and_nova_welcomes_them_back_later():
+    """Before, a dater who came back after the moderator resumed got nothing, and nothing
+    marked their return. "And we're back." is true then, so Nova says it (decision 0004)."""
     show = paused_and_not_back()
     assert show.at(140, "moderator_resume") == [], "no welcome back: nobody came back"
-    assert show.at(150, "back", LEFT) == [], "the pause is over"
+    assert show.at(150, "back", LEFT) == [WELCOME_BACK]
+    assert show.at(160, "back", LEFT) == [], "once"
     show.until(400)
-    assert show.says(Moment.WELCOME_BACK) == []
     assert (280.0, "from_the_room") in show.segments(), "the running order shifted by 40 s"
+
+
+def resumed_without_maya() -> Show:
+    """Maya (first up) pauses at 100 s and isn't back; the moderator resumes at 140 s, so
+    the running order runs 40 s late."""
+    show = paused_and_not_back()
+    show.at(140, "moderator_resume")
+    return show
+
+
+def test_while_a_dater_is_away_their_last_word_is_skipped_and_the_others_comes_on_time():
+    show = resumed_without_maya()
+    show.until(600)
+    assert [(t, c.about) for t, c in show.says(Moment.LAST_WORD)] == [(485.0, RIGHT)]
+
+
+def test_while_a_dater_is_away_their_first_question_is_skipped():
+    show = Show()
+    show.at(10, "need_a_moment", LEFT)  # during the doors
+    show.until(40)
+    show.at(40, "moderator_resume")
+    show.until(120)
+    assert [(t, c.about) for t, c in show.says(Moment.FIRST_QUESTION)] == [(97.5, RIGHT)]
+
+
+def test_while_a_dater_is_away_a_long_silence_brings_a_prompt_for_the_one_whos_here():
+    show = resumed_without_maya()
+    show.until(170)
+    after = [(t, c) for t, c in show.says(Moment.SILENCE) if t >= 140]
+    assert after == [(158.0, Say(Moment.SILENCE, about=RIGHT))], "20 s after the one at 98 s"
+
+
+def test_once_the_dater_is_back_their_turns_and_both_daters_silences_return():
+    show = resumed_without_maya()
+    show.at(200, "back", LEFT)
+    show.until(600)
+    assert [c.about for _, c in show.says(Moment.LAST_WORD)] == [LEFT, RIGHT]
+    silences = [c for t, c in show.says(Moment.SILENCE) if t > 200]
+    assert silences and all(c.about is None for c in silences)
+
+
+def test_a_return_after_the_date_has_ended_changes_nothing():
+    show = resumed_without_maya()
+    show.until(700)
+    assert show.runner.finished
+    assert show.at(700, "back", LEFT) == []
+
+
+def test_after_a_report_the_reporter_isnt_welcomed_back_their_date_ended_in_the_app():
+    show = Show()
+    show.at(100, "dater_reported", LEFT)
+    show.at(110, "moderator_resume")
+    assert show.at(120, "back", LEFT) == []
 
 
 def test_the_moderator_can_end_the_date_while_waiting():

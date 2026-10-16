@@ -36,6 +36,7 @@ EXPECTED = {
     "last word",
     "next up",
     "silence in free talk",
+    "silence with one dater away",
     "cheeky audience question",
     "audience question about looks",
     "room talk during a pause",
@@ -56,6 +57,8 @@ EXPECTED = {
 
 
 def well_behaved(prompt: str) -> str:
+    if "off air for now" in prompt:
+        return "Theo, what's a small thing that made you smile this week?"
     if '"first_name": "Robin"' in prompt:
         return "Good evening, room. On my left, Robin, 32. On my right, Sasha, 27."
     if '"first_name": "Will"' in prompt:
@@ -201,7 +204,7 @@ async def test_every_line_that_breaks_a_rule_counts_as_a_fallback_with_its_reaso
     results = await run_cases(model, live_timeout=1.0, prep_timeout=1.0)
     rates = fallback_rates(results)
     assert all(rate.replaced == rate.tried for rate in rates.values())
-    assert rates[Moment.SILENCE].reasons["claims_human"] == 1
+    assert rates[Moment.SILENCE].reasons["claims_human"] == 2, "both silence cases"
     assert "100%" in render(results, model_name=model.name)
 
 
@@ -209,7 +212,7 @@ async def test_a_timeout_counts_as_a_fallback():
     model = FakeModel("Maya and Theo, over to you.", delay=0.2)
     results = await run_cases(model, live_timeout=0.05, prep_timeout=1.0)
     rates = fallback_rates(results)
-    assert rates[Moment.SILENCE].replaced == 1 and rates[Moment.SILENCE].reasons["timeout"] == 1
+    assert rates[Moment.SILENCE].replaced == 2 and rates[Moment.SILENCE].reasons["timeout"] == 2
     assert rates[Moment.DOORS_INTRO].reasons["timeout"] == 0, "set pieces have the longer timeout"
 
 
@@ -260,8 +263,8 @@ def test_only_lines_the_room_would_hear_count_towards_repetition():
 async def test_a_model_that_says_the_same_thing_every_time_is_all_repetition():
     model = FakeModel(well_behaved)
     results = await run_cases(model, live_timeout=1.0, prep_timeout=1.0, repeat=3)
-    silence = repetition(results)[Moment.SILENCE]
-    assert silence == Repetition(lines=3, near_duplicates=2, same_opening=2)
+    silence = repetition(results)[Moment.SILENCE]  # two silence cases, three runs each
+    assert silence == Repetition(lines=6, near_duplicates=4, same_opening=4)
 
 
 # --- A full night: the repetition number we track -----------------------------------------

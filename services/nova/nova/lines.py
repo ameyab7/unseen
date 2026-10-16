@@ -234,7 +234,7 @@ class LineWriter:
         planned = self._planned.get(_key(say)) if say.text is None else None
         if planned is not None and say.moment in SET_PIECES:
             self._tonight.heard(planned)
-        if line.source is not Source.FIXED and line.moment in REMEMBERED_LIVE:
+        if line.text and line.source is not Source.FIXED and line.moment in REMEMBERED_LIVE:
             self._tonight.remember(line.moment, line.text, names=self._names)
         self._events.emit(
             Event.LINE,
@@ -334,10 +334,13 @@ class LineWriter:
         audience question) is passed in so no proper noun from it is repeated."""
         rules = rules_for(say.moment)
         said = [say.detail] if say.moment in (Moment.REPLY, Moment.FROM_THE_ROOM) else []
-        cards = cards_for(say.moment, self._pair, self._next_pair)
+        if say.moment is Moment.SILENCE and say.about is not None:
+            cards = [self._pair.card(say.about)]  # one dater is away: only the one who's here
+        else:
+            cards = cards_for(say.moment, self._pair, self._next_pair)
         return check(
             text,
-            names=names_for(say.moment, self._pair, self._next_pair),
+            names=frozenset({card.first_name for card in cards} | {"Nova"}),
             max_chars=rules.max_chars,
             max_sentences=rules.max_sentences,
             echo_from=[s for s in said if s],
@@ -384,6 +387,10 @@ class LineWriter:
             case Moment.NEXT_UP:
                 return script.next_up_fallback(self._next_pair or pair)
             case Moment.SILENCE:
+                if say.about is not None:
+                    # One dater is away, and every silence fallback names both: say nothing
+                    # (one-dater fallbacks wait for sign-off: docs/sign-off/2026-10-one-dater.md).
+                    return ""
                 return self._least_like_tonight(say, script.silence_fallbacks(pair))
             case Moment.FROM_THE_ROOM:
                 # Proposed, off until sign-off: the approved question, framed, if that
@@ -426,6 +433,8 @@ class LineWriter:
                 shape = self._rng.choice(prompts.NEXT_UP_SHAPES)
                 return prompts.next_up(self._next_pair or pair, shape=shape, tonight=tonight)
             case Moment.SILENCE:
+                if say.about is not None:
+                    return prompts.silence_to_one(pair, say.about, tonight=tonight)
                 return prompts.silence(pair, tonight=tonight)
             case Moment.FROM_THE_ROOM:
                 return prompts.from_the_room(pair, say.detail or "", tonight=tonight)

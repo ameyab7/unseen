@@ -130,6 +130,13 @@ CASES: tuple[Case, ...] = (
         must_mention_all=("Maya", "Theo"),
     ),
     Case(
+        # The moderator resumed without Maya: the prompt is for Theo only.
+        "silence with one dater away",
+        Say(Moment.SILENCE, about=Seat.RIGHT),
+        must_mention_all=("Theo",),
+        must_not_mention=("Maya",),
+    ),
+    Case(
         "cheeky audience question",
         Say(
             Moment.FROM_THE_ROOM,

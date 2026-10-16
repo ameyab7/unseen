@@ -131,6 +131,11 @@ class ShowRunner:
         self._away: Seat | None = None  # the dater on a "need a moment"
         self._overdue = False  # not back in time: the moderator decides what happens next
         self._report_hold = False  # the pause is for a report: only the moderator lifts it
+        # A dater the moderator resumed the show without: their turns are skipped, silence
+        # prompts go to the other dater, and if they come back, Nova welcomes them back. Not
+        # after a report: the reporter's date ends in the app.
+        self._absent: Seat | None = None
+        self._absent_reported = False
         self._pauses: dict[Seat, int] = dict.fromkeys(Seat, 0)
         self._poll_open = False
         self._meter_open = True
@@ -205,11 +210,15 @@ class ShowRunner:
         return cues
 
     def back(self, now: float, seat: Seat) -> list[Cue]:
-        """The dater who paused is back: the only time Nova says "And we're back.". Not
-        after a report: the reporter's date ends in the app, and the moderator decides."""
+        """The dater who paused is back, during the pause or after the moderator resumed
+        without them: the only time Nova says "And we're back.". Not after a report: the
+        reporter's date ends in the app, and the moderator decides."""
         cues = self._due(now)
         if self._live and self._away is seat and not self._report_hold:
             self._clear_pause(now)
+            cues.append(Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK))
+        elif self._live and self._absent is seat and not self._absent_reported:
+            self._absent = None
             cues.append(Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK))
         return cues
 
@@ -218,10 +227,15 @@ class ShowRunner:
         return self._due(now)
 
     def moderator_resume(self, now: float) -> list[Cue]:
-        """The show carries on without the dater who paused. Nova says nothing: nobody is back."""
+        """The show carries on without the dater who paused. Nova says nothing: nobody is
+        back. While they're away, their first-question prompt and last word are skipped (the
+        other dater's turn comes on time), and silence prompts go to the other dater only.
+        Their decision is unchanged: they can still decide in the app."""
         cues = self._due(now)
         if self._live and self._away is not None:
+            absent, reported = self._away, self._report_hold
             self._clear_pause(now)
+            self._absent, self._absent_reported = absent, reported
         return cues
 
     def dater_left(self, now: float, seat: Seat) -> list[Cue]:
@@ -423,9 +437,12 @@ class ShowRunner:
                     cues.append(Say(Moment.LIGHTNING_UNLOCKED, text=script.LIGHTNING_UNLOCKED))
                 return cues
             case "first_question":
-                return [*self._enter(Segment.FIRST_QUESTION, at), self._prompt(first)]
+                return [
+                    *self._enter(Segment.FIRST_QUESTION, at),
+                    *self._present(self._prompt(first)),
+                ]
             case "second_prompt":
-                return [self._prompt(second)]
+                return self._present(self._prompt(second))
             case "free_talk":
                 return self._enter(Segment.FREE_TALK, at)
             case "from_the_room":
@@ -449,9 +466,12 @@ class ShowRunner:
                     return []
                 return [running_order.lightning_question(int(str(beat.arg)))]
             case "last_word":
-                return [*self._enter(Segment.LAST_WORD, at), running_order.last_word(first)]
+                return [
+                    *self._enter(Segment.LAST_WORD, at),
+                    *self._present(running_order.last_word(first)),
+                ]
             case "second_last_word":
-                return [running_order.last_word(second)]
+                return self._present(running_order.last_word(second))
             case "time":
                 return self._time(at)
             case "result":
@@ -464,6 +484,10 @@ class ShowRunner:
         self.segment = segment
         self._quiet_since = at
         return [SegmentStarted(segment)]
+
+    def _present(self, say: Say) -> list[Cue]:
+        """A dater's turn, unless they're away after the moderator resumed without them."""
+        return [] if say.about is not None and say.about is self._absent else [say]
 
     def _prompt(self, seat: Seat) -> Say:
         return running_order.first_question(self._pair, seat)
@@ -537,8 +561,11 @@ class ShowRunner:
         return due
 
     def _nudge(self, at: float) -> list[Cue]:
-        """An open prompt to both daters: nobody is singled out for being quiet."""
+        """An open prompt to both daters: nobody is singled out for being quiet. With one
+        away after the moderator resumed without them, to the one who's here."""
         self._last_nudge = at
+        if self._absent is not None:
+            return [Say(Moment.SILENCE, about=self._absent.other)]
         return [Say(Moment.SILENCE)]
 
     def _not_back_in_time(self) -> list[Cue]:
@@ -583,4 +610,5 @@ class ShowRunner:
         self._beats.clear()
         self._held_since, self._away, self._overdue = None, None, False
         self._report_hold = False
+        self._absent, self._absent_reported = None, False
         return [Finished()]

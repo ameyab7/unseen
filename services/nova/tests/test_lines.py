@@ -360,6 +360,31 @@ async def test_a_line_that_breaks_a_guardrail_is_never_spoken():
     assert line.text == script.ROOM_TALK_FALLBACK
 
 
+# --- One dater away (the moderator resumed without them) -----------------------------------
+
+ONE_DATER_SILENCE = Say(Moment.SILENCE, about=RIGHT)  # Maya is away
+
+
+async def test_a_silence_while_one_dater_is_away_is_for_the_one_whos_here():
+    model = FakeModel("Theo, what's a small thing that made you smile this week?")
+    line = await writer(model).line_for(ONE_DATER_SILENCE)
+    assert line.source is Source.MODEL and line.text.startswith("Theo")
+    prompt = model.prompts[0]
+    assert "one of the daters is off air" in instructions(prompt)
+    assert "Maya" not in prompt, "the dater who's away isn't even in the data"
+
+
+async def test_with_one_dater_away_nova_says_nothing_rather_than_a_two_dater_fallback():
+    """Every silence fallback names both daters; one-dater fallbacks wait for sign-off."""
+    line = await writer(FakeModel(error=RuntimeError("down"))).line_for(ONE_DATER_SILENCE)
+    assert (line.text, line.source) == ("", Source.FALLBACK)
+
+
+async def test_a_line_that_names_the_dater_whos_away_is_never_said():
+    line = await writer(FakeModel("Theo, what would Maya say?")).line_for(ONE_DATER_SILENCE)
+    assert line.text == "" and Violation.UNKNOWN_NAME in line.violations
+
+
 async def test_silence_fallbacks_take_turns():
     w = writer(FakeModel(error=RuntimeError("down")))
     texts = [(await w.line_for(Say(Moment.SILENCE))).text for _ in range(4)]

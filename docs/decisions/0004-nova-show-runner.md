@@ -33,7 +33,16 @@ Date: 2026-10-13. Status: accepted.
   only when the dater who paused actually returns. If they aren't back after 30 seconds,
   Nova says "Bear with us a little longer, room." once, the show stays on hold, and the
   moderator is alerted and chooses: keep waiting, resume without the dater (Nova says
-  nothing), or end the date. There is no limit on how often a dater can pause, but the
+  nothing), or end the date. While a dater is away after a resume, their first-question
+  prompt and last word are skipped (the other dater's turn comes on time, never earlier),
+  and a long silence brings a prompt for the dater who's on air only, written by the
+  model from that dater's card alone; if the model fails, Nova says nothing, since every
+  silence fallback names both daters (one-dater fallbacks wait for sign-off in
+  `docs/sign-off/2026-10-one-dater.md`). If the dater comes back while the date is live,
+  Nova says "And we're back.", which is true then (before, a return after a resume got
+  nothing). Their decision is unchanged: they can still decide in the app, and no answer
+  counts as keep it unseen. After a report, the reporter isn't welcomed back: their date
+  ended in the app. There is no limit on how often a dater can pause, but the
   moderator is also alerted when the same dater pauses a second time (counted per dater).
   Alerts go to the moderator console only, never to the room.
 - **A report pauses the date** until the moderator resumes or ends it (the prototype's

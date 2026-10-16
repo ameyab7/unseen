@@ -207,6 +207,19 @@ def silence(pair: Pair, *, tonight: Sequence[str] = ()) -> str:
     )
 
 
+def silence_to_one(pair: Pair, seat: Seat, *, tonight: Sequence[str] = ()) -> str:
+    """A long silence while the other dater is away (the moderator resumed without them):
+    their card isn't in the data, so their name can't come up."""
+    return _task(
+        "there's been a long silence in free talk, and one of the daters is off air for now. "
+        f"Give the dater in the {seat} seat one open, light question to talk about, addressed "
+        "only to them by first name. Don't mention the other dater or why they're away. One "
+        "or two sentences.",
+        {"dater": _card(pair.card(seat))},
+        tonight,
+    )
+
+
 def from_the_room(pair: Pair, question: str, *, tonight: Sequence[str] = ()) -> str:
     return _task(
         "read this approved audience question to the daters. Keep its meaning and phrase it "
