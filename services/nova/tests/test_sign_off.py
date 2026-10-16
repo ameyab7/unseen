@@ -13,7 +13,15 @@ from nova.guardrails import check
 from nova.lines import names_for, rules_for
 
 PAIRS = (REHEARSAL_PAIR, EVERYDAY_PAIR, NO_PRONOUNS_PAIR)
-SIGN_OFF = Path(__file__).parents[3] / "docs" / "sign-off"
+# The repository's docs/sign-off, if it's here: the Docker image holds services/nova only.
+SIGN_OFF = next(
+    (
+        folder / "docs" / "sign-off"
+        for folder in Path(__file__).resolve().parents
+        if (folder / "docs" / "sign-off").is_dir()
+    ),
+    None,
+)
 
 
 def passes(text: str, moment: Moment, names: frozenset[str] | set[str]) -> tuple:
@@ -75,6 +83,8 @@ def test_last_question_lines_say_so_and_the_others_dont():
     ],
 )
 def test_each_sign_off_document_lists_its_drafts_as_written(document, lines):
+    if SIGN_OFF is None:
+        pytest.skip("docs/sign-off isn't in this checkout (the Docker image)")
     text = (SIGN_OFF / document).read_text(encoding="utf-8")
     missing = [line for line in lines if line not in text]
     assert missing == []
