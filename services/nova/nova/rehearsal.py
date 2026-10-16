@@ -27,7 +27,7 @@ from nova.decisions import Choice, DecisionError, InMemoryDecisionDesk
 from nova.distress import Checked, DistressCheck, Verdict
 from nova.events import Event, EventLog
 from nova.lines import LIVE_REACTIONS, Line, LineWriter, Source
-from nova.models import LineModel
+from nova.models import LineModel, warm_up
 from nova.on_air import Closed, OnAirCues, OnAirListener
 from nova.questions import AudienceQuestion, QuestionStatus
 from nova.show_runner import NoVotes, ShowRunner
@@ -125,6 +125,7 @@ class Rehearsal:
         *,
         model: LineModel,
         speaker: Speaker,
+        classifier: LineModel | None = None,
         voice: str,
         stt: str,
         clock: Callable[[], float] = time.monotonic,
@@ -140,6 +141,7 @@ class Rehearsal:
         events: EventLog | None = None,
     ) -> None:
         self.speaker = speaker
+        self._model, self._classifier = model, classifier
         self.voice, self.stt, self.model_name = voice, stt, model.name
         self.prep_budget = prep_budget
         self.utterance_grace, self.utterance_max_wait = utterance_grace, utterance_max_wait
@@ -166,7 +168,7 @@ class Rehearsal:
         )
         self._on_air = OnAirListener(
             self._runner,
-            DistressCheck(model, timeout=distress_timeout, events=self._events),
+            DistressCheck(classifier or model, timeout=distress_timeout, events=self._events),
             deliver=self._take,
             clock=clock,
             grace=utterance_grace,
@@ -216,8 +218,11 @@ class Rehearsal:
 
     async def warm_up(self) -> None:
         """One tiny request to the model before anything else (nova/lines.py), so a cold
-        model loads before prepare() and its budget start."""
+        model loads before prepare() and its budget start; and to the distress check's own
+        model too, if it has one, so its first checks don't time out on the load."""
         self.warm_up_ms = await self._writer.warm_up()
+        if self._classifier is not None and self._classifier is not self._model:
+            await warm_up(self._classifier)
 
     async def prepare(self) -> None:
         started = self._clock()

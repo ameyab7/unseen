@@ -52,6 +52,9 @@ class Settings:
     livekit_api_secret: str = field(repr=False)
     llm: LlmChoice
     anthropic_api_key: str | None = field(default=None, repr=False)
+    # The model for the distress check's labels, if not NOVA_LLM ("provider/model"): a
+    # smaller one can label without queueing behind live lines on the same Ollama.
+    classifier: LlmChoice | None = None
     ollama_base_url: str = "http://localhost:11434"
     # How long a live reaction may take before Nova uses a fallback line instead. Measured:
     # warm Gemma writes a line in about 0.4 s, so 2 s is roughly 4x that. It caps the wait
@@ -89,6 +92,7 @@ class Settings:
     )
     ENV_NAMES: ClassVar[tuple[str, ...]] = (
         *REQUIRED,
+        "NOVA_CLASSIFIER_LLM",
         "ANTHROPIC_API_KEY",
         "OLLAMA_BASE_URL",
         "NOVA_LIVE_TIMEOUT_SECONDS",
@@ -108,9 +112,14 @@ class Settings:
             raise ConfigError(f"Missing in services/nova/.env: {', '.join(missing)}")
 
         llm = LlmChoice.parse(env["NOVA_LLM"])
+        classifier_value = env.get("NOVA_CLASSIFIER_LLM", "").strip()
+        classifier = LlmChoice.parse(classifier_value) if classifier_value else None
         anthropic_api_key = env.get("ANTHROPIC_API_KEY", "").strip() or None
-        if llm.provider == "anthropic" and anthropic_api_key is None:
-            raise ConfigError("ANTHROPIC_API_KEY is required when NOVA_LLM uses anthropic")
+        uses_anthropic = "anthropic" in {llm.provider, classifier.provider if classifier else ""}
+        if uses_anthropic and anthropic_api_key is None:
+            raise ConfigError(
+                "ANTHROPIC_API_KEY is required when NOVA_LLM or NOVA_CLASSIFIER_LLM uses anthropic"
+            )
 
         grace = _seconds(env, "NOVA_UTTERANCE_GRACE_SECONDS", cls.utterance_grace)
         max_wait = _seconds(env, "NOVA_UTTERANCE_MAX_WAIT_SECONDS", cls.utterance_max_wait)
@@ -125,6 +134,7 @@ class Settings:
             livekit_api_secret=env["LIVEKIT_API_SECRET"].strip(),
             llm=llm,
             anthropic_api_key=anthropic_api_key,
+            classifier=classifier,
             ollama_base_url=env.get("OLLAMA_BASE_URL", "").strip() or cls.ollama_base_url,
             live_timeout=_seconds(env, "NOVA_LIVE_TIMEOUT_SECONDS", cls.live_timeout),
             prep_timeout=_seconds(env, "NOVA_PREP_TIMEOUT_SECONDS", cls.prep_timeout),

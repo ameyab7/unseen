@@ -20,6 +20,7 @@ class Sample:
     earlier: tuple[str, ...] = ()
     plain: bool = False  # none of the usual warning words (stop, leave, help, scared...)
     split: tuple[str, ...] = ()  # the sentence as two final transcripts, if it's split
+    other: tuple[str, ...] = ()  # what the other dater said just before, which it answers
 
     @property
     def finals(self) -> tuple[str, ...]:

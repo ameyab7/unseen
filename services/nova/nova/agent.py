@@ -43,7 +43,7 @@ from livekit.agents import (
 
 from nova.config import Settings, load_settings
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
-from nova.models import build_model
+from nova.models import build_classifier, build_model
 from nova.rehearsal import Rehearsal, render_report
 from nova.timing import REHEARSAL
 
@@ -136,6 +136,7 @@ async def rehearse(ctx: JobContext) -> None:
     rehearsal = Rehearsal(
         REHEARSAL_PAIR,
         model=build_model(settings),
+        classifier=build_classifier(settings),
         speaker=SessionSpeaker(session),
         voice=settings.voice,
         stt=settings.stt,

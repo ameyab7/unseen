@@ -39,7 +39,7 @@ class Model:
     async def write(self, *, system: str, prompt: str) -> str:
         return "Here we go, Maya and Theo."
 
-    async def label(self, *, system: str, prompt: str) -> str:
+    async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
         data = prompt.split("<data>")[1]
         sentence = data.split('"sentence": "')[1].split('"')[0]
         self.checked.append((data.split('"earlier": "')[1].split('"')[0], sentence))

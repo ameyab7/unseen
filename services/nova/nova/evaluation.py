@@ -16,12 +16,14 @@ lines, and lines that open the same way).
 writer with tonight's memory, and reports repetition across the whole night. That is the
 number we track.
 
-The distress test set (nova/distress_set.py) runs with the cases, or on its own with
---distress: real distress and ordinary talk that uses the same words, each through the
-real two-layer distress check and show runner, spoken the way speech reaches the on-air
-listener, some of it split across two final transcripts. It reports missed distress
-(target 0), false pauses (target under 1 in 20) and how long the check took. All data here
-is made up.
+The distress sets run with the cases, or on their own with --distress: real distress and
+ordinary talk that uses the same words, each through the real two-layer distress check
+(NOVA_CLASSIFIER_LLM, or NOVA_LLM) and show runner, spoken the way speech reaches the
+on-air listener, some of it split across two final transcripts. The dev set
+(nova/distress_dev.py) is what the check's rules are tuned on; --dev runs it alone. The
+held-out set (nova/distress_set.py) is the measure, reported on its own. Each reports
+missed distress (target 0) and false pauses (target under 1 in 20), with Wilson 95%
+intervals, and how long the check took. All data here is made up.
 """
 
 import argparse
@@ -42,6 +44,7 @@ from nova.config import Settings, load_settings
 from nova.cues import AlertModerator, Cue, Moment, RoomFacts, Say, Segment, Situation
 from nova.decisions import InMemoryDecisionDesk
 from nova.distress import DistressCheck, Verdict
+from nova.distress_dev import DEV_SET
 from nova.distress_set import DISTRESS_SET, Sample
 from nova.events import EventLog
 from nova.fixtures import (
@@ -54,7 +57,7 @@ from nova.fixtures import (
     THEO,
 )
 from nova.lines import CANDIDATES, ErrorKind, LineWriter, Source
-from nova.models import LineModel, build_model
+from nova.models import LineModel, build_classifier, build_model, warm_up
 from nova.on_air import OnAirCues, OnAirListener
 from nova.rehearsal import ms_text
 from nova.show_runner import NoVotes, ShowRunner
@@ -366,13 +369,15 @@ async def hear_on_air(
     check: DistressCheck,
     *finals: str,
     earlier: tuple[str, ...] = (),
+    other: tuple[str, ...] = (),
     pair: Pair = REHEARSAL_PAIR,
     seat: Seat = Seat.LEFT,
     grace: float = Settings.utterance_grace,
     max_wait: float = Settings.utterance_max_wait,
 ) -> Heard:
     """What the show does when a dater says this in free talk, as one or more final
-    transcripts, after saying earlier a few seconds before. The same on-air listener as
+    transcripts, after saying earlier a few seconds before (and after the other dater said
+    other). The same on-air listener as
     the rehearsal (nova/on_air.py) hears it, spoken as in spoken() on a fake clock, so the
     evaluation measures what runs rather than a copy of it."""
     clock = FakeClock(FULL.free_talk + 20.0)
@@ -385,6 +390,8 @@ async def hear_on_air(
     )
     for k, said in enumerate(earlier):
         on_air.remember(seat, said, at=clock.now - 2.0 * (len(earlier) - k))
+    for k, said in enumerate(other):  # the other dater, just before: what this may answer
+        on_air.remember(seat.other, said, at=clock.now - 1.0 * (len(other) - k))
 
     def tick_until(at: float) -> None:
         """Ticks at each moment the listener has something due, up to at."""
@@ -431,6 +438,7 @@ async def run_case(
     model: LineModel,
     case: Case,
     *,
+    classifier: LineModel | None = None,
     live: float,
     prep: float,
     distress: float = 2.0,
@@ -446,7 +454,9 @@ async def run_case(
     note = None
     if moment is Moment.REPLY:
         check = DistressCheck(
-            model, timeout=distress, events=EventLog(logging.getLogger("nova.evaluation"))
+            classifier or model,
+            timeout=distress,
+            events=EventLog(logging.getLogger("nova.evaluation")),
         )
         words = case.say.detail or ""
         heard = await hear_on_air(
@@ -514,6 +524,7 @@ async def run_case(
 async def run_cases(
     model: LineModel,
     *,
+    classifier: LineModel | None = None,
     live_timeout: float,
     prep_timeout: float,
     distress_timeout: float = 2.0,
@@ -528,6 +539,7 @@ async def run_cases(
                 await run_case(
                     model,
                     case,
+                    classifier=classifier,
                     live=live_timeout,
                     prep=prep_timeout,
                     distress=distress_timeout,
@@ -542,6 +554,25 @@ async def run_cases(
 
 MISSED_LIMIT = 0  # real distress that got no pause and no alert
 FALSE_PAUSE_LIMIT = 1 / 20  # ordinary talk paused, as a share of all ordinary talk: under
+HELD_OUT = "held-out set (nova/distress_set.py)"
+DEV = "dev set (nova/distress_dev.py)"
+
+
+def wilson(hits: int, of: int, z: float = 1.96) -> tuple[float, float]:
+    """The Wilson score interval for hits of a sample: 95% by default. With 45 sentences a
+    side, zero misses still allows a true miss rate around 8%."""
+    if of == 0:
+        return 0.0, 1.0
+    p = hits / of
+    centre = (p + z * z / (2 * of)) / (1 + z * z / of)
+    half = z * math.sqrt(p * (1 - p) / of + z * z / (4 * of * of)) / (1 + z * z / of)
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
+def rate_text(hits: int, of: int) -> str:
+    low, high = wilson(hits, of)
+    share = hits / of if of else 0.0
+    return f"{hits} of {of}, {share:.1%} (95% CI {low:.1%} to {high:.1%})"
 
 
 @dataclass(frozen=True)
@@ -580,7 +611,12 @@ async def run_distress(
     for sample in samples:
         for _ in range(repeat):
             heard = await hear_on_air(
-                check, *sample.finals, earlier=sample.earlier, grace=grace, max_wait=max_wait
+                check,
+                *sample.finals,
+                earlier=sample.earlier,
+                other=sample.other,
+                grace=grace,
+                max_wait=max_wait,
             )
             results.append(DistressResult(sample, heard))
     return results
@@ -657,12 +693,14 @@ def distress_summary(results: list[DistressResult]) -> DistressSummary:
     )
 
 
-def render_distress(results: list[DistressResult], *, model_name: str) -> str:
+def render_distress(
+    results: list[DistressResult], *, model_name: str, set_name: str = HELD_OUT
+) -> str:
     t = distress_summary(results)
     paused = t.paused_instantly + t.paused_by_meaning
     verdict = {True: "PASSED", False: "FAILED"}
     lines = [
-        f"Nova distress check: {model_name}, {len(results)} sentences "
+        f"Nova distress check, {set_name}: {model_name}, {len(results)} sentences "
         f"({t.real} real distress, {t.ordinary} ordinary talk)",
         "",
         f"Real distress: {paused} paused ({t.paused_instantly} by the instant layer, "
@@ -679,9 +717,10 @@ def render_distress(results: list[DistressResult], *, model_name: str) -> str:
         "(failed or too slow, so the moderator was alerted)",
         "",
         "Targets",
-        f"  Missed distress: {t.missed} (target 0): {verdict[t.missed <= MISSED_LIMIT]}",
-        f"  False pauses: {t.false_pauses} of {t.ordinary}, {t.false_pause_rate:.1%} "
-        f"(target under 1 in 20): {verdict[t.false_pause_rate < FALSE_PAUSE_LIMIT]}",
+        f"  Missed distress: {rate_text(t.missed, t.real)} (target 0): "
+        f"{verdict[t.missed <= MISSED_LIMIT]}",
+        f"  False pauses: {rate_text(t.false_pauses, t.ordinary)} (target under 1 in 20): "
+        f"{verdict[t.false_pause_rate < FALSE_PAUSE_LIMIT]}",
     ]
     off = [r for r in results if not r.as_hoped]
     if off:
@@ -692,7 +731,8 @@ def render_distress(results: list[DistressResult], *, model_name: str) -> str:
             what = "false pause" if r.outcome == "paused" else "false alert"
         layer = str(r.heard.layer) if r.heard.verdict is None else f"meaning: {r.heard.verdict}"
         before = f"  (after: {' '.join(r.sample.earlier)})" if r.sample.earlier else ""
-        lines.append(f"  {what:<12}[{layer}]  {' / '.join(r.sample.finals)}{before}")
+        other = f"  (answering: {' '.join(r.sample.other)})" if r.sample.other else ""
+        lines.append(f"  {what:<12}[{layer}]  {' / '.join(r.sample.finals)}{before}{other}")
     return "\n".join(lines)
 
 
@@ -973,11 +1013,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--night", action="store_true", help="run a full night of eight dates instead"
     )
-    parser.add_argument("--distress", action="store_true", help="run only the distress test set")
+    parser.add_argument(
+        "--distress", action="store_true", help="run only the distress sets, dev and held-out"
+    )
+    parser.add_argument("--dev", action="store_true", help="run only the distress dev set")
     args = parser.parse_args(argv)
 
     settings = load_settings()
     model = build_model(settings)
+    classifier = build_classifier(settings)
     if args.night:
         night = asyncio.run(
             run_night(
@@ -990,11 +1034,16 @@ def main(argv: list[str] | None = None) -> int:
         print(render_night(night, model_name=model.name))
         return 0
 
-    async def evaluate() -> tuple[list[CaseResult], list[DistressResult]]:
+    sets = [(DEV, DEV_SET)] if args.dev else [(DEV, DEV_SET), (HELD_OUT, DISTRESS_SET)]
+
+    async def evaluate() -> tuple[list[CaseResult], list[tuple[str, list[DistressResult]]]]:
+        for warming in {model.name: model, classifier.name: classifier}.values():
+            await warm_up(warming)  # a cold load would time out every 2 s check
         results = []
-        if not args.distress:
+        if not (args.distress or args.dev):
             results = await run_cases(
                 model,
+                classifier=classifier,
                 live_timeout=settings.live_timeout,
                 prep_timeout=settings.prep_timeout,
                 distress_timeout=settings.distress_timeout,
@@ -1002,20 +1051,30 @@ def main(argv: list[str] | None = None) -> int:
                 max_wait=settings.utterance_max_wait,
                 repeat=args.repeat,
             )
-        distress = await run_distress(
-            model,
-            timeout=settings.distress_timeout,
-            grace=settings.utterance_grace,
-            max_wait=settings.utterance_max_wait,
-            repeat=args.repeat,
-        )
+        distress = [
+            (
+                name,
+                await run_distress(
+                    classifier,
+                    timeout=settings.distress_timeout,
+                    grace=settings.utterance_grace,
+                    max_wait=settings.utterance_max_wait,
+                    repeat=args.repeat,
+                    samples=samples,
+                ),
+            )
+            for name, samples in sets
+        ]
         return results, distress
 
     results, distress = asyncio.run(evaluate())
     if results:
         print(render(results, model_name=model.name), end="\n\n")
-    print(render_distress(distress, model_name=model.name))
-    passed = all(result.passed for result in results) and distress_summary(distress).passed
+    for name, set_results in distress:
+        print(render_distress(set_results, model_name=classifier.name, set_name=name), end="\n\n")
+    passed = all(result.passed for result in results) and all(
+        distress_summary(set_results).passed for _, set_results in distress
+    )
     return 0 if passed else 1
 
 
