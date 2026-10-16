@@ -71,7 +71,9 @@ EVERYDAY_PAIR = Pair(
 NO_PRONOUNS_PAIR = Pair(
     _card(
         "Robin", 32, "",
-        ("Ask me about", "the summer I spent on a narrowboat."),
+        # Not a boat: the model said "lived on a narrowboat", which the address check
+        # rightly stops, and this pair tests pronouns.
+        ("Ask me about", "the summer I learned to surf."),
         ("My hidden talent", "is remembering every film I've seen."),
     ),
     _card(
