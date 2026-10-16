@@ -40,3 +40,22 @@ def test_similarity_is_by_words_ignoring_case_and_punctuation():
     assert words("Thank you, Maya!") == ["thank", "you", "maya"]
     assert similarity("Thank you, room.", "thank you room") == 1.0
     assert similarity("Mountains or sea?", "Early bird or night owl?") < 0.5
+
+
+def test_a_planned_set_piece_is_shown_at_once_and_kept_once_it_is_spoken():
+    tonight = Tonight()
+    spoken = tonight.plan(Moment.OUTRO, "Thank you, Maya and Theo.", names=["Maya", "Theo"])
+    tonight.plan(Moment.LAST_WORD, "Theo, the last word is yours.", names=["Maya", "Theo"])
+    assert tonight.said(Moment.OUTRO) == [f"Thank you, {NAME} and {NAME}."], "seen while planned"
+    tonight.heard(spoken)
+    tonight.drop([spoken])
+    assert tonight.said(Moment.OUTRO) == [f"Thank you, {NAME} and {NAME}."]
+
+
+def test_a_planned_set_piece_the_date_never_spoke_is_dropped_when_it_finishes():
+    tonight = Tonight()
+    tonight.remember(Moment.OUTRO, "Thank you, Sam and Priya.", names=["Sam", "Priya"])
+    unspoken = tonight.plan(Moment.OUTRO, "Thank you, Maya and Theo.", names=["Maya", "Theo"])
+    tonight.drop([unspoken])
+    assert tonight.said(Moment.OUTRO) == [f"Thank you, {NAME} and {NAME}."], "the heard one stays"
+    assert tonight.closeness(Moment.OUTRO, "Thank you, Ben and Tom.", names=["Ben", "Tom"]) == 1.0

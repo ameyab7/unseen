@@ -126,6 +126,7 @@ class FakeRehearsal:
         self.listening = asyncio.Event()
         self.listening_at_the_start = False
         self.stopped_listening = False
+        self.order: list[str] = []
         FakeRehearsal.last = self
 
     async def listen(self) -> None:
@@ -135,7 +136,11 @@ class FakeRehearsal:
         finally:
             self.stopped_listening = True
 
+    async def warm_up(self) -> None:
+        self.order.append("warm_up")
+
     async def prepare(self) -> None:
+        self.order.append("prepare")
         await self.listening.wait()  # a dater may speak while set pieces are prepared
 
     async def run(self) -> None:
@@ -216,3 +221,11 @@ async def test_daters_are_heard_from_the_start_of_the_session_until_the_date_is_
     assert rehearsal.stopped_listening
     assert rehearsal.options["utterance_grace"] == SETTINGS.utterance_grace
     assert rehearsal.options["utterance_max_wait"] == SETTINGS.utterance_max_wait
+
+
+async def test_the_model_is_warmed_up_before_set_pieces_are_prepared(monkeypatch, tmp_path):
+    """A cold model takes 20-28 s to load: the warm-up takes that, not the prep budget."""
+    await rehearse(monkeypatch, tmp_path)
+    rehearsal = FakeRehearsal.last
+    assert rehearsal is not None and rehearsal.order == ["warm_up", "prepare"]
+    assert rehearsal.options["prep_budget"] == SETTINGS.prep_budget

@@ -133,6 +133,7 @@ class Rehearsal:
         first_up: Seat | None = None,
         live_timeout: float = 2.0,
         prep_timeout: float = 60.0,
+        prep_budget: float = Settings.prep_budget,
         distress_timeout: float = 2.0,
         utterance_grace: float = Settings.utterance_grace,
         utterance_max_wait: float = Settings.utterance_max_wait,
@@ -140,6 +141,7 @@ class Rehearsal:
     ) -> None:
         self.speaker = speaker
         self.voice, self.stt, self.model_name = voice, stt, model.name
+        self.prep_budget = prep_budget
         self.utterance_grace, self.utterance_max_wait = utterance_grace, utterance_max_wait
         self._clock = clock
         self._events = events or EventLog()
@@ -158,6 +160,7 @@ class Rehearsal:
             next_pair=next_pair,
             live_timeout=live_timeout,
             prep_timeout=prep_timeout,
+            prep_budget=prep_budget,
             events=self._events,
             tonight=Tonight(),
         )
@@ -180,10 +183,16 @@ class Rehearsal:
         self.alerts = 0
         self.characters_spoken = 0
         self.prep_ms = 0
+        self.warm_up_ms: int | None = None
 
     @property
     def finished(self) -> bool:
         return self._runner.finished
+
+    @property
+    def prep_budget_exhausted(self) -> bool:
+        """The prep budget ran out, so some set pieces use their fallback."""
+        return self._writer.budget_exhausted
 
     @property
     def checks(self) -> list[Checked]:
@@ -204,6 +213,11 @@ class Rehearsal:
         return end - self._started_at
 
     # --- The date ---------------------------------------------------------------------------
+
+    async def warm_up(self) -> None:
+        """One tiny request to the model before anything else (nova/lines.py), so a cold
+        model loads before prepare() and its budget start."""
+        self.warm_up_ms = await self._writer.warm_up()
 
     async def prepare(self) -> None:
         started = self._clock()
@@ -241,6 +255,7 @@ class Rehearsal:
         finally:
             speaking.cancel()
             self._on_air.cancel()
+            self._writer.finish()
             self._ended_at = self._clock()
 
     async def speak_queued(self) -> None:
@@ -489,10 +504,18 @@ def render_report(rehearsal: Rehearsal) -> str:
     """Codes and numbers only: never what anyone said, typed or heard."""
     r = rehearsal
     cost = estimate_cost(r.stt, r.listened_seconds, r.voice, r.characters_spoken)
+    budget = (
+        f" The prep budget ({r.prep_budget:g} s) ran out: every set piece not ready by then "
+        "used its fallback."
+        if r.prep_budget_exhausted
+        else ""
+    )
+    warmed = r.warm_up_ms
+    warm_up = f"Model warmed up in {warmed / 1000:.1f} s. " if warmed is not None else ""
     lines = [
         f"Nova rehearsal: voice {r.voice}, model {r.model_name}, speech recognition {r.stt}",
-        f"Set pieces prepared in {r.prep_ms / 1000:.1f} s. {len(r.spoken)} lines spoken, "
-        f"{r.alerts} moderator alerts.",
+        f"{warm_up}Set pieces prepared in {r.prep_ms / 1000:.1f} s.{budget} {len(r.spoken)} "
+        f"lines spoken, {r.alerts} moderator alerts.",
         "",
         f"  {'moment':<20}{'kind':<10}{'source':<10}{'from cue':>10}{'from free':>11}"
         f"{'from sentence end':>19}{'grace':>9}{'model':>8}",

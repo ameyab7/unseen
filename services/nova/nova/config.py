@@ -61,6 +61,10 @@ class Settings:
     # How long a set piece may take before the date. Loading Gemma cold took 28 s, so 60 s
     # covers a cold start plus the line; the date only starts once these are ready.
     prep_timeout: float = 60.0
+    # How long preparing all of a date's set pieces may take. When it runs out, every set
+    # piece not yet chosen gets its fallback and the date can start, so a model that hangs
+    # holds a show for this long, not ten set pieces times the prep timeout.
+    prep_budget: float = 45.0
     # How long the distress check (decision 0005, the meaning layer) may take before the
     # moderator is alerted instead. A "yes" pauses the dater only once it arrives, so this
     # also bounds how late the kind line can come.
@@ -89,6 +93,7 @@ class Settings:
         "OLLAMA_BASE_URL",
         "NOVA_LIVE_TIMEOUT_SECONDS",
         "NOVA_PREP_TIMEOUT_SECONDS",
+        "NOVA_PREP_BUDGET_SECONDS",
         "NOVA_DISTRESS_TIMEOUT_SECONDS",
         "NOVA_UTTERANCE_GRACE_SECONDS",
         "NOVA_UTTERANCE_MAX_WAIT_SECONDS",
@@ -123,6 +128,7 @@ class Settings:
             ollama_base_url=env.get("OLLAMA_BASE_URL", "").strip() or cls.ollama_base_url,
             live_timeout=_seconds(env, "NOVA_LIVE_TIMEOUT_SECONDS", cls.live_timeout),
             prep_timeout=_seconds(env, "NOVA_PREP_TIMEOUT_SECONDS", cls.prep_timeout),
+            prep_budget=_seconds(env, "NOVA_PREP_BUDGET_SECONDS", cls.prep_budget),
             distress_timeout=_seconds(env, "NOVA_DISTRESS_TIMEOUT_SECONDS", cls.distress_timeout),
             utterance_grace=grace,
             utterance_max_wait=max_wait,

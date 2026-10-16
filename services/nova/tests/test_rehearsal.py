@@ -11,7 +11,7 @@ from nova.cards import Seat
 from nova.config import Settings
 from nova.cues import AlertModerator, ModeratorAlert, Moment
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
-from nova.lines import Source
+from nova.lines import LineWriter, Source
 from nova.rehearsal import (
     Command,
     Kind,
@@ -509,6 +509,48 @@ async def test_the_date_ends_and_is_reported_even_if_nova_is_stuck_mid_line():
     await asyncio.wait_for(r.run(every=0, final_wait=0.05), 5)
     assert r.finished
     assert "Targets" in render_report(r)
+
+
+async def test_set_pieces_the_date_never_spoke_leave_tonights_memory_when_it_ends(monkeypatch):
+    finished: list[LineWriter] = []
+    monkeypatch.setattr(LineWriter, "finish", lambda writer: finished.append(writer))
+    clock = TickingClock()
+    r = rehearsal(clock, StuckVoice(clock))
+    await r.prepare()
+    await asyncio.wait_for(r.run(every=0, final_wait=0.05), 5)
+    assert len(finished) == 1
+
+
+class HangingModel(FakeModel):
+    async def write(self, *, system: str, prompt: str) -> str:
+        await asyncio.Event().wait()
+        return ""
+
+
+async def test_the_report_says_when_the_prep_budget_ran_out():
+    clock = Clock()
+    r = Rehearsal(
+        REHEARSAL_PAIR,
+        model=HangingModel(),
+        speaker=FakeSpeaker(clock),
+        clock=clock,
+        timing=REHEARSAL,
+        voice="fake/voice",
+        stt="deepgram/nova-3",
+        prep_budget=0.05,
+    )
+    await r.prepare()
+    assert r.prep_budget_exhausted
+    assert "The prep budget (0.05 s) ran out" in render_report(r)
+    assert "ran out" not in render_report(rehearsal(clock)), "only when it did"
+
+
+async def test_the_model_is_warmed_up_with_one_tiny_request_whatever_it_answers(caplog):
+    caplog.set_level(logging.INFO, logger="nova")
+    r = rehearsal(Clock())
+    await r.warm_up()  # FakeModel can't label "Say ok.": a failure is ignored
+    assert r.warm_up_ms is not None and "warmup ms=" in caplog.text
+    assert "Model warmed up in" in render_report(r)
 
 
 # --- Chat drives the show ------------------------------------------------------------------

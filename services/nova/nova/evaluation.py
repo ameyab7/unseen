@@ -838,14 +838,21 @@ class NightLine:
 class Night:
     lines: tuple[NightLine, ...]
     prep_ms: tuple[int, ...]  # preparing each date's set pieces
+    budget_exhausted: int = 0  # dates whose prep budget ran out
 
 
 async def run_night(
-    model: LineModel, *, live_timeout: float, prep_timeout: float, pairs=NIGHT
+    model: LineModel,
+    *,
+    live_timeout: float,
+    prep_timeout: float,
+    prep_budget: float = Settings.prep_budget,
+    pairs=NIGHT,
 ) -> Night:
     tonight = Tonight()
     lines: list[NightLine] = []
     prep_ms: list[int] = []
+    exhausted = 0
     for n, pair in enumerate(pairs):
         next_pair = pairs[n + 1] if n + 1 < len(pairs) else None
         writer = LineWriter(
@@ -854,12 +861,14 @@ async def run_night(
             next_pair=next_pair,
             live_timeout=live_timeout,
             prep_timeout=prep_timeout,
+            prep_budget=prep_budget,
             events=EventLog(logging.getLogger("nova.evaluation")),
             tonight=tonight,
         )
         started = time.monotonic()
         await writer.prepare()
         prep_ms.append(round((time.monotonic() - started) * 1000))
+        exhausted += writer.budget_exhausted
         names = [card.first_name for p in (pair, next_pair) if p for card in (p.left, p.right)]
         for say in date_cues(pair, next_pair, n):
             line = await writer.line_for(say)
@@ -867,7 +876,8 @@ async def run_night(
                 (str(line.error),) if line.error else ()
             )
             lines.append(NightLine(n + 1, line.moment, mask(line.text, names), line.source, why))
-    return Night(tuple(lines), tuple(prep_ms))
+        writer.finish()
+    return Night(tuple(lines), tuple(prep_ms), exhausted)
 
 
 def night_summary(night: Night) -> tuple[dict[Moment, FallbackRate], dict[Moment, Repetition]]:
@@ -894,7 +904,8 @@ def render_night(night: Night, *, model_name: str) -> str:
     lines = [
         f"Nova full night: {model_name}, {dates} dates, {len(night.lines)} lines",
         f"Preparing set pieces, {CANDIDATES} candidates each: median "
-        f"{statistics.median(prep) / 1000:.1f} s a date, at most {prep[-1] / 1000:.1f} s",
+        f"{statistics.median(prep) / 1000:.1f} s a date, at most {prep[-1] / 1000:.1f} s; "
+        f"the prep budget ran out on {night.budget_exhausted} of {dates} dates",
     ]
     for moment in Moment:
         heard = [line for line in night.lines if line.moment is moment]
@@ -928,7 +939,12 @@ def main(argv: list[str] | None = None) -> int:
     model = build_model(settings)
     if args.night:
         night = asyncio.run(
-            run_night(model, live_timeout=settings.live_timeout, prep_timeout=settings.prep_timeout)
+            run_night(
+                model,
+                live_timeout=settings.live_timeout,
+                prep_timeout=settings.prep_timeout,
+                prep_budget=settings.prep_budget,
+            )
         )
         print(render_night(night, model_name=model.name))
         return 0

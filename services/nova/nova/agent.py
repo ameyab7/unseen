@@ -2,8 +2,9 @@
 
     uv run python -m nova.agent dev
 
-Then open agents-playground.livekit.io, choose the project and connect. Nova prepares its
-set pieces, waits for you, and runs one rehearsal date (about three minutes) as the host
+Then open agents-playground.livekit.io, choose the project and connect. Nova warms the model
+up, prepares its set pieces within the prep budget (NOVA_PREP_BUDGET_SECONDS), waits for
+you, and runs one rehearsal date (about three minutes) as the host
 of Maya and Theo. You play both daters: speak, start with "Nova, ..." to talk to Nova, and
 type commands in the chat box (nova/rehearsal.py, Command): maya, theo, moment, back,
 unlock, ask <question>, reveal, unseen, keep, resume, end, leave, report. What daters say
@@ -142,6 +143,7 @@ async def rehearse(ctx: JobContext) -> None:
         next_pair=NEXT_PAIR,
         live_timeout=settings.live_timeout,
         prep_timeout=settings.prep_timeout,
+        prep_budget=settings.prep_budget,
         distress_timeout=settings.distress_timeout,
         utterance_grace=settings.utterance_grace,
         utterance_max_wait=settings.utterance_max_wait,
@@ -163,9 +165,13 @@ async def rehearse(ctx: JobContext) -> None:
     session.on("user_state_changed", on_user_state)
     session.on("user_input_transcribed", on_transcript)
 
+    async def get_ready() -> None:
+        await rehearsal.warm_up()  # a cold model loads here, not inside the prep budget
+        await rehearsal.prepare()
+
     # Daters are heard on time from their first word, while set pieces are still written.
     listening = asyncio.create_task(rehearsal.listen())
-    preparing = asyncio.create_task(rehearsal.prepare())
+    preparing = asyncio.create_task(get_ready())
     try:
         await session.start(
             agent=Agent(instructions="Nova's lines come from the show runner; no replies here."),
