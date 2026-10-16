@@ -2,6 +2,7 @@
 line whenever the model is slow, fails, or writes something a guardrail rejects."""
 
 import asyncio
+import dataclasses
 import logging
 import random
 import time
@@ -11,6 +12,7 @@ import pytest
 from nova import prompts, running_order, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
 from nova.cues import Moment, RoomFacts, Say, Segment, Situation
+from nova.evaluation import INJECTED_CARD
 from nova.fixtures import EVERYDAY_PAIR, MAYA, NEXT_PAIR, NO_PRONOUNS_PAIR, REHEARSAL_PAIR, THEO
 from nova.guardrails import Violation, check
 from nova.lines import ErrorKind, LineWriter, Source, fallback_lines, names_for, rules_for
@@ -698,3 +700,68 @@ async def test_logs_hold_events_and_timings_never_text(caplog):
     assert "line moment=reply" in caplog.text and "prepared" in caplog.text
     for secret in ("ZEBRA", "QUOKKA", "PANGOLIN", "555", "OKAPI", "Maya", "Theo"):
         assert secret not in caplog.text, secret
+
+
+# --- Card-based fallbacks (proposed, off until signed off) ----------------------------------
+
+
+def approved(pair: Pair) -> Pair:
+    return Pair(
+        dataclasses.replace(pair.left, approved_for_air=True),
+        dataclasses.replace(pair.right, approved_for_air=True),
+    )
+
+
+async def test_card_fallbacks_stay_off_until_signed_off():
+    assert script.CARD_FALLBACKS_ON is False
+    w = writer(FakeModel(error=RuntimeError("down")), pair=approved(REHEARSAL_PAIR))
+    line = await w.line_for(Say(Moment.DOORS_INTRO))
+    assert line.text == script.doors_fallback(REHEARSAL_PAIR)
+
+
+async def test_with_sign_off_an_approved_clean_card_is_quoted_in_the_daters_words(monkeypatch):
+    monkeypatch.setattr(script, "CARD_FALLBACKS_ON", True)
+    w = writer(FakeModel(error=RuntimeError("down")), pair=approved(REHEARSAL_PAIR))
+    line = await w.line_for(Say(Moment.DOORS_INTRO))
+    assert line.text == (
+        "Good evening, room. On my left, Maya, 29, whose card says: ask me about my worst "
+        "haircut. On my right, Theo, 31, whose card says: I claim I can parallel park anything."
+    )
+    assert line.source is Source.FALLBACK
+
+
+async def test_with_sign_off_next_up_quotes_the_next_pairs_cards(monkeypatch):
+    monkeypatch.setattr(script, "CARD_FALLBACKS_ON", True)
+    w = writer(FakeModel(error=RuntimeError("down")), next_pair=approved(NEXT_PAIR))
+    line = await w.line_for(Say(Moment.NEXT_UP, detail=NEXT_PAIR.label))
+    assert line.text.startswith("Up next, Sam, 29, whose card says: I'm weirdly good at")
+
+
+async def test_an_unapproved_card_gets_todays_fallback(monkeypatch):
+    monkeypatch.setattr(script, "CARD_FALLBACKS_ON", True)
+    pair = Pair(dataclasses.replace(MAYA, approved_for_air=True), THEO)  # Theo's isn't
+    line = await writer(FakeModel(error=RuntimeError("down")), pair=pair).line_for(
+        Say(Moment.DOORS_INTRO)
+    )
+    assert line.text == script.doors_fallback(pair)
+
+
+async def test_an_approved_card_with_injected_instructions_gets_todays_fallback(monkeypatch):
+    monkeypatch.setattr(script, "CARD_FALLBACKS_ON", True)
+    pair = approved(Pair(INJECTED_CARD, THEO))
+    line = await writer(FakeModel(error=RuntimeError("down")), pair=pair).line_for(
+        Say(Moment.DOORS_INTRO)
+    )
+    assert line.text == script.doors_fallback(pair), "the guardrails stop it"
+
+
+async def test_a_card_line_too_long_for_its_moment_gets_todays_fallback(monkeypatch):
+    monkeypatch.setattr(script, "CARD_FALLBACKS_ON", True)
+    long = Prompt("Ask me about", "the time " + "we walked and walked " * 5 + "home.")
+    maya = dataclasses.replace(MAYA, prompts=(long, MAYA.prompts[1]))
+    theo = dataclasses.replace(THEO, prompts=(long, THEO.prompts[1]))
+    pair = approved(Pair(maya, theo))  # each card fits; the line is over 320 characters
+    line = await writer(FakeModel(error=RuntimeError("down")), pair=pair).line_for(
+        Say(Moment.DOORS_INTRO)
+    )
+    assert line.text == script.doors_fallback(pair)

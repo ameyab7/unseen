@@ -26,7 +26,12 @@ Date: 2026-10-13. Status: accepted.
   approved: when the model fails on it, Nova reads it framed ("From the room: <question>"),
   but only if that line passes the guardrails for the moment; otherwise today's fallback.
   It's behind `READ_APPROVED_QUESTION_ON_FAILURE` (off) in `nova/script.py`, and the frame
-  waits for sign-off in `docs/sign-off/2026-10-audience-questions.md`.
+  waits for sign-off in `docs/sign-off/2026-10-audience-questions.md`. *Also proposed:* the
+  doors and Next up fallbacks quote the daters' cards in their own words ("whose card says:
+  ask me about my worst haircut.") when a person at casting has approved both cards
+  (`BlindCard.approved_for_air`) and the line passes the guardrails for its moment;
+  otherwise today's line. Behind `CARD_FALLBACKS_ON` (off); the templates wait for sign-off
+  in `docs/sign-off/2026-10-card-fallbacks.md`.
 - **A blind card is checked when it's made** (`nova/cards.py`), because its first name and
   age go into fixed and fallback lines that no guardrail checks, and Nova can't put
   everything on air: a first name is letters, with single spaces, hyphens or apostrophes
@@ -312,4 +317,5 @@ right-hand column above). Before the first real show, Nova needs these:
   exactly two prompts, each question 1 to 60 characters and each answer 1 to 120, not
   blank once trimmed; pronouns optional, and if given letters, slashes, spaces and
   hyphens, at most 20 characters. Casting must not pair two daters with the same first
-  name, ignoring case.
+  name, ignoring case. The schema and the console also carry `approved_for_air`, set when a
+  person at casting has approved the card's text (decision 0005's proposed card fallbacks).

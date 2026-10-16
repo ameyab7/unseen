@@ -5,7 +5,7 @@ these, never the language model. Each line names its source; a new line needs th
 product owner's sign-off before it goes on air.
 """
 
-from nova.cards import BlindCard, Pair
+from nova.cards import BlindCard, Pair, Prompt
 from nova.decisions import Outcome
 
 # Brand book, "Nova on air".
@@ -67,6 +67,40 @@ ROOM_TALK_FALLBACK = "Thanks for keeping the chat kind tonight, room."
 REPLY_FALLBACK = "I'm the AI host, so I'll stay out of that one. Back to you two."
 # Instead of the line above when what the dater said might be distress ("help").
 TAKE_YOUR_TIME = "Take all the time you need."
+
+
+# Proposed, not signed off (docs/sign-off/2026-10-card-fallbacks.md): when the model fails,
+# the doors and Next up fallbacks quote the daters' own cards, in their words, once a person
+# at casting has approved both cards and the line passes the guardrails. Off until signed off.
+CARD_FALLBACKS_ON = False
+
+
+def card_says(prompt: Prompt) -> str:
+    """The card as the dater wrote it: the app's fixed question with its first letter
+    lowercased (not the pronoun I: "I claim I can"), then the answer as written, ending a
+    sentence. No grammar is rewritten."""
+    question = prompt.question
+    if question.split(" ", 1)[0].split("'", 1)[0] != "I":
+        question = question[:1].lower() + question[1:]
+    answer = prompt.answer.strip()
+    return f"{question} {answer}" + ("" if answer[-1:] in ".?!" else ".")
+
+
+def doors_from_cards(pair: Pair) -> str:
+    left, right = pair.left, pair.right
+    return (
+        f"Good evening, room. On my left, {left.label}, whose card says: "
+        f"{card_says(left.prompts[0])} On my right, {right.label}, whose card says: "
+        f"{card_says(right.prompts[0])}"
+    )
+
+
+def next_up_from_cards(pair: Pair) -> str:
+    left, right = pair.left, pair.right
+    return (
+        f"Up next, {left.label}, whose card says: {card_says(left.prompts[0])} And "
+        f"{right.label}, whose card says: {card_says(right.prompts[0])}"
+    )
 
 
 def doors_fallback(pair: Pair) -> str:

@@ -47,12 +47,15 @@ class Prompt:
 @dataclass(frozen=True)
 class BlindCard:
     """pronouns: as the dater wrote them, or empty if they gave none (the prototype makes
-    them optional); Nova then uses their first name, never a guessed pronoun."""
+    them optional); Nova then uses their first name, never a guessed pronoun.
+    approved_for_air: a person at casting approved the card's text, so a fallback may quote
+    it (decision 0005, proposed; off until signed off)."""
 
     first_name: str
     age: int
     pronouns: str
     prompts: tuple[Prompt, Prompt]
+    approved_for_air: bool = False
 
     def __post_init__(self) -> None:
         name = self.first_name
