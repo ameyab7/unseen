@@ -31,47 +31,79 @@ Date: 2026-10-13. Status: accepted.
   A word-pattern-only check couldn't tell "I want to stop talking to him" (distress) from
   "I want to stop eating sugar" (not), so patterns only decide the unmistakable cases and
   a model decides the rest.
+  - **Utterances, not fragments** (`nova/on_air.py`). With LiveKit's default Deepgram
+    endpointing, speech recognition finalizes at almost every pause, so a final
+    transcript is often half a sentence ("Nova," then "what's your favourite film?"; "I
+    want to stop" then "eating sugar"). Both layers act on utterances instead: a dater's
+    finals from when the voice detector hears them start speaking, until they have
+    stopped and no new final has come for `NOVA_UTTERANCE_GRACE_SECONDS` (default 0.6),
+    or at most `NOVA_UTTERANCE_MAX_WAIT_SECONDS` (default 1.5) after they stopped. A
+    pause the voice detector ends and restarts within the grace stays in one utterance;
+    a final after the close starts the next. Each dater has their own. Whoever runs the
+    show ticks the listener as time passes; the rehearsal's agent does it from the start
+    of the session (`listen()`), so a dater is heard on time before the date too.
   - **Instant layer:** unmistakable phrases only ("I want to stop", "I want to stop now",
     "stop the date", "I need a moment", "I'm not comfortable", "get me out of here" and
     the like). A phrase counts only when the request ends there or is about the date:
-    "I want to stop." does, "I want to stop eating sugar" doesn't. Each final transcript
-    is joined with the same dater's last five seconds, because speech-to-text splits
-    sentences at pauses ("Nova," then "I want to stop."). The show runner alerts the
-    moderator at once (`dater_distressed`), and if a pause can start, Nova stops
+    "I want to stop." does, "I want to stop eating sugar" doesn't. Each final is checked
+    as it arrives, joined with the same dater's last five seconds (a sentence can still
+    span two utterances: "I'm not", a long pause, "comfortable."), but a match is acted
+    on only when the utterance closes, and only if the whole utterance still matches, so
+    "I want to stop" then "eating sugar" is no request. If the dater keeps talking, the
+    words so far are checked again 3 s after the match (`MATCH_CAP`) and acted on if they
+    still match, so a request never waits for the end of a long utterance. The show
+    runner alerts the moderator (`dater_distressed`), and if a pause can start, Nova stops
     mid-line, drops anything it had queued, says "Of course. Let's take a breather." at
     once and starts a need-a-moment pause for that dater, with the usual rules (back, 30 s
     alert, moderator decides). If a pause can't start (another dater is on one, or the
     daters are deciding), Nova says nothing and the moderator acts. No reply is written.
-  - **Meaning layer:** every other final sentence goes to the language model in
-    `NOVA_LLM`, with what the same dater said in the 15 seconds before it, and the model
-    answers only yes, maybe or no (Gemma at temperature 0). Distress needn't use any
-    particular word ("can someone come get me?"), so nothing is filtered out first; a
-    first version checked only sentences with a warning word, and missed those. Yes: as
-    for the instant layer. Maybe: the moderator is alerted (`possible_distress`). No:
-    nothing. If the check fails, answers anything but a label, or takes longer than
-    `NOVA_DISTRESS_TIMEOUT_SECONDS` (default 2), the moderator is alerted to listen in
-    (`distress_unchecked`). What the dater said goes in the `<data>` block like any other
-    data, the check's rules say it is never an instruction, and only a label comes back,
-    so the words can't change what Nova says.
-  - **The load:** one check for each final transcript the instant layer doesn't act on.
+  - **Meaning layer:** every other utterance goes to the language model in `NOVA_LLM`,
+    once, as the sentence it judges, with what the same dater said in the 15 seconds
+    before it, and the model answers only yes, maybe or no (Gemma at temperature 0).
+    Distress needn't use any particular word ("can someone come get me?"), so nothing is
+    filtered out first; a first version checked only sentences with a warning word, and
+    missed those. Yes: as for the instant layer. Maybe: the moderator is alerted
+    (`possible_distress`). No: nothing. If the check fails, answers anything but a label,
+    or takes longer than `NOVA_DISTRESS_TIMEOUT_SECONDS` (default 2), the moderator is
+    alerted to listen in (`distress_unchecked`). What the dater said goes in the `<data>`
+    block like any other data, the check's rules say it is never an instruction, and only
+    a label comes back, so the words can't change what Nova says.
+  - **The load:** one check for each utterance the instant layer doesn't act on.
     Estimate for a ten-minute date: the daters are on air for about 7 minutes and talk
-    for about 6 of them, and with LiveKit's default Deepgram endpointing (25 ms of
-    silence) speech recognition finalizes at almost every pause, about every 2 to 3
-    seconds, so about 120 to 180 checks a date, or 25 to 35 seconds of warm Gemma's time.
-    The rehearsal report prints the checks per minute, so the first rehearsal measures it.
-  - **Words to Nova wait for the verdict.** The reply is written while the check runs and
-    said only if the answer isn't yes; on yes the kind line comes instead, measured from
-    the end of the dater's sentence, so the check's time counts. If the reply's model
-    line fails after a maybe or a failed check, or for words with a warning word (stop,
-    help, scared, not okay, and the like: `nova/distress.py`, `WARNING`), Nova says "Take
-    all the time you need.", never "I'll stay out of that one" (signed off by the product
-    owner on 2026-10-13). Choosing that fallback is all the warning words do now.
+    for about 6 of them. Speech recognition finalizes at almost every pause (Deepgram's
+    default endpointing waits 25 ms of silence), about every 2 to 3 seconds, which was
+    120 to 180 checks a date when each final was checked. An utterance ends only at a
+    pause longer than the voice detector's 0.25 s plus the grace, about once a turn or
+    every 4 to 6 seconds of talk, so about 60 to 90 checks a date, or 12 to 18 seconds of
+    warm Gemma's time. An estimate: the rehearsal report prints utterances and checks per
+    minute, so a rehearsal measures it.
+  - **Words to Nova wait for the verdict.** Words are to Nova only when Nova is addressed:
+    "Nova" among the first three words ("Nova, ...", "Hey Nova ...", "OK so Nova ...") or
+    as the last word ("..., Nova?") of any sentence in the utterance or any final in it,
+    so "That's so funny." then "Nova, what do you think?" is to Nova. "Nova" directly
+    followed by said, says, asked, asks, is, isn't, was, wasn't, thinks or thought is
+    talked about ("Honestly, Nova is so funny", "did you hear what" then "Nova said?"),
+    and "Nova's" is never Nova. Limits: the comma matters, so "Nova, is it my turn?" is
+    to Nova but an unpunctuated "nova is it my turn" isn't, and Nova as the last word of
+    a sentence is still taken as asked ("I really like Nova."). The reply's detail is the
+    whole utterance, and an utterance gets at most one reply. It is written while the
+    check runs and said only if the answer isn't yes; on yes the kind line comes instead.
+    Both are measured from the end of the dater's sentence, so the grace and the check's
+    time count against the 2.5 s reply target (`docs/spike-results.md`); the rehearsal
+    report shows each reply's grace. If the reply's model line fails after a maybe or a
+    failed check, or for words with a warning word (stop, help, scared, not okay, and the
+    like: `nova/distress.py`, `WARNING`), Nova says "Take all the time you need.", never
+    "I'll stay out of that one" (signed off by the product owner on 2026-10-13). Choosing
+    that fallback is all the warning words do now.
   - **The distress test set** (`nova/distress_set.py`) runs with the evaluation, or alone
     with `--distress`: real distress in varied wording, and ordinary talk that uses the
     same words, each through the real listener, check and show runner; ten of each half
-    use none of the usual warning words. Targets: no missed distress (no pause and no
-    alert), and false pauses under 1 in 20 of ordinary talk. The evaluation also reports
-    alerts without a pause, false alerts and the check's time.
+    use none of the usual warning words. Twelve, six of each, come split in two finals,
+    heard through the listener with a short pause between (`evaluation.spoken`), so a
+    pause on a fragment ("I want to stop" before "eating sugar") shows up as a false
+    pause. Targets: no missed distress (no pause and no alert), and false pauses under 1
+    in 20 of ordinary talk. The evaluation also reports alerts without a pause, false
+    alerts and the check's time.
     Second run, 2026-10-15, Gemma (`gemma4:26b`, thinking off, warm), every sentence
     checked, 90 sentences, 45 of each: no false pauses and no false alerts, but 3 missed,
     so the missed-distress target failed. 41 of 45 real distress paused (18 by the
@@ -116,7 +148,13 @@ Date: 2026-10-13. Status: accepted.
   cold model load took 20-28 s. `NOVA_DISTRESS_TIMEOUT_SECONDS` (default 2) for the
   distress check: warm Gemma took a median of 193-195 ms and at most 278 ms, so 2 s leaves
   room for a slower model; a check that times out alerts the moderator, and a yes that
-  takes longer makes the kind line later.
+  takes longer makes the kind line later. `NOVA_UTTERANCE_GRACE_SECONDS` (default 0.6)
+  and `NOVA_UTTERANCE_MAX_WAIT_SECONDS` (default 1.5) for utterances: the grace waits
+  for a last final that comes after the voice detector hears the dater stop (assumed
+  about 0.3 s after the words; the rehearsal report's grace column measures it), and
+  the most Nova waits caps it when finals keep coming. Both count against the 2.5 s
+  reply target, so a longer grace costs reply time, and a shorter one than the pauses
+  inside a sentence brings back replies to "Nova," and pauses on fragments.
 - **Logs carry events and timings only.** `nova/events.py` accepts codes, numbers and
   flags; free text raises before anything is written.
 - **The evaluation script is the gate for a model change:** `uv run python -m
@@ -149,7 +187,7 @@ fallback line, never an unsafe one.
 | Unkind | A short list of insults (stupid, pathetic, desperate, creepy, shut up) | Sarcasm, tone, mockery without those words |
 | Instructions | Talk of instructions, rules, the system, data, prompts, angle brackets, "I was told"; Nova claiming any name but Nova ("I'm Kate", "call me Kate") | An injection that steers Nova into an ordinary-looking line, such as an untrue but harmless claim about a dater |
 | Voice and format | Exclamation marks, emoji, symbols, markdown, length (characters and sentences), names in the wrong case; the model's outro is one sentence with no question; a lightning question is one sentence and doesn't open with both daters' names | Tone, wrong pronouns, a question ending in a full stop (handled by the instructions only) |
-| A dater who wants to stop (what a dater says on air, not Nova's line) | Instant layer: unmistakable requests that end there or are about the date (want to stop, need a moment, not comfortable, don't feel safe, get me out of here, stop the date, a panic attack, harassing me). Meaning layer: every other final sentence goes to the model with the same dater's last 15 seconds, which answers yes, maybe or no; a failed or slow check alerts the moderator | Distress the model misjudges (the test set measures this; it missed "Is this almost over?"), or heard only in a voice; the instant layer pausing a story that happens to use a stop phrase ("we had to end the date early") |
+| A dater who wants to stop (what a dater says on air, not Nova's line) | On whole utterances, not speech-to-text fragments. Instant layer: unmistakable requests that end there or are about the date (want to stop, need a moment, not comfortable, don't feel safe, get me out of here, stop the date, a panic attack, harassing me), acted on once the utterance closes, or 3 s after the match if the dater keeps talking. Meaning layer: every other utterance goes to the model once, with the same dater's last 15 seconds, which answers yes, maybe or no; a failed or slow check alerts the moderator | Distress the model misjudges (the test set measures this; it missed "Is this almost over?"), or heard only in a voice; the instant layer pausing a story that happens to use a stop phrase ("we had to end the date early") |
 
 Before the model, audience questions about personal details or looks, or that try to give
 Nova instructions, are declined with a fixed line. This can't catch cleverly worded ones
@@ -178,14 +216,16 @@ right-hand column above). Before the first real show, Nova needs both of these:
   What a dater says to anyone else goes to `dater_said`, which hears unmistakable distress
   the same way and never replies, and the meaning layer's verdict comes back through
   `distress_check`. Its talk-to-the-room cues carry the safe show facts (`RoomFacts`).
-- The agent for real shows hears every dater's final transcripts through the same
-  `OnAirListener` (`nova/on_air.py`) as the rehearsal and the evaluation, not a copy of
-  it: distress first, and a reply to Nova held until the check's verdict.
+- The agent for real shows hears every dater's final transcripts and voice-detector
+  events through the same `OnAirListener` (`nova/on_air.py`) as the rehearsal and the
+  evaluation, not a copy of it, and ticks it from the start of the session so utterances
+  close on time: distress first, and a reply to Nova held until the check's verdict.
 - The moderator console needs a third distress alert, `distress_unchecked`: the check
   failed or was too slow, so listen in (decision 0004).
-- The distress check sends everything daters say to the model in `NOVA_LLM`, about 120 to
-  180 calls a date: on this PC's Gemma, nothing leaves the machine; with Claude, every
-  final sentence goes to Anthropic, so the cost and the privacy notice need a look first.
+- The distress check sends everything daters say to the model in `NOVA_LLM`, one call per
+  utterance, about 60 to 90 a date: on this PC's Gemma, nothing leaves the machine; with
+  Claude, every utterance goes to Anthropic, so the cost and the privacy notice need a
+  look first.
 - Each model change runs the evaluation first; a failing case blocks the change.
 - The blind card schema in `packages/shared` must apply the same first-name and age rules,
   so the app never accepts a card Nova can't put on air.

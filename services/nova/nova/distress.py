@@ -1,12 +1,15 @@
-"""Hearing a dater who wants to stop, in two layers (decision 0005).
+"""Hearing a dater who wants to stop, in two layers (decision 0005), on whole utterances:
+the on-air listener (nova/on_air.py) gathers speech recognition's finals until the dater
+has stopped speaking, and only then does either layer act.
 
 The instant layer: unmistakable phrases ("I want to stop", "I need a moment", "get me out
-of here") pause the dater and alert the moderator at once, with no model. A phrase only
-counts when the request ends there or is about the date: "I want to stop." does,
-"I want to stop eating sugar" doesn't.
+of here") pause the dater and alert the moderator, with no model. A phrase only counts
+when the request ends there or is about the date: "I want to stop." does, "I want to stop
+eating sugar" doesn't, so a phrase heard in a final only counts if the whole utterance
+still ends that way.
 
-The meaning layer: every other final sentence goes to the language model with what the
-same dater said in the 15 seconds before it, and the model answers only yes, maybe or no.
+The meaning layer: every other utterance goes to the language model with what the same
+dater said in the 15 seconds before it, and the model answers only yes, maybe or no.
 Yes pauses the dater and alerts the moderator, maybe alerts the moderator, no does nothing.
 If the check fails, is too slow or answers anything but a label, the moderator is alerted.
 Distress needn't use any particular word ("can someone come get me?"), so nothing is
@@ -17,6 +20,7 @@ Nothing here logs or stores what anyone said: the log gets the verdict and the t
 """
 
 import asyncio
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -234,38 +238,48 @@ class DistressCheck:
 
 @dataclass(frozen=True)
 class Hearing:
-    """What one final transcript needs. unmistakable: the words the instant layer heard
-    (joined with the dater's last few seconds). check: the meaning layer, in flight."""
+    """What one utterance needs. unmistakable: the words the instant layer heard (joined
+    with the dater's last few seconds). check: the meaning layer, in flight."""
 
     unmistakable: str | None = None
     check: asyncio.Task[Checked] | None = None
 
 
 class Listener:
-    """Hears every final transcript from every dater, to anyone: the instant layer first,
-    then the meaning layer for everything else. Holds the last 15 seconds of each dater's
-    words in memory, and nothing longer."""
+    """Hears every dater, to anyone: each final transcript is remembered as it arrives,
+    and each utterance goes through the instant layer, then the meaning layer, once it has
+    closed (nova/on_air.py). Holds the last 15 seconds of each dater's words in memory, and
+    nothing longer."""
 
     def __init__(self, check: DistressCheck) -> None:
         self._check = check
         self._recent: list[tuple[float, Seat, str]] = []
 
-    def hear(self, now: float, seat: Seat, text: str) -> Hearing:
-        earlier = self._words(now, seat, CONTEXT)
-        self._recent.append((now, seat, text))
-        joined = self._words(now, seat, JOINED)
-        for words in (joined, text):  # joined first; the transcript alone, just in case
-            if is_unmistakable(words):
-                self.forget(seat)
-                return Hearing(unmistakable=words)
-        if not text.strip():
-            return Hearing()
-        return Hearing(check=asyncio.ensure_future(self._listen(seat, text, earlier)))
-
     def remember(self, now: float, seat: Seat, text: str) -> None:
-        """Adds words to what a dater said recently without hearing them: for the
-        evaluation, which sets up what came before the one sentence it tests."""
+        """Adds a final transcript to what a dater said recently, without acting on it.
+        The evaluation also uses it to set up what came before the words it tests."""
         self._recent.append((now, seat, text))
+
+    def unmistakable(self, now: float, seat: Seat, words: str) -> str | None:
+        """The words the instant layer would act on now, or None: the dater's last five
+        seconds, which end with words, or words alone, just in case."""
+        for heard in (self._words(now, seat, JOINED), words):
+            if is_unmistakable(heard):
+                return heard
+        return None
+
+    def utterance(self, now: float, seat: Seat, words: str, *, since: float) -> Hearing:
+        """A dater's utterance once it has closed: words, whose finals have been remembered
+        since the first arrived. The instant layer first; then the meaning layer on the
+        whole utterance, with what the dater said before it as context."""
+        heard = self.unmistakable(now, seat, words)
+        if heard is not None:
+            self.forget(seat)
+            return Hearing(unmistakable=heard)
+        if not words.strip():
+            return Hearing()
+        earlier = self._words(now, seat, CONTEXT, before=since)
+        return Hearing(check=asyncio.ensure_future(self._listen(seat, words, earlier)))
 
     def forget(self, seat: Seat) -> None:
         """Heard and acted on: what this dater says next is new."""
@@ -277,8 +291,10 @@ class Listener:
             self.forget(seat)
         return checked
 
-    def _words(self, now: float, seat: Seat, window: float) -> str:
+    def _words(self, now: float, seat: Seat, window: float, *, before: float = math.inf) -> str:
         self._recent = [r for r in self._recent if now - r[0] <= CONTEXT]
         return " ".join(
-            text for at, said_by, text in self._recent if said_by is seat and now - at <= window
+            text
+            for at, said_by, text in self._recent
+            if said_by is seat and now - at <= window and at < before
         )

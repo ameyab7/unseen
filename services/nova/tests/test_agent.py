@@ -119,14 +119,27 @@ class StartedSession(FakeSession):
 class FakeRehearsal:
     """Stands in for the date itself: these tests are about the session around it."""
 
+    last: FakeRehearsal | None = None
+
     def __init__(self, *args, **options) -> None:
-        pass
+        self.options = options
+        self.listening = asyncio.Event()
+        self.listening_at_the_start = False
+        self.stopped_listening = False
+        FakeRehearsal.last = self
+
+    async def listen(self) -> None:
+        self.listening.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            self.stopped_listening = True
 
     async def prepare(self) -> None:
-        pass
+        await self.listening.wait()  # a dater may speak while set pieces are prepared
 
     async def run(self) -> None:
-        pass
+        self.listening_at_the_start = self.listening.is_set() and not self.stopped_listening
 
 
 class FakeContext:
@@ -189,3 +202,17 @@ async def test_no_one_in_the_room_can_query_the_session(monkeypatch, tmp_path):
     """LiveKit lets any participant in the room ask a hosted session for its details and
     history, with no identity check. The session isn't hosted."""
     assert (await rehearse(monkeypatch, tmp_path)).started["session_host"] is False
+
+
+async def test_daters_are_heard_from_the_start_of_the_session_until_the_date_is_over(
+    monkeypatch, tmp_path
+):
+    """Utterances close as time passes (nova/on_air.py), so something must tick them while
+    set pieces are prepared, before the date's own loop starts."""
+    await rehearse(monkeypatch, tmp_path)
+    rehearsal = FakeRehearsal.last
+    assert rehearsal is not None and rehearsal.listening_at_the_start
+    await asyncio.sleep(0)
+    assert rehearsal.stopped_listening
+    assert rehearsal.options["utterance_grace"] == SETTINGS.utterance_grace
+    assert rehearsal.options["utterance_max_wait"] == SETTINGS.utterance_max_wait

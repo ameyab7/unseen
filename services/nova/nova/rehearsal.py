@@ -21,13 +21,14 @@ from typing import Protocol
 
 from nova import script
 from nova.cards import Pair, Seat
+from nova.config import Settings
 from nova.cues import AlertModerator, Cue, Moment, Say, StopSpeaking
 from nova.decisions import Choice, DecisionError, InMemoryDecisionDesk
 from nova.distress import Checked, DistressCheck, Verdict
 from nova.events import Event, EventLog
 from nova.lines import LIVE_REACTIONS, Line, LineWriter, Source
 from nova.models import LineModel
-from nova.on_air import OnAirCues, OnAirListener
+from nova.on_air import Closed, OnAirCues, OnAirListener
 from nova.questions import AudienceQuestion, QuestionStatus
 from nova.show_runner import NoVotes, ShowRunner
 from nova.timing import REHEARSAL, Timing
@@ -87,6 +88,10 @@ class Spoken:
     from_free_ms: int | None  # from the cue, or from when Nova finished the line before
     from_sentence_end_ms: int | None  # replies: from when the dater stopped speaking
     model_ms: int  # how long the line took to write, if the model wrote it
+    # Replies: from when the dater stopped speaking to when Nova acted on what they said
+    # (the utterance's grace, with any wait for the last transcript). Part of
+    # from_sentence_end_ms.
+    grace_ms: int | None = None
 
 
 class Speaker(Protocol):
@@ -110,6 +115,7 @@ class _Pending:
     sentence_end_at: float | None
     line: asyncio.Task[Line]
     hold: asyncio.Future[Verdict] | None = None  # a reply waiting for the distress check
+    closed_at: float | None = None  # replies: when Nova acted on what the dater said
 
 
 class Rehearsal:
@@ -128,10 +134,13 @@ class Rehearsal:
         live_timeout: float = 2.0,
         prep_timeout: float = 60.0,
         distress_timeout: float = 2.0,
+        utterance_grace: float = Settings.utterance_grace,
+        utterance_max_wait: float = Settings.utterance_max_wait,
         events: EventLog | None = None,
     ) -> None:
         self.speaker = speaker
         self.voice, self.stt, self.model_name = voice, stt, model.name
+        self.utterance_grace, self.utterance_max_wait = utterance_grace, utterance_max_wait
         self._clock = clock
         self._events = events or EventLog()
         self._desk = InMemoryDecisionDesk()
@@ -157,12 +166,15 @@ class Rehearsal:
             DistressCheck(model, timeout=distress_timeout, events=self._events),
             deliver=self._take,
             clock=clock,
+            grace=utterance_grace,
+            max_wait=utterance_max_wait,
         )
         self._queue: asyncio.Queue[_Pending] = asyncio.Queue()
         self._started_at: float | None = None
         self._ended_at: float | None = None
 
         self.seat = Seat.LEFT
+        self._speaking: Seat | None = None  # who the voice detector last heard start
         self.cues: list[Cue] = []  # in memory only
         self.spoken: list[Spoken] = []
         self.alerts = 0
@@ -177,6 +189,11 @@ class Rehearsal:
     def checks(self) -> list[Checked]:
         """Distress checks so far: verdict and time only."""
         return self._on_air.checks
+
+    @property
+    def utterances(self) -> list[Closed]:
+        """Utterances Nova acted on so far: layer and wait only."""
+        return self._on_air.closed
 
     @property
     def listened_seconds(self) -> float:
@@ -198,7 +215,17 @@ class Rehearsal:
         self._queue_cues(self._runner.start(self._started_at))
 
     def tick(self) -> None:
-        self._queue_cues(self._runner.tick(self._clock()))
+        """The show's beats due by now, once it has started, and any utterance that has
+        closed, at any time."""
+        if self._runner.started:
+            self._queue_cues(self._runner.tick(self._clock()))
+        self._on_air.tick()
+
+    async def listen(self) -> None:
+        """Acts on what daters say as soon as each utterance closes, until cancelled.
+        nova/agent.py runs it from the start of the session, so a dater is heard on time
+        while set pieces are prepared and after the date, when nothing else ticks."""
+        await self._on_air.listen()
 
     async def run(self, *, every: float = 0.25, final_wait: float = FINAL_WAIT) -> None:
         """Runs the date to the end: ticks the show and speaks every line in order. Once the
@@ -263,18 +290,21 @@ class Rehearsal:
 
     def speech_started(self) -> None:
         """The voice detector heard the dater start speaking."""
+        self._speaking = self.seat
         self._on_air.speech_started(self.seat)
 
     def speech_ended(self) -> None:
-        """The voice detector heard the dater stop: the end of their sentence."""
-        self._on_air.speech_ended(self.seat)
+        """The voice detector heard the dater stop: the end of their sentence. It ends the
+        seat that started speaking, even if the chat has chosen the other one since."""
+        seat, self._speaking = self._speaking or self.seat, None
+        self._on_air.speech_ended(seat)
 
     def transcript(self, text: str) -> None:
-        """A final transcript of what the speaking dater said, to Nova or not, heard by the
-        on-air listener (nova/on_air.py): distress first, and a reply to Nova held until the
-        distress verdict, then dropped if the dater wants to stop. Nova's first line after
-        the dater spoke is measured from the end of their sentence, so a kind line after
-        the check counts the check's time."""
+        """A final transcript of what the speaking dater said, to Nova or not. It joins
+        their utterance, which the on-air listener (nova/on_air.py) acts on once it closes:
+        distress first, and a reply to Nova held until the distress verdict, then dropped if
+        the dater wants to stop. Nova's first line after the dater spoke is measured from
+        the end of their sentence, so the grace and a check before a kind line count."""
         self._on_air.hear(self.seat, text)
 
     async def heard(self) -> None:
@@ -284,15 +314,17 @@ class Rehearsal:
     # --- Internals --------------------------------------------------------------------------
 
     def _take(self, on_air: OnAirCues) -> None:
-        self._queue_cues(on_air.cues, on_air.sentence_end, on_air.hold)
+        self._queue_cues(on_air.cues, on_air.sentence_end, on_air.hold, on_air.closed_at)
 
     def _queue_cues(
         self,
         cues: Iterable[Cue],
         sentence_end: float | None = None,
         hold: asyncio.Future[Verdict] | None = None,
+        closed_at: float | None = None,
     ) -> None:
-        """hold: the distress check's verdict, which a reply waits for."""
+        """hold: the distress check's verdict, which a reply waits for. closed_at: when
+        Nova acted on what the dater said."""
         now = self._clock()
         reply_due = sentence_end is not None
         for cue in cues:
@@ -312,8 +344,9 @@ class Rehearsal:
                 kind = Kind.PREPARED
             line = asyncio.ensure_future(self._writer.line_for(cue))
             ends = sentence_end if kind is Kind.REPLY else None
+            closed = closed_at if kind is Kind.REPLY else None
             held = hold if cue.moment is Moment.REPLY else None
-            self._queue.put_nowait(_Pending(cue, kind, now, ends, line, held))
+            self._queue.put_nowait(_Pending(cue, kind, now, ends, line, held, closed))
 
     def _stop(self) -> None:
         """Nova stops mid-line, and nothing already queued is said."""
@@ -350,6 +383,7 @@ class Rehearsal:
                 from_free_ms=_since(max(item.cue_at, picked), started),
                 from_sentence_end_ms=_since(item.sentence_end_at, started),
                 model_ms=line.ms,
+                grace_ms=_since(item.sentence_end_at, item.closed_at),
             )
             self.spoken.append(spoken)
             self._events.emit(
@@ -361,6 +395,7 @@ class Rehearsal:
                 from_free_ms=spoken.from_free_ms,
                 from_sentence_end_ms=spoken.from_sentence_end_ms,
                 model_ms=spoken.model_ms,
+                grace_ms=spoken.grace_ms,
             )
         except asyncio.CancelledError:
             if not item.line.cancelled():
@@ -460,15 +495,20 @@ def render_report(rehearsal: Rehearsal) -> str:
         f"{r.alerts} moderator alerts.",
         "",
         f"  {'moment':<20}{'kind':<10}{'source':<10}{'from cue':>10}{'from free':>11}"
-        f"{'from sentence end':>19}{'model':>8}",
+        f"{'from sentence end':>19}{'grace':>9}{'model':>8}",
     ]
     for s in r.spoken:
         lines.append(
             f"  {s.moment:<20}{s.kind:<10}{s.source:<10}{ms_text(s.from_cue_ms):>10}"
             f"{ms_text(s.from_free_ms):>11}{ms_text(s.from_sentence_end_ms):>19}"
-            f"{ms_text(s.model_ms or None):>8}"
+            f"{ms_text(s.grace_ms):>9}{ms_text(s.model_ms or None):>8}"
         )
-    lines += ["", "Targets, as set (from the cue; replies from the end of the dater's sentence)"]
+    lines += ["", _utterance_row(r)]
+    lines += [
+        "",
+        "Targets, as set (from the cue; replies from the end of the dater's sentence, grace "
+        "included)",
+    ]
     lines += [_target_row(t) for t in targets(r.spoken)]
     lines += ["", "The same from when Nova was free (suggestion 1; not how targets are judged)"]
     lines += [_target_row(t) for t in targets(r.spoken, from_free=True)]
@@ -492,6 +532,27 @@ def render_report(rehearsal: Rehearsal) -> str:
         f"{r.listened_seconds / 60:.1f} min, voice {r.characters_spoken} characters)",
     ]
     return "\n".join(lines)
+
+
+def _utterance_row(r: Rehearsal) -> str:
+    settings = (
+        f"(grace {r.utterance_grace:g} s after the last transcript, at most "
+        f"{r.utterance_max_wait:g} s after the dater stopped)"
+    )
+    waits = [_ms(u.waited) for u in r.utterances if u.waited is not None]
+    if not r.utterances:
+        return f"Utterances: none {settings}"
+    instant = sum(u.instant for u in r.utterances)
+    waited = (
+        f"; Nova acted a median {round(statistics.median(waits))} ms after the dater stopped, "
+        f"worst {max(waits)} ms"
+        if waits
+        else ""
+    )
+    return (
+        f"Utterances: {len(r.utterances)} ({instant} by the instant layer), "
+        f"{_per_minute(len(r.utterances), r.listened_seconds)} a minute{waited} {settings}"
+    )
 
 
 def _target_row(t: TargetResult) -> str:
