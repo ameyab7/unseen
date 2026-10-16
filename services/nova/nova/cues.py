@@ -48,6 +48,9 @@ class Moment(StrEnum):
     WELCOME_BACK = "welcome_back"
     DATER_LEFT = "dater_left"
     MODERATOR_END = "moderator_end"
+    KEEP_STREETS_OFF_AIR = "keep_streets_off_air"  # a street or address slipped
+    KEEP_IT_KIND = "keep_it_kind"  # a dater's first unkind remark
+    SHOW_PAUSE = "show_pause"  # a dater's second unkind remark: the date pauses
 
 
 class Sound(StrEnum):
@@ -68,12 +71,29 @@ class ModeratorAlert(StrEnum):
     DATER_DISTRESSED = "dater_distressed"  # a dater wants to stop: Nova paused for them
     POSSIBLE_DISTRESS = "possible_distress"  # the distress check says maybe: listen in
     DISTRESS_UNCHECKED = "distress_unchecked"  # the distress check failed or was too slow
+    PERSONAL_DETAIL_ON_AIR = "personal_detail_on_air"  # a dater said a phone, street, workplace...
+    CONDUCT_FLAG = "conduct_flag"  # a dater's conduct, with its category: listen in now
+
+
+class Conduct(StrEnum):
+    """What a dater's own words do to the other dater or the room (decision 0006)."""
+
+    NONE = "none"
+    PERSONAL_DETAIL = "personal_detail"  # a phone, email, handle, address, workplace, school
+    UNKIND = "unkind"  # a put-down or rudeness, short of the rest
+    HARASSMENT = "harassment"
+    SEXUAL = "sexual"
+    HATE = "hate"
+    THREAT = "threat"
+    MINOR = "minor"  # anything about someone under 18
+    UNSURE = "unsure"  # might be one of these: the moderator listens in
 
 
 class Situation(StrEnum):
     """Why Nova is talking to the room."""
 
     PAUSE = "pause"  # a dater is taking a moment off air (or the date is held for a report)
+    SHOW_PAUSED = "show_paused"  # the whole date is held, for both daters
     DECIDING = "deciding"  # the daters are deciding privately
     ENDED_EARLY = "ended_early"  # a dater left: the date is over before its time
 
@@ -153,10 +173,12 @@ class LightningMeterClosed:
 
 @dataclass(frozen=True)
 class AlertModerator:
-    """For the moderator console only. Never published to the room."""
+    """For the moderator console only. Never published to the room. category: for a
+    conduct flag, what the dater's words did."""
 
     alert: ModeratorAlert
     seat: Seat
+    category: Conduct | None = None
 
 
 @dataclass(frozen=True)

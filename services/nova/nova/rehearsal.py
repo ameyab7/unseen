@@ -353,7 +353,9 @@ class Rehearsal:
                 self._stop()
             if isinstance(cue, AlertModerator):
                 self.alerts += 1
-                self._events.emit(Event.ALERT, alert=cue.alert, seat=cue.seat)
+                self._events.emit(
+                    Event.ALERT, alert=cue.alert, seat=cue.seat, category=cue.category
+                )
             if isinstance(cue, QuestionSkipped):
                 self._events.emit(Event.QUESTION_SKIPPED, reason=cue.reason)
             if not isinstance(cue, Say):

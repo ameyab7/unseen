@@ -10,6 +10,9 @@ from nova.decisions import Outcome
 
 # Brand book, "Nova on air".
 RESULT_MUTUAL = "It's mutual. What happens next is theirs."
+KEEP_STREETS_OFF_AIR = "Let's keep street names off air. The story's better without them anyway."
+KEEP_IT_KIND = "Let's keep it kind."
+SHOW_PAUSE = "We're taking a short pause."  # if an unkind remark happens again
 RESULT_NOT_MUTUAL = "They're keeping it unseen tonight. Two brave people and a good conversation."
 INVITATION = "If that sounded like your kind of night, there are seats this week."
 

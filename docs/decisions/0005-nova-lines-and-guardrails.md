@@ -262,7 +262,7 @@ Nova's rules, the guardrails, and approved fallbacks.
 ## Launch requirements
 
 The pattern guardrails alone aren't enough for real shows. They can't catch meaning (the
-right-hand column above). Before the first real show, Nova needs both of these:
+right-hand column above). Before the first real show, Nova needs these:
 
 1. **A meaning-based check on Nova's lines before they're spoken:** the technical plan's
    fast classifier, run on every model line after the patterns. A line it flags gets the
@@ -271,6 +271,11 @@ right-hand column above). Before the first real show, Nova needs both of these:
    mid-line and says nothing more until the moderator unmutes it. The date continues, and
    the fallback segment doesn't play. (Ending the date, already built, is the control that
    plays the fallback segment.)
+3. **Hearing a dater's conduct, not only their distress** (decision 0006): personal details
+   slipping, unkindness, harassment, sexual content, hate, threats and anything about a
+   minor, with the console alerts and the brand book's lines. Built in its first form;
+   its sets are small, and whether serious conduct mutes a dater automatically is still
+   the product owner's decision.
 
 ## Consequences
 

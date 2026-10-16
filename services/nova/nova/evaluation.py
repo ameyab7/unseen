@@ -23,7 +23,12 @@ on-air listener, some of it split across two final transcripts. The dev set
 (nova/distress_dev.py) is what the check's rules are tuned on; --dev runs it alone. The
 held-out set (nova/distress_set.py) is the measure, reported on its own. Each reports
 missed distress (target 0) and false pauses (target under 1 in 20), with Wilson 95%
-intervals, and how long the check took. All data here is made up.
+intervals, and how long the check took.
+
+--conduct runs the conduct set (nova/conduct_set.py, decision 0006), dev and held-out
+halves apart, through the same listener, check and show runner: per category, recall (what
+Nova should have done, it did) and false alerts (ordinary talk taken for that category),
+with Wilson 95% intervals. All data here is made up.
 """
 
 import argparse
@@ -38,10 +43,19 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from nova import running_order, script
+from nova import conduct_set, running_order, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
 from nova.config import Settings, load_settings
-from nova.cues import AlertModerator, Cue, Moment, RoomFacts, Say, Segment, Situation
+from nova.cues import (
+    AlertModerator,
+    Cue,
+    ModeratorAlert,
+    Moment,
+    RoomFacts,
+    Say,
+    Segment,
+    Situation,
+)
 from nova.decisions import InMemoryDecisionDesk
 from nova.distress import DistressCheck, Verdict
 from nova.distress_dev import DEV_SET
@@ -736,6 +750,82 @@ def render_distress(
     return "\n".join(lines)
 
 
+# --- Dater conduct (decision 0006) -------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ConductResult:
+    sample: conduct_set.ConductSample
+    found: frozenset[str]  # what Nova did: the categories it said a line or flagged for
+
+
+def conduct_found(cues: Sequence[Cue]) -> frozenset[str]:
+    """The conduct categories Nova acted on, from what the show did."""
+    found: set[str] = set()
+    for cue in cues:
+        if isinstance(cue, Say) and cue.moment is Moment.KEEP_STREETS_OFF_AIR:
+            found.add(conduct_set.STREET)
+        elif isinstance(cue, Say) and cue.moment in (Moment.KEEP_IT_KIND, Moment.SHOW_PAUSE):
+            found.add(conduct_set.UNKIND)
+        elif isinstance(cue, AlertModerator) and cue.alert is ModeratorAlert.PERSONAL_DETAIL_ON_AIR:
+            found.add(conduct_set.DETAIL)
+        elif isinstance(cue, AlertModerator) and cue.alert is ModeratorAlert.CONDUCT_FLAG:
+            found.add(str(cue.category))
+    return frozenset(found)
+
+
+async def run_conduct(
+    model: LineModel,
+    *,
+    timeout: float,
+    samples: Sequence[conduct_set.ConductSample],
+    grace: float = Settings.utterance_grace,
+    max_wait: float = Settings.utterance_max_wait,
+) -> list[ConductResult]:
+    """Every sample through the real listener, check and show runner."""
+    check = DistressCheck(
+        model, timeout=timeout, events=EventLog(logging.getLogger("nova.evaluation"))
+    )
+    results = []
+    for sample in samples:
+        heard = await hear_on_air(
+            check, sample.sentence, other=sample.other, grace=grace, max_wait=max_wait
+        )
+        results.append(ConductResult(sample, conduct_found(heard.cues)))
+    return results
+
+
+def render_conduct(results: list[ConductResult], *, model_name: str, set_name: str) -> str:
+    ordinary = [r for r in results if r.sample.expected == conduct_set.NONE]
+    lines = [
+        f"Nova conduct check, {set_name}: {model_name}, {len(results)} sentences "
+        f"({len(results) - len(ordinary)} conduct, {len(ordinary)} ordinary talk)",
+        "",
+        f"  {'category':<17}{'recall':<40}false alerts on ordinary talk",
+    ]
+    for category in conduct_set.CATEGORIES:
+        expected = [r for r in results if r.sample.expected == category]
+        caught = sum(category in r.found for r in expected)
+        false = sum(category in r.found for r in ordinary)
+        recall = rate_text(caught, len(expected))
+        lines.append(f"  {category:<17}{recall:<40}{rate_text(false, len(ordinary))}")
+    quiet = sum(not r.found for r in ordinary)
+    lines.append(f"  Ordinary talk left alone: {rate_text(quiet, len(ordinary))}")
+    off = [
+        r
+        for r in results
+        if (r.sample.expected == conduct_set.NONE and r.found)
+        or (r.sample.expected != conduct_set.NONE and r.sample.expected not in r.found)
+    ]
+    if off:
+        lines += ["", "Not handled as hoped"]
+    for r in off:
+        found = ", ".join(sorted(r.found)) or "nothing"
+        other = f"  (answering: {' '.join(r.sample.other)})" if r.sample.other else ""
+        lines.append(f"  expected {r.sample.expected}, got {found}:  {r.sample.sentence}{other}")
+    return "\n".join(lines)
+
+
 # --- Does Nova sound canned? --------------------------------------------------------------
 
 
@@ -1017,6 +1107,9 @@ def main(argv: list[str] | None = None) -> int:
         "--distress", action="store_true", help="run only the distress sets, dev and held-out"
     )
     parser.add_argument("--dev", action="store_true", help="run only the distress dev set")
+    parser.add_argument(
+        "--conduct", action="store_true", help="run only the conduct set, dev and held-out"
+    )
     args = parser.parse_args(argv)
 
     settings = load_settings()
@@ -1032,6 +1125,25 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         print(render_night(night, model_name=model.name))
+        return 0
+    if args.conduct:
+
+        async def conduct() -> list[tuple[str, list[ConductResult]]]:
+            await warm_up(classifier)
+            halves = (
+                ("dev half", conduct_set.DEV_HALF),
+                ("held-out half", conduct_set.HELD_OUT_HALF),
+            )
+            return [
+                (
+                    name,
+                    await run_conduct(classifier, timeout=settings.distress_timeout, samples=half),
+                )
+                for name, half in halves
+            ]
+
+        for name, results in asyncio.run(conduct()):
+            print(render_conduct(results, model_name=classifier.name, set_name=name), end="\n\n")
         return 0
 
     sets = [(DEV, DEV_SET)] if args.dev else [(DEV, DEV_SET), (HELD_OUT, DISTRESS_SET)]

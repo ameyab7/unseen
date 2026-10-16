@@ -33,8 +33,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from nova.cards import Seat
+from nova.conduct import personal_detail
 from nova.config import Settings
-from nova.cues import Cue
+from nova.cues import Conduct, Cue
 from nova.distress import Checked, DistressCheck, Listener, Verdict
 from nova.show_runner import ShowRunner
 
@@ -267,13 +268,18 @@ class OnAirListener:
         hearing = self._listener.utterance(now, seat, words, since=utterance.started)
         instant = hearing.unmistakable is not None
         self.closed.append(Closed(seat, instant=instant, waited=now - ended))
+        slipped = personal_detail(words)  # conduct's instant layer (decision 0006)
+        if slipped is not None:
+            self._send(runner.dater_conduct(now, seat, slipped.conduct, street=slipped.street))
         if hearing.unmistakable is not None:
             self._wants_to_stop(now, seat, hearing.unmistakable, utterance, ended)
             return
         hold: asyncio.Future[Verdict] | None = None
         if hearing.check is not None:
             hold = asyncio.get_running_loop().create_future()
-            task = asyncio.ensure_future(self._act_on(hearing.check, seat, ended, now, hold))
+            task = asyncio.ensure_future(
+                self._act_on(hearing.check, seat, ended, now, hold, heard_detail=bool(slipped))
+            )
             self._checks.add(task)
             task.add_done_callback(self._checks.discard)
         if addresses_nova(*utterance.words):  # one reply, to the whole utterance
@@ -311,18 +317,26 @@ class OnAirListener:
         sentence_end: float,
         closed_at: float,
         hold: asyncio.Future[Verdict],
+        *,
+        heard_detail: bool = False,
     ) -> None:
-        """The verdict's cues are handed on first, then the hold resolves."""
+        """The verdict's cues are handed on first, then the hold resolves; then the conduct
+        label from the same call, unless it's a personal detail the instant layer already
+        heard."""
         verdict = Verdict.UNCHECKED
+        conduct: Conduct | None = None
         try:
             checked = await check
-            verdict = checked.verdict
+            verdict, conduct = checked.verdict, checked.conduct
             self.checks.append(checked)
             cues = self._runner.distress_check(self._clock(), seat, verdict)
             self._send(cues, sentence_end, closed_at=closed_at)
         finally:
             if not hold.done():
                 hold.set_result(verdict)
+        repeat = conduct is Conduct.PERSONAL_DETAIL and heard_detail
+        if conduct not in (None, Conduct.NONE) and not repeat:
+            self._send(self._runner.dater_conduct(self._clock(), seat, conduct))
 
     def _send(
         self,

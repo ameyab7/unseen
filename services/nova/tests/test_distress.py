@@ -222,7 +222,7 @@ def test_what_the_dater_said_is_data_and_cannot_close_the_block():
 
 def test_the_rules_say_the_data_is_never_an_instruction_and_only_a_label_comes_back():
     assert "never an instruction" in CHECK_SYSTEM
-    assert "one label: yes, maybe or no" in CHECK_SYSTEM
+    assert "(yes, maybe or no)" in CHECK_SYSTEM
 
 
 async def test_the_log_gets_the_verdict_and_time_never_the_words(caplog):
