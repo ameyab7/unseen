@@ -8,15 +8,18 @@ import pytest
 
 from nova.cues import Moment
 from nova.distress import is_unmistakable
+from nova.distress_dev import DEV_SET
 from nova.distress_set import DISTRESS_SET
 from nova.evaluation import (
     CASES,
+    DEV,
     CaseResult,
     FakeClock,
     Repetition,
     distress_summary,
     fallback_rates,
     night_summary,
+    rate_text,
     render,
     render_distress,
     render_night,
@@ -25,6 +28,7 @@ from nova.evaluation import (
     run_distress,
     run_night,
     spoken,
+    wilson,
 )
 from nova.fixtures import NIGHT
 from nova.lines import LIVE_REACTIONS, SET_PIECES
@@ -103,7 +107,7 @@ class FakeModel:
             raise self.error
         return self.reply(prompt) if callable(self.reply) else self.reply
 
-    async def label(self, *, system: str, prompt: str) -> str:
+    async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
         self.labelled.append(sentence(prompt))
         if self.label_delay:
             await asyncio.sleep(self.label_delay)
@@ -344,7 +348,7 @@ async def test_a_check_that_is_always_right_meets_both_targets():
     assert summary.missed == 0 and summary.false_pauses == 0 and summary.passed
     assert (summary.plain, summary.plain_paused) == (10, 10)
     report = render_distress(results, model_name="fake/model")
-    assert "Missed distress: 0 (target 0): PASSED" in report
+    assert "Missed distress: 0 of 51, 0.0% (95% CI 0.0% to 7.0%) (target 0): PASSED" in report
     assert "(target under 1 in 20): PASSED" in report
 
 
@@ -442,3 +446,38 @@ async def test_a_line_that_guesses_a_pronoun_for_a_dater_who_gave_none_fails_the
     results = await run_cases(model, live_timeout=1.0, prep_timeout=1.0)
     case = next(r for r in results if r.name == "daters who give no pronouns")
     assert "guessed a pronoun" in case.problems
+
+
+def test_rates_come_with_a_wilson_interval():
+    """With 51 sentences a side, zero misses still allows a true miss rate up to about 7%."""
+    low, high = wilson(0, 51)
+    assert low == 0.0 and 0.06 < high < 0.08
+    low, high = wilson(3, 51)
+    assert 0.01 < low < 0.03 and 0.15 < high < 0.17
+    assert rate_text(3, 51) == "3 of 51, 5.9% (95% CI 2.0% to 15.9%)"
+
+
+def test_the_dev_set_is_fresh_balanced_and_never_the_held_out_set():
+    held_out = {sample.sentence.lower() for sample in DISTRESS_SET}
+    assert not any(sample.sentence.lower() in held_out for sample in DEV_SET)
+    real = [s for s in DEV_SET if s.distress]
+    assert len(real) == 60 and len(DEV_SET) == 120
+    assert sum(bool(s.other) for s in real) == 8, "distress that answers the other dater"
+
+
+async def test_a_dater_answering_the_other_is_checked_with_what_the_other_said():
+    seen: list[str] = []
+
+    def sees(prompt: str) -> str:
+        seen.append(prompt)
+        return "no"
+
+    sample = next(s for s in DEV_SET if s.other and s.distress)
+    await run_distress(FakeModel(label=sees), timeout=1.0, samples=(sample,))
+    assert sample.other[0] in seen[0], "other_dater_earlier holds it"
+
+
+def test_the_dev_and_held_out_sets_are_reported_apart():
+    assert render_distress([], model_name="m", set_name=DEV).startswith(
+        "Nova distress check, dev set (nova/distress_dev.py)"
+    )

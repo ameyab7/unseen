@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from nova.config import Settings
-from nova.models import AnthropicModel, ModelRefused, OllamaModel, build_model
+from nova.models import AnthropicModel, ModelRefused, OllamaModel, build_classifier, build_model
 
 ENV = {
     "LIVEKIT_URL": "wss://example.livekit.cloud",
@@ -54,8 +54,44 @@ async def test_ollama_labels_are_short_and_repeatable_with_thinking_off():
     assert await model.label(system="RULES", prompt="TASK <data>{}</data>") == "yes"
     call = completions.calls[0]
     assert (call["temperature"], call["reasoning_effort"]) == (0.0, "none")
-    assert call["max_tokens"] <= 8
+    assert call["max_tokens"] <= 32, "a small JSON object"
     assert call["messages"][0] == {"role": "system", "content": "RULES"}
+    assert "response_format" not in call, "no schema, no format"
+
+
+SCHEMA = {
+    "type": "object",
+    "properties": {"label": {"type": "string", "enum": ["yes", "maybe", "no"]}},
+    "required": ["label"],
+    "additionalProperties": False,
+}
+
+
+async def test_ollama_holds_a_label_to_its_schema_with_structured_output():
+    client, completions = fake_openai('{"label": "no"}')
+    model = OllamaModel("gemma4:26b", client=client)
+    await model.label(system="RULES", prompt="TASK", schema=SCHEMA)
+    format_ = completions.calls[0]["response_format"]
+    assert format_["type"] == "json_schema" and format_["json_schema"]["schema"] == SCHEMA
+
+
+async def test_claude_holds_a_label_to_its_schema_with_structured_output():
+    client, messages, _ = fake_anthropic(claude_reply('{"label": "maybe"}'))
+    model = AnthropicModel("claude-opus-5-5", client=client)
+    assert await model.label(system="RULES", prompt="TASK", schema=SCHEMA) == '{"label": "maybe"}'
+    config = messages.calls[0]["output_config"]
+    assert config["format"] == {"type": "json_schema", "schema": SCHEMA}
+    assert config["effort"] == "low"
+
+
+def test_the_distress_check_can_use_its_own_model():
+    settings = Settings.from_env(
+        {**ENV, "NOVA_LLM": "ollama/gemma4:26b", "NOVA_CLASSIFIER_LLM": "ollama/gemma3:4b"}
+    )
+    assert build_classifier(settings).name == "ollama/gemma3:4b"
+    assert build_model(settings).name == "ollama/gemma4:26b"
+    same = Settings.from_env({**ENV, "NOVA_LLM": "ollama/gemma4:26b"})
+    assert build_classifier(same).name == "ollama/gemma4:26b", "NOVA_LLM by default"
 
 
 async def test_ollama_turns_thinking_off_and_keeps_rules_apart_from_the_task():

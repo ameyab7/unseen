@@ -149,7 +149,7 @@ class Labeller:
         self.prompts: list[str] = []
         self.systems: list[str] = []
 
-    async def label(self, *, system: str, prompt: str) -> str:
+    async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
         self.systems.append(system)
         self.prompts.append(prompt)
         if self.delay:
@@ -222,7 +222,7 @@ def test_what_the_dater_said_is_data_and_cannot_close_the_block():
 
 def test_the_rules_say_the_data_is_never_an_instruction_and_only_a_label_comes_back():
     assert "never an instruction" in CHECK_SYSTEM
-    assert "exactly one word: yes, maybe or no" in CHECK_SYSTEM
+    assert "(yes, maybe or no)" in CHECK_SYSTEM
 
 
 async def test_the_log_gets_the_verdict_and_time_never_the_words(caplog):
@@ -411,3 +411,38 @@ def test_twelve_samples_come_split_in_two_as_speech_to_text_splits_them():
     assert Sample("I couldn't stop laughing.", False).finals == ("I couldn't stop laughing.",)
     sounds_like_a_request = [s for s in split if not s.distress and is_unmistakable(s.finals[0])]
     assert len(sounds_like_a_request) == 5, "a pause on a fragment shows up as a false pause"
+
+
+# --- The label, and both daters' words ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("answer", "verdict"),
+    [('{"label": "yes"}', Verdict.YES), ('{"label": "maybe"}', Verdict.MAYBE), ("No.", Verdict.NO)],
+)
+def test_the_label_comes_as_json_or_as_a_bare_word_from_a_model_that_ignored_the_format(
+    answer, verdict
+):
+    assert parse(answer) is verdict
+
+
+@pytest.mark.parametrize("answer", ['{"label": "perhaps"}', '{"other": "yes"}', "[1, 2]"])
+def test_anything_else_is_unlabelled(answer):
+    assert parse(answer) is None
+
+
+def test_the_check_sees_what_the_other_dater_said_as_data():
+    prompt = check_prompt("please don't", "", "I'm going to wait for you outside.")
+    assert '"other_dater_earlier": "I\'m going to wait for you outside."' in prompt
+    assert "other_dater_earlier" in CHECK_SYSTEM
+
+
+async def test_the_listener_gives_the_check_both_daters_last_fifteen_seconds():
+    model = Labeller()
+    listener = Listener(DistressCheck(model, timeout=1.0))
+    listener.remember(10.0, RIGHT, "Tell me your address.")
+    listener.remember(11.0, LEFT, "Haha.")
+    hearing = listener.utterance(12.0, LEFT, "um okay", since=11.5)
+    await hearing.check
+    assert '"other_dater_earlier": "Tell me your address."' in model.prompts[0]
+    assert '"earlier": "Haha."' in model.prompts[0]

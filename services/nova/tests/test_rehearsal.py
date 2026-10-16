@@ -120,7 +120,7 @@ class FakeModel:
             raise self.write_error
         return self.reply
 
-    async def label(self, *, system: str, prompt: str) -> str:
+    async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
         sentence = prompt.split('"sentence": "')[1].split('"')[0]
         self.checked.append(sentence)
         if self.gate is not None:

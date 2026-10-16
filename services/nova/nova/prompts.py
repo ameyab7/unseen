@@ -249,6 +249,11 @@ def room_talk(facts: RoomFacts, *, opening: str, tonight: Sequence[str] = ()) ->
                 "one of the daters is taking a short moment off air. Talk to the room for one "
                 "or two sentences. Don't say who stepped away or why."
             )
+        case Situation.SHOW_PAUSED:
+            situation = (
+                "the date is taking a short pause, off air. Talk to the room for one or two "
+                "sentences. Don't say why, or anything about the daters."
+            )
         case Situation.ENDED_EARLY:
             situation = (
                 "this date has ended early. Thank the room for listening, in one or two "

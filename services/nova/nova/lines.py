@@ -17,7 +17,6 @@ timings only, never text.
 """
 
 import asyncio
-import contextlib
 import random
 import time
 from collections.abc import Sequence
@@ -31,7 +30,7 @@ from nova.cues import Moment, RoomFacts, Say
 from nova.distress import has_warning, is_unmistakable
 from nova.events import Event, EventLog
 from nova.guardrails import Violation, card_words, check, clean, question_is_off_limits
-from nova.models import LineModel, ModelRefused
+from nova.models import LineModel, ModelRefused, warm_up
 from nova.tonight import Remembered, Tonight
 
 SET_PIECES = frozenset(
@@ -49,10 +48,6 @@ LIVE_REACTIONS = frozenset({Moment.SILENCE, Moment.FROM_THE_ROOM, Moment.ROOM_TA
 # carry what a listener or dater said, and the memory reaches every later date's prompts.
 REMEMBERED_LIVE = frozenset({Moment.SILENCE, Moment.ROOM_TALK})
 CANDIDATES = 3  # model lines written for each set piece; the best one is kept
-# The warm-up's wait: long enough for the 20-28 s cold load measured on the development PC,
-# short next to the prep timeout. Its answer, or failure, is ignored.
-WARM_UP_TIMEOUT = 30.0
-WARM_UP_SYSTEM = "Reply with one word."
 
 
 class Source(StrEnum):
@@ -189,14 +184,9 @@ class LineWriter:
     # --- Before the date ------------------------------------------------------------------
 
     async def warm_up(self) -> int:
-        """One tiny request, so a cold model loads now and not inside the prep budget. The
-        answer, or a failure, is ignored. Returns how long it took, in ms."""
-        started = time.monotonic()
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(
-                self._model.label(system=WARM_UP_SYSTEM, prompt="Say ok."), WARM_UP_TIMEOUT
-            )
-        ms = _ms_since(started)
+        """One tiny request (nova/models.py, warm_up), so a cold model loads now and not
+        inside the prep budget. Returns how long it took, in ms."""
+        ms = await warm_up(self._model)
         self._events.emit(Event.WARMUP, ms=ms)
         return ms
 

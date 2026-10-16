@@ -466,6 +466,8 @@ def slot_words(texts: Iterable[str], known: Collection[str] = ()) -> set[str]:
                     if taken == 0 and word in SLOT_SKIPPED:
                         continue
                     break
+                if taken == 0 and len(word) > 4 and word.endswith("ing"):
+                    break  # "i work at being a better listener": effort, not a place
                 if word not in skip:
                     found.add(word.split("'")[0])
                 taken += 1

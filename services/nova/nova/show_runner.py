@@ -22,6 +22,7 @@ from nova import running_order, script
 from nova.cards import Pair, Seat
 from nova.cues import (
     AlertModerator,
+    Conduct,
     Cue,
     DateEnded,
     DecisionWindowOpened,
@@ -74,6 +75,18 @@ NEVER_HELD = frozenset(
         Moment.DATER_LEFT,
         Moment.MODERATOR_END,
         Moment.RESULT,
+        Moment.SHOW_PAUSE,
+    }
+)
+# Conduct the moderator hears about at once, with nothing said on air (decision 0006).
+FLAGGED = frozenset(
+    {
+        Conduct.HARASSMENT,
+        Conduct.SEXUAL,
+        Conduct.HATE,
+        Conduct.THREAT,
+        Conduct.MINOR,
+        Conduct.UNSURE,
     }
 )
 
@@ -145,6 +158,8 @@ class ShowRunner:
         self._overdue = False  # not back in time: the moderator decides what happens next
         self._report_hold = False  # the pause is for a report: only the moderator lifts it
         self._cover_lines = 0  # lines Nova has said to the room in this hold
+        self._show_paused = False  # the whole date is held (a repeated unkind remark)
+        self._unkind: dict[Seat, int] = dict.fromkeys(Seat, 0)  # unkind remarks this date
         self._segment_playing = False  # the fallback segment is covering this hold
         # A dater the moderator resumed the show without: their turns are skipped, silence
         # prompts go to the other dater, and if they come back, Nova welcomes them back. Not
@@ -260,7 +275,7 @@ class ShowRunner:
         other dater's turn comes on time), and silence prompts go to the other dater only.
         Their decision is unchanged: they can still decide in the app."""
         cues = self._due(now)
-        if self._live and self._away is not None:
+        if self._live and self._held_since is not None:
             absent, reported = self._away, self._report_hold
             cues += self._clear_pause(now)
             self._absent, self._absent_reported = absent, reported
@@ -365,6 +380,42 @@ class ShowRunner:
                 cues.append(AlertModerator(ModeratorAlert.DISTRESS_UNCHECKED, seat))
         return cues
 
+    def dater_conduct(
+        self, now: float, seat: Seat, conduct: Conduct, *, street: bool = False
+    ) -> list[Cue]:
+        """What a dater's own words did (decision 0006), at any time; on air, Nova acts.
+
+        A personal detail: the moderator is alerted, and for a street or address Nova says
+        the brand book's line once the dater stops ("Let's keep street names off air.").
+        Unkind, the first time in a date: "Let's keep it kind." The second time by the same
+        dater: "We're taking a short pause.", the show clock holds for both daters, Nova
+        covers as for any hold, and the moderator is alerted and chooses resume or end.
+        Harassment, sexual content, hate, a threat, anything about a minor, or unsure: the
+        moderator is alerted at once with the category; Nova says nothing. No automatic
+        mute: decision 0006 leaves that to the product owner."""
+        cues = self._due(now)
+        speaks = self._live and self._held_since is None and self.segment in ON_AIR
+        match conduct:
+            case Conduct.PERSONAL_DETAIL:
+                cues.append(AlertModerator(ModeratorAlert.PERSONAL_DETAIL_ON_AIR, seat))
+                if street and speaks:
+                    line: list[Cue] = [
+                        Say(Moment.KEEP_STREETS_OFF_AIR, text=script.KEEP_STREETS_OFF_AIR)
+                    ]
+                    cues += self._wait_for_speech(now, line)
+            case Conduct.UNKIND:
+                self._unkind[seat] += 1
+                if self._unkind[seat] > 1:
+                    cues.append(AlertModerator(ModeratorAlert.CONDUCT_FLAG, seat, Conduct.UNKIND))
+                    if speaks:
+                        cues += [StopSpeaking(), *self._pause_show(now)]
+                elif speaks:
+                    kind: list[Cue] = [Say(Moment.KEEP_IT_KIND, text=script.KEEP_IT_KIND)]
+                    cues += self._wait_for_speech(now, kind)
+            case _ if conduct in FLAGGED:
+                cues.append(AlertModerator(ModeratorAlert.CONDUCT_FLAG, seat, conduct))
+        return cues
+
     def dater_reported(self, now: float, seat: Seat) -> list[Cue]:
         """A dater pressed Report. The prototype's report sheet: "Nova pauses the date and a
         live moderator listens in." The moderator is alerted first, at any time. If a pause
@@ -390,8 +441,13 @@ class ShowRunner:
 
     @property
     def _can_pause(self) -> bool:
-        """On air, and nobody else on a pause."""
-        return self._live and self._away is None and self.segment in ON_AIR
+        """On air, and nobody else on a pause, and the show not held."""
+        return (
+            self._live
+            and self._away is None
+            and self._held_since is None
+            and self.segment in ON_AIR
+        )
 
     def _pause(self, now: float, seat: Seat, line: str, *, repeatable: bool = True) -> list[Cue]:
         """Nova says the line and covers with talk to the room; the show clock holds until
@@ -406,6 +462,14 @@ class ShowRunner:
             if self._pauses[seat] > 1:
                 cues.append(AlertModerator(ModeratorAlert.REPEATED_PAUSE, seat))
         return cues
+
+    def _pause_show(self, now: float) -> list[Cue]:
+        """The whole date holds, for both daters: "We're taking a short pause.", then Nova
+        covers as for any hold, until the moderator resumes or ends the date."""
+        self._held_since, self._overdue, self._show_paused = now, False, True
+        self._waiting, self._waiting_until = [], None
+        self._cover_lines = 1
+        return [Say(Moment.SHOW_PAUSE, text=script.SHOW_PAUSE), self._cover_line()]
 
     def _wants_to_stop(self, now: float, seat: Seat) -> list[Cue]:
         """The moderator is alerted, and if a pause can start, Nova stops mid-line, drops
@@ -425,9 +489,8 @@ class ShowRunner:
     def _cover_line(self) -> Say:
         """One of the hold's lines to the room, numbered, so the line writer never says
         the same fallback twice in one hold."""
-        return self._room_talk(
-            Situation.PAUSE, number=self._cover_lines, of=self._timing.cover_lines
-        )
+        situation = Situation.SHOW_PAUSED if self._show_paused else Situation.PAUSE
+        return self._room_talk(situation, number=self._cover_lines, of=self._timing.cover_lines)
 
     def _show_time(self, now: float) -> float:
         if self._started_at is None:
@@ -682,6 +745,7 @@ class ShowRunner:
         self._overdue = False
         self._report_hold = False
         self._cover_lines, self._segment_playing = 0, False
+        self._show_paused = False
         return stop
 
     def _close_poll(self) -> list[Cue]:
@@ -710,6 +774,7 @@ class ShowRunner:
         self._report_hold = False
         self._absent, self._absent_reported = None, False
         self._cover_lines, self._segment_playing = 0, False
+        self._show_paused = False
         return [Finished()]
 
 

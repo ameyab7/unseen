@@ -70,9 +70,21 @@ Date: 2026-10-13. Status: accepted.
     once and starts a need-a-moment pause for that dater, with the usual rules (back, 30 s
     alert, moderator decides). If a pause can't start (another dater is on one, or the
     daters are deciding), Nova says nothing and the moderator acts. No reply is written.
-  - **Meaning layer:** every other utterance goes to the language model in `NOVA_LLM`,
-    once, as the sentence it judges, with what the same dater said in the 15 seconds
-    before it, and the model answers only yes, maybe or no (Gemma at temperature 0).
+  - **Meaning layer:** every other utterance goes to the language model in
+    `NOVA_CLASSIFIER_LLM` (optional; it defaults to `NOVA_LLM`, and lets a smaller model
+    label without queueing behind live lines on the same Ollama), once, as the sentence it
+    judges, with what the same dater said in the 15 seconds before it and what the other
+    dater said in those 15 seconds (`other_dater_earlier`: distress can answer the other
+    dater, "please don't"), and the model answers only yes, maybe or no (Gemma at
+    temperature 0). The label is structured output, JSON with an enum (Ollama's
+    `response_format` with a JSON schema; Claude's `output_config.format`), with the old
+    bare-word parse kept for a model that ignores it. The rules name the indirect signals
+    (asking how long is left, wishing to be home or elsewhere, the body in trouble, asking
+    for someone from the show, a flat answer to something invasive the other dater said),
+    say "if you are unsure between no and maybe, answer maybe" (a maybe only alerts), and
+    give six short examples written for the prompt, from neither test set. The agent and
+    the evaluation warm the check's model up first: without it, a cold load (18 s) made
+    every 2 s check time out and start the load again.
     Distress needn't use any particular word ("can someone come get me?"), so nothing is
     filtered out first; a first version checked only sentences with a warning word, and
     missed those. Yes: as for the instant layer. Maybe: the moderator is alerted
@@ -128,10 +140,26 @@ Date: 2026-10-13. Status: accepted.
     sentences with only warning-word sentences checked, missed none and had no false
     pauses; it had none of the 10 plain distress sentences.)
     The same author wrote the set, the check's rules and the warning words, so it is
-    easier than real speech, and the check's rules haven't been tuned to the misses, so
-    as not to fit them to the test set. Before the first real show, someone else (the
-    product owner or a moderator) writes a second set the check has never seen; real
-    transcripts can't be used, since they're never stored.
+    easier than real speech. So the rules are now tuned on a separate dev set
+    (`nova/distress_dev.py`: 60 real, 60 ordinary, written fresh, in six kinds of
+    indirect distress, some as speech-to-text gives them, eight answering the other
+    dater), and the held-out set above is the measure, run once at the end. `--distress`
+    reports both sets apart, with Wilson 95% intervals (with about 50 sentences a side,
+    zero misses still allows a true miss rate near 7%); `--dev` runs the dev set alone.
+    Third run, 2026-10-16, Gemma (`gemma4:26b`), structured labels and both daters'
+    context: on the dev set, the old rules missed 16 of 60 (26.7%, 95% CI 17.1% to
+    39.0%) with no false pauses; the tuned rules missed 1 of 60 (1.7%, 0.3% to 8.9%:
+    "I'm thinking about my sofa a lot right now, and not in a good way.") with 1 false
+    pause ("Can I tap out of the quiz round and just watch?"). On the held-out set, run
+    once: 49 of 51 paused (23 by the instant layer, 26 by meaning), none alerted only, 2
+    missed (3.9%, 1.1% to 13.2%; before, 3 missed and 1 alerted only), no false alerts
+    or pauses (0 of 51, 0% to 7.0%). The three old misses are now caught; two sentences
+    that paused before are now missed: "That comment was really inappropriate." and "Why
+    do you keep asking for my number?". The rules were not tuned further after the
+    held-out run. The check now takes a median of 377 ms (worst 424 ms), up from about
+    195 ms, with the longer rules and the JSON. Before the first real show, someone else
+    (the product owner or a moderator) writes a second held-out set the check has never
+    seen; real transcripts can't be used, since they're never stored.
 - **Lines vary across the night.** Listeners hear every date, so Nova remembers the lines
   it has used tonight, across dates (`nova/tonight.py`). Every prompt sees the lines
   already said for its moment (daters' names masked, so no earlier dater's name reaches a
@@ -234,7 +262,7 @@ Nova's rules, the guardrails, and approved fallbacks.
 ## Launch requirements
 
 The pattern guardrails alone aren't enough for real shows. They can't catch meaning (the
-right-hand column above). Before the first real show, Nova needs both of these:
+right-hand column above). Before the first real show, Nova needs these:
 
 1. **A meaning-based check on Nova's lines before they're spoken:** the technical plan's
    fast classifier, run on every model line after the patterns. A line it flags gets the
@@ -243,6 +271,11 @@ right-hand column above). Before the first real show, Nova needs both of these:
    mid-line and says nothing more until the moderator unmutes it. The date continues, and
    the fallback segment doesn't play. (Ending the date, already built, is the control that
    plays the fallback segment.)
+3. **Hearing a dater's conduct, not only their distress** (decision 0006): personal details
+   slipping, unkindness, harassment, sexual content, hate, threats and anything about a
+   minor, with the console alerts and the brand book's lines. Built in its first form;
+   its sets are small, and whether serious conduct mutes a dater automatically is still
+   the product owner's decision.
 
 ## Consequences
 
