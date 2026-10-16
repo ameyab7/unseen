@@ -103,6 +103,7 @@ class TestTimeouts:
         settings = Settings.from_env(GOOD)
         assert settings.live_timeout == 2.0
         assert settings.prep_timeout == 60.0
+        assert settings.prep_budget == 45.0
         assert settings.distress_timeout == 2.0
         assert (settings.utterance_grace, settings.utterance_max_wait) == (0.6, 1.5)
         assert settings.ollama_base_url == "http://localhost:11434"
@@ -113,6 +114,7 @@ class TestTimeouts:
                 **GOOD,
                 "NOVA_LIVE_TIMEOUT_SECONDS": "1.5",
                 "NOVA_PREP_TIMEOUT_SECONDS": "90",
+                "NOVA_PREP_BUDGET_SECONDS": "30",
                 "NOVA_DISTRESS_TIMEOUT_SECONDS": "0.8",
                 "NOVA_UTTERANCE_GRACE_SECONDS": "0.4",
                 "NOVA_UTTERANCE_MAX_WAIT_SECONDS": "1",
@@ -120,6 +122,7 @@ class TestTimeouts:
             }
         )
         assert (settings.live_timeout, settings.prep_timeout) == (1.5, 90.0)
+        assert settings.prep_budget == 30.0
         assert settings.distress_timeout == 0.8
         assert (settings.utterance_grace, settings.utterance_max_wait) == (0.4, 1.0)
         assert settings.ollama_base_url == "http://gpu-box:11434"
@@ -128,6 +131,7 @@ class TestTimeouts:
         "name",
         [
             "NOVA_LIVE_TIMEOUT_SECONDS",
+            "NOVA_PREP_BUDGET_SECONDS",
             "NOVA_DISTRESS_TIMEOUT_SECONDS",
             "NOVA_UTTERANCE_GRACE_SECONDS",
             "NOVA_UTTERANCE_MAX_WAIT_SECONDS",

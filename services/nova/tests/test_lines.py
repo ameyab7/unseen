@@ -101,6 +101,70 @@ async def test_a_set_piece_that_was_not_prepared_uses_its_fallback_without_the_m
     assert model.prompts == []
 
 
+class Hanging:
+    """A model that never answers."""
+
+    name = "fake/hanging"
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def write(self, *, system: str, prompt: str) -> str:
+        self.prompts.append(prompt)
+        await asyncio.Event().wait()
+        return ""
+
+
+async def test_a_model_that_hangs_holds_the_date_for_the_budget_not_every_timeout(caplog):
+    caplog.set_level(logging.INFO, logger="nova")
+    w = LineWriter(
+        Hanging(), REHEARSAL_PAIR, next_pair=NEXT_PAIR, prep_timeout=60.0, prep_budget=0.2
+    )
+    started = time.monotonic()
+    await w.prepare()
+    assert time.monotonic() - started < 0.4, "about the budget, never the 60 s timeout"
+    lines = [await w.line_for(say) for say in SET_PIECES]
+    assert all(line.source is Source.FALLBACK for line in lines)
+    assert all(line.error is ErrorKind.TIMEOUT for line in lines)
+    assert [line.text for line in lines[3:6]] == list(script.LIGHTNING_FALLBACKS), "in turn"
+    assert w.budget_exhausted and "budget_exhausted=True" in caplog.text
+
+
+async def test_different_moments_are_prepared_at_the_same_time():
+    """Each set piece takes 0.1 s here. One after another, ten would take 1 s; at the same
+    time, the longest chain of one moment (three lightning questions) takes 0.3 s."""
+    w = writer(FakeModel("Maya and Theo, here we go.", delay=0.1))
+    started = time.monotonic()
+    await w.prepare()
+    elapsed = time.monotonic() - started
+    assert 0.3 <= elapsed < 0.6
+    assert not w.budget_exhausted
+
+
+async def test_a_set_piece_the_date_never_spoke_leaves_tonights_memory_when_it_finishes():
+    tonight = Tonight()
+
+    def first_date(prompt: str) -> str:
+        return (
+            "Maya and Theo, thank you both."
+            if OUTRO_TASK in instructions(prompt)
+            else ("Maya and Theo, here we go.")
+        )
+
+    first = writer(FakeModel(first_date), tonight=tonight)
+    await first.prepare()
+    await first.line_for(Say(Moment.DOORS_INTRO))  # the date ends before its outro
+    first.finish()
+
+    later = FakeModel("Sam and Priya, over to you.")
+    second = writer(later, pair=NEXT_PAIR, next_pair=None, tonight=tonight)
+    await second.prepare()
+    outro = next(p for p in later.prompts if OUTRO_TASK in instructions(p))
+    doors = next(p for p in later.prompts if "open the date" in instructions(p))
+    assert "thank you both" not in data(outro), "never spoken, so gone"
+    assert f"{NAME} and {NAME}, here we go." in data(doors), "spoken, so kept"
+
+
 async def test_preparing_uses_the_longer_preparation_timeout():
     w = writer(FakeModel("Maya and Theo, here we go.", delay=0.05), live=0.01, prep=2.0)
     await w.prepare()

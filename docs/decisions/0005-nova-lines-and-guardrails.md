@@ -124,8 +124,11 @@ Date: 2026-10-13. Status: accepted.
   already said for its moment (daters' names masked, so no earlier dater's name reaches a
   later date) and is told not to repeat or echo them. Audience-question lines and replies
   are never remembered: they carry what a listener or dater said, and the memory reaches
-  every later date's prompts. Each set piece gets three candidates during prep; Nova
-  keeps the one that passes the guardrails and is least similar to tonight's lines. The
+  every later date's prompts. Set pieces are kept as planned for their date: prompts see
+  them while it runs, and if it ends early, the ones never spoken are dropped, so lines
+  the room never heard don't steer later dates. Each set piece gets three candidates
+  during prep; Nova keeps the one that passes the guardrails and is least similar to
+  tonight's lines. The
   line writer also picks a shape for Next up and an opening for talk to the room at
   random, and gives each date's three lightning questions one of each format (either/or,
   finish the sentence, one-word answer) in a random order; each is one sentence. The
@@ -144,8 +147,17 @@ Date: 2026-10-13. Status: accepted.
   at most 565 ms over 60 runs, so 2 s is about 3.5x the worst case. It caps the wait for
   the model, not the silence the room hears: the voice's first audio adds about 0.2 to
   0.5 s, and a reply also waits for the end of the dater's sentence and its transcript
-  (`docs/spike-results.md`). `NOVA_PREP_TIMEOUT_SECONDS` (default 60) for set pieces: a
-  cold model load took 20-28 s. `NOVA_DISTRESS_TIMEOUT_SECONDS` (default 2) for the
+  (`docs/spike-results.md`). `NOVA_PREP_TIMEOUT_SECONDS` (default 60) caps each request
+  for a set piece: a cold model load took 20-28 s. `NOVA_PREP_BUDGET_SECONDS` (default 45)
+  caps preparing the whole date: different moments are written at the same time (the
+  pieces of one moment in order, so each sees the ones before it), and when the budget
+  runs out every set piece not yet chosen gets its fallback and the date can start. Before,
+  ten set pieces were written one after another, each with its own 60 s, so a model that
+  hung held the date for about ten minutes. Writing at the same time helps only as far as
+  the model serves requests at once (Ollama: `OLLAMA_NUM_PARALLEL`). At the start, the
+  agent sends the model one tiny request (`warm_up`, its answer ignored, its time logged
+  as a `warmup` event), so a cold load happens before the budget starts.
+  `NOVA_DISTRESS_TIMEOUT_SECONDS` (default 2) for the
   distress check: warm Gemma took a median of 193-195 ms and at most 278 ms, so 2 s leaves
   room for a slower model; a check that times out alerts the moderator, and a yes that
   takes longer makes the kind line later. `NOVA_UTTERANCE_GRACE_SECONDS` (default 0.6)

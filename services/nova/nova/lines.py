@@ -3,8 +3,10 @@
 - Approved lines (cue text) are spoken as written.
 - Set pieces (the Doors intro, first questions, lightning questions, last words, the outro
   and Next up) are written before the date by prepare(), three candidates each; the one
-  kept passes the guardrails and is least like what Nova has said tonight. The model is
-  never called for them during the date; anything missing uses its fallback.
+  kept passes the guardrails and is least like what Nova has said tonight. Different
+  moments are written at the same time, within one budget for the whole date
+  (NOVA_PREP_BUDGET_SECONDS). The model is never called for them during the date;
+  anything missing uses its fallback.
 - Live reactions (a silence, an audience question, talk to the room, a reply to a dater)
   call the model during the date, within live_timeout.
 
@@ -15,6 +17,7 @@ timings only, never text.
 """
 
 import asyncio
+import contextlib
 import random
 import time
 from collections.abc import Sequence
@@ -23,12 +26,13 @@ from enum import StrEnum
 
 from nova import prompts, script
 from nova.cards import BlindCard, Pair, Seat
+from nova.config import Settings
 from nova.cues import Moment, RoomFacts, Say
 from nova.distress import has_warning, is_unmistakable
 from nova.events import Event, EventLog
 from nova.guardrails import Violation, card_words, check, clean, question_is_off_limits
 from nova.models import LineModel, ModelRefused
-from nova.tonight import Tonight
+from nova.tonight import Remembered, Tonight
 
 SET_PIECES = frozenset(
     {
@@ -45,6 +49,10 @@ LIVE_REACTIONS = frozenset({Moment.SILENCE, Moment.FROM_THE_ROOM, Moment.ROOM_TA
 # carry what a listener or dater said, and the memory reaches every later date's prompts.
 REMEMBERED_LIVE = frozenset({Moment.SILENCE, Moment.ROOM_TALK})
 CANDIDATES = 3  # model lines written for each set piece; the best one is kept
+# The warm-up's wait: long enough for the 20-28 s cold load measured on the development PC,
+# short next to the prep timeout. Its answer, or failure, is ignored.
+WARM_UP_TIMEOUT = 30.0
+WARM_UP_SYSTEM = "Reply with one word."
 
 
 class Source(StrEnum):
@@ -150,6 +158,7 @@ class LineWriter:
         next_pair: Pair | None = None,
         live_timeout: float = 2.0,
         prep_timeout: float = 60.0,
+        prep_budget: float = Settings.prep_budget,
         events: EventLog | None = None,
         rng: random.Random | None = None,
         tonight: Tonight | None = None,
@@ -159,6 +168,7 @@ class LineWriter:
         self._next_pair = next_pair
         self._live_timeout = live_timeout
         self._prep_timeout = prep_timeout
+        self._prep_budget = prep_budget
         self._events = events or EventLog()
         self._rng = rng or random.Random()  # picks shapes and openings, so lines vary
         # This date's lightning questions: one of each format, in a random order.
@@ -170,29 +180,59 @@ class LineWriter:
         if next_pair is not None:
             self._names |= {next_pair.left.first_name, next_pair.right.first_name}
         self._prepared: dict[tuple[Moment, Seat | None, str | None], Line] = {}
+        # Set pieces in tonight's memory as planned: kept once spoken, dropped by finish().
+        self._planned: dict[tuple[Moment, Seat | None, str | None], Remembered] = {}
+        self.budget_exhausted = False  # the prep budget ran out before every piece was ready
 
     # --- Before the date ------------------------------------------------------------------
 
-    async def prepare(self) -> None:
-        """Writes every set piece, one at a time, so each sees the ones chosen before it
-        (tonight's memory includes them as soon as they're chosen)."""
+    async def warm_up(self) -> int:
+        """One tiny request, so a cold model loads now and not inside the prep budget. The
+        answer, or a failure, is ignored. Returns how long it took, in ms."""
         started = time.monotonic()
-        for say in self._set_piece_cues():
-            line = await self._prepare_one(say)
-            self._prepared[_key(say)] = line
-            self._tonight.remember(say.moment, line.text, names=self._names)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(
+                self._model.label(system=WARM_UP_SYSTEM, prompt="Say ok."), WARM_UP_TIMEOUT
+            )
+        ms = _ms_since(started)
+        self._events.emit(Event.WARMUP, ms=ms)
+        return ms
+
+    async def prepare(self) -> None:
+        """Writes every set piece within the prep budget. Different moments are written at
+        the same time; the pieces of one moment (the two first questions, the three
+        lightning questions, the two last words) are written in order, so each sees the ones
+        chosen before it (tonight's memory includes them as soon as they're chosen). When
+        the budget runs out, every piece not yet chosen gets its fallback."""
+        started = time.monotonic()
+        cues = self._set_piece_cues()
+        chains: dict[Moment, list[Say]] = {}
+        for say in cues:
+            chains.setdefault(say.moment, []).append(say)
+        try:
+            async with asyncio.timeout(self._prep_budget):
+                await asyncio.gather(*(self._prepare_chain(chain) for chain in chains.values()))
+        except TimeoutError:
+            self.budget_exhausted = True
+        for say in cues:  # in running order, so fallbacks take turns as they would anyway
+            if _key(say) not in self._prepared:
+                self._keep(say, self._fallback(say, Attempt(None, (), 0, ErrorKind.TIMEOUT)))
         fallbacks = sum(line.source is Source.FALLBACK for line in self._prepared.values())
         self._events.emit(
             Event.PREPARED,
             count=len(self._prepared),
             fallbacks=fallbacks,
             ms=_ms_since(started),
+            budget_exhausted=self.budget_exhausted,
         )
 
     # --- During the date ------------------------------------------------------------------
 
     async def line_for(self, say: Say) -> Line:
         line = await self._line_for(say)
+        planned = self._planned.get(_key(say)) if say.text is None else None
+        if planned is not None and say.moment in SET_PIECES:
+            self._tonight.heard(planned)
         if line.source is not Source.FIXED and line.moment in REMEMBERED_LIVE:
             self._tonight.remember(line.moment, line.text, names=self._names)
         self._events.emit(
@@ -232,7 +272,23 @@ class LineWriter:
         attempt = await self._attempt(say, self._prompt_for(say), self._live_timeout)
         return self._settle(say, attempt, Source.MODEL)
 
+    # --- After the date -------------------------------------------------------------------
+
+    def finish(self) -> None:
+        """The date is over: the set pieces it never spoke (it ended early) leave tonight's
+        memory, so lines the room never heard don't steer later dates' lines."""
+        self._tonight.drop(self._planned.values())
+
     # --- Internals ------------------------------------------------------------------------
+
+    async def _prepare_chain(self, chain: Sequence[Say]) -> None:
+        """One moment's set pieces, in order."""
+        for say in chain:
+            self._keep(say, await self._prepare_one(say))
+
+    def _keep(self, say: Say, line: Line) -> None:
+        self._prepared[_key(say)] = line
+        self._planned[_key(say)] = self._tonight.plan(say.moment, line.text, names=self._names)
 
     def _declines(self, say: Say) -> bool:
         """Audience questions about personal details or looks, or that try to instruct Nova,
