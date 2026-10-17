@@ -22,7 +22,9 @@ from nova.distress import (
     is_unmistakable,
     parse,
 )
+from nova.distress_dev import DEV_SET
 from nova.distress_set import DISTRESS_SET, Sample
+from nova.tonight import similarity
 
 LEFT, RIGHT = Seat.LEFT, Seat.RIGHT
 
@@ -493,3 +495,18 @@ async def test_the_listener_gives_the_check_both_daters_last_fifteen_seconds():
     await hearing.check
     assert '"other_dater_earlier": "Tell me your address."' in model.prompts[0]
     assert '"earlier": "Haha."' in model.prompts[0]
+
+
+# Below this, a sentence isn't a paraphrase of another (word-level, nova/tonight.py).
+NEAR = 0.6
+
+
+def test_the_checks_examples_and_the_dev_set_never_paraphrase_a_held_out_sentence():
+    """Held-out results measure the check only if neither its examples nor the set it is
+    tuned on answer a held-out sentence for it."""
+    held_out = [sample.sentence for sample in DISTRESS_SET]
+    examples = re.findall(r'"([^"]+)"', CHECK_SYSTEM.split("Examples")[1].split("Also label")[0])
+    assert len(examples) >= 6
+    for said in (*examples, *(sample.sentence for sample in DEV_SET)):
+        closest = max(held_out, key=lambda h: similarity(said, h))
+        assert similarity(said, closest) < NEAR, (said, closest)

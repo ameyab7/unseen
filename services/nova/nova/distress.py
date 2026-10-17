@@ -218,7 +218,7 @@ Examples, with the conduct label after the comma:
 - "can I have a word with someone off air" -> yes, none
 - other dater: "Give me your number or I'll find it." Sentence: "okay..." -> yes, none
 - "I get dizzy on boats, so I stick to trains." -> no, none
-- "Nova, can you help us pick a question?" -> no, none
+- "Nova, help, we've run out of things to ask each other." -> no, none
 
 Also label the dater's own conduct in the sentence, toward the other dater or the room \
 ("conduct"):
