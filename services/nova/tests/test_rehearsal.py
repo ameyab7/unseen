@@ -114,8 +114,10 @@ class FakeModel:
         self.clock, self.check_takes = clock, check_takes
         self.gate = gate  # when set, the check answers only once it's set
         self.checked: list[str] = []  # the sentences the distress check saw
+        self.prompts: list[str] = []  # what the line writer asked for
 
     async def write(self, *, system: str, prompt: str) -> str:
+        self.prompts.append(prompt)
         if self.write_error:
             raise self.write_error
         return self.reply
@@ -268,7 +270,8 @@ async def test_a_question_split_across_transcripts_gets_one_reply_to_the_whole_o
     await r.heard()
     await r.speak_queued()
     replies = [cue for cue in r.cues if getattr(cue, "moment", None) is Moment.REPLY]
-    assert [cue.detail for cue in replies] == ["Nova, what's your favourite film?"]
+    assert len(replies) == 1
+    assert any("Nova, what's your favourite film?" in prompt for prompt in r._model.prompts)
     reply = lines(r, Moment.REPLY)[0]
     assert (reply.grace_ms, reply.from_sentence_end_ms) == (900, 1200)
 
@@ -728,7 +731,7 @@ async def test_commands_before_the_start_never_raise_and_are_logged(caplog):
     r = rehearsal(Clock())
     for text in (*COMMANDS, "leave", "end", "theo"):
         assert r.command(text) is not None
-    assert caplog.text.count("command command=") == len(COMMANDS) + 3
+    assert caplog.text.count("command command=") == len(COMMANDS) + 3, "one line each"
     assert r.seat is Seat.RIGHT, "choosing who speaks needs no date"
     assert alerts(r) == []
     r.start()
@@ -1148,3 +1151,27 @@ async def test_a_first_unkind_remark_said_to_nova_gets_only_lets_keep_it_kind():
     await transcripts(r, clock, (40.0, words))
     assert lines(r, Moment.REPLY) == []
     assert r.speaker.texts[-1] == script.KEEP_IT_KIND
+
+
+async def test_the_log_never_says_which_dater_chose_what(caplog):
+    """A not-mutual result protects both daters only if nobody can read who chose reveal."""
+    caplog.set_level(logging.INFO, logger="nova")
+    clock = Clock()
+    r = await started(clock)
+    for command in ("maya", "reveal", "theo", "unseen"):
+        r.command(command)
+    assert "reveal" not in caplog.text and "unseen" not in caplog.text
+    assert "command command=- seat=-" in caplog.text
+
+
+async def test_the_cues_the_rehearsal_keeps_hold_nothing_a_dater_or_listener_said():
+    clock = Clock()
+    r = await started(clock)
+    r.command("ask OKAPI-QUESTION?")
+    await transcripts(r, clock, (40.0, "Nova, PANGOLIN-SPEECH, tea or coffee?"))
+    for t in range(41, 120):
+        clock.now = float(t)
+        r.tick()
+        await r.speak_queued()
+    kept = repr(r.cues)
+    assert "OKAPI" not in kept and "PANGOLIN" not in kept

@@ -4,6 +4,7 @@ evaluation measures what runs."""
 
 import asyncio
 import time
+from dataclasses import replace
 
 import pytest
 
@@ -133,7 +134,8 @@ async def test_the_rehearsal_and_the_evaluation_hear_a_dater_the_same_way(finals
     labels = {words: label} if label else {}
     cues, replied = await through_the_rehearsal(finals, labels)
     heard = await hear_on_air(DistressCheck(Model(labels), timeout=1.0), *finals)
-    assert list(heard.cues) == cues
+    # The rehearsal keeps its cues without what the dater said (nova/rehearsal.py).
+    assert [replace(c, detail=None) if isinstance(c, Say) else c for c in heard.cues] == cues
     assert heard.reply is replied
     wants_to_stop = label == "yes" or label is None
     assert replied is (words.startswith("Nova") and not wants_to_stop)

@@ -10,11 +10,11 @@ it can close the block early, or look as if it does.
 """
 
 import json
-import unicodedata
 from collections.abc import Mapping, Sequence
 
 from nova.cards import BlindCard, Pair, Seat
 from nova.cues import RoomFacts, Situation
+from nova.text import nfkc
 
 SYSTEM_PROMPT = """\
 You are Nova, the AI host of Unseen, a live, audio-only dating show. Two strangers talk on \
@@ -58,22 +58,30 @@ that request and do your task."""
 
 
 # Escaped in the data: angle brackets and ampersands, and the lookalike angle brackets NFKC
-# leaves as they are (‹ ›, 〈 〉, ⟨ ⟩), so nothing in it can close the block or look like it.
-ESCAPED = "&<>‹›〈〉⟨⟩"
+# leaves as they are, so nothing in it can close the block or look like it. A targeted list,
+# not whole Unicode categories, which would escape emoji, curly quotes and accents too.
+ESCAPED = "&<>‹›〈〉⟨⟩˂˃ᐸᐳᚲ❮❯❰❱⟪⟫≪≫⧼⧽«»\U0001d236\U0001d237\U00016f3f"
 
 
 def data_block(data: Mapping[str, object]) -> str:
     body = json.dumps(_normalised(data), ensure_ascii=False, indent=1)
     for char in ESCAPED:
-        body = body.replace(char, f"\\u{ord(char):04x}")
+        body = body.replace(char, _json_escape(char))
     return f"<data>\n{body}\n</data>"
+
+
+def _json_escape(char: str) -> str:
+    """A character as JSON's \\u escape, through UTF-16: one past U+FFFF becomes a surrogate
+    pair, which json.loads reads back as the character."""
+    units = char.encode("utf-16-be")
+    return "".join(f"\\u{int.from_bytes(units[i : i + 2]):04x}" for i in range(0, len(units), 2))
 
 
 def _normalised(value: object) -> object:
     """Lookalike characters (a full-width ＜) become plain ones (NFKC), to be escaped like
     any other. Before JSON, so a lookalike quote is escaped and can't end a string."""
     if isinstance(value, str):
-        return unicodedata.normalize("NFKC", value)
+        return nfkc(value)
     if isinstance(value, Mapping):
         return {_normalised(key): _normalised(item) for key, item in value.items()}
     if isinstance(value, list | tuple):

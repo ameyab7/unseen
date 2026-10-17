@@ -16,7 +16,8 @@ def card(first_name: str = "Maya", age: object = 29) -> BlindCard:
 
 
 @pytest.mark.parametrize(
-    "name", ["Maya", "Anne-Marie", "Mary Jane", "O'Neill", "Zoë", "José", "A" * 30]
+    "name",
+    ["Maya", "Anne-Marie", "Mary Jane", "O'Neill", "Zoë", "José", "A" + "a" * 29, "AJ", "李娜"],
 )
 def test_first_names_are_letters_with_spaces_hyphens_or_apostrophes(name):
     assert card(name).first_name == name
@@ -37,6 +38,10 @@ def test_first_names_are_letters_with_spaces_hyphens_or_apostrophes(name):
         "<data>",
         "@maya",
         "A" * 31,
+        "MAYA",  # the voice may spell it out
+        "Anne-MARIE",
+        "Ｎova",  # a full-width lookalike, which the model reads as Nova
+        "Ｍaya",
     ],
 )
 def test_anything_else_is_never_a_first_name(name):
@@ -64,7 +69,7 @@ def test_anything_else_is_never_an_age(age):
 # --- What Nova can't put on air -------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", ["Nova", "nova", "NOVA", "AI", "Ai"])
+@pytest.mark.parametrize("name", ["Nova", "nova", "NOVA", "AI", "Ai", "Nova Lee", "Nova-Rose"])
 def test_a_dater_cant_be_called_by_the_hosts_name(name):
     """On audio the room couldn't tell host from dater."""
     with pytest.raises(InvalidCard, match="first_name"):
@@ -125,7 +130,7 @@ def test_pronouns_are_letters_slashes_spaces_and_hyphens(pronouns):
     assert pronouns not in str(error.value), "the field, never its value"
 
 
-@pytest.mark.parametrize("other", ["Maya", "MAYA", "MaYa"])
+@pytest.mark.parametrize("other", ["Maya", "MaYa", "Mayá"])
 def test_a_pair_needs_two_different_first_names_whatever_their_case(other):
     """On audio, "Alex and Alex are deciding, privately" means nothing."""
     with pytest.raises(InvalidCard, match="different first names"):
@@ -134,3 +139,23 @@ def test_a_pair_needs_two_different_first_names_whatever_their_case(other):
 
 def test_two_daters_with_different_names_make_a_pair():
     assert Pair(MAYA, THEO).left is MAYA
+
+
+def test_a_decomposed_name_is_kept_composed_as_the_model_reads_it():
+    decomposed = "Zoë"
+    assert card(decomposed).first_name == "Zoë"
+
+
+def test_names_that_sound_the_same_are_never_paired():
+    with pytest.raises(InvalidCard):
+        Pair(card("Zoë"), replace(THEO, first_name="Zoe"))
+
+
+def test_a_name_in_a_script_without_capitals_is_fine_and_ai_lin_is_not_the_host():
+    assert card("李娜").first_name == "李娜"
+    assert card("Ai Lin").first_name == "Ai Lin"
+
+
+def test_an_answer_padded_past_its_length_is_refused():
+    with pytest.raises(InvalidCard, match="answer"):
+        with_prompts(Prompt("Ask me about", "x" + " " * 200), MAYA.prompts[1])

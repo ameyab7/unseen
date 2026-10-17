@@ -82,8 +82,10 @@ sexual content, hate, minors, and addresses or workplaces.
   in both halves; harassment 3 of 4 in each; threat 3 of 3 (dev) and 2 of 3 (held out,
   missed: "I'll be waiting outside when the show finishes."). Ordinary talk left alone 11
   of 12 (dev) and 9 of 12 (held out: "My mum lives near the sea" heard as an address, "I
-  work at keeping my plants alive" as a workplace, since fixed for any "work at" followed
-  by a verb, and "You're useless at lying, ha" as unkind). The sets are small: every
+  work at keeping my plants alive" as a workplace, since fixed, and "You're useless at
+  lying, ha" as unkind). The fix first stopped at any word ending in -ing after "work at",
+  which let Sterling, Boeing, Ealing and Harding go back on air; it now stops only at a
+  word of effort ("being", "keeping", "getting" and a few more). The sets are small: every
   interval is wide.
 
   Adding the conduct label to the distress check's call changed its results a little:
