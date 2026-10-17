@@ -21,7 +21,6 @@ text; and what they say or type stays in memory.
 """
 
 import asyncio
-import contextlib
 import logging
 import os
 import time
@@ -115,14 +114,26 @@ class SessionSpeaker:
             self._speaking.set()
 
     async def speak(self, text: str) -> float | None:
+        """Waits for the line's first audio or the end of its playout, whichever comes first,
+        then for the playout. A line cut before its first audio, or whose voice failed, is
+        done at once: waiting START_TIMEOUT for audio that will never come would hold up
+        the line after it, which may be the kind line. Never started: None."""
         self._speaking.clear()
         self._started_at = None
         handle = self._session.say(text, allow_interruptions=False, add_to_chat_ctx=False)
-        with contextlib.suppress(TimeoutError):  # never started: measured as a miss
-            await asyncio.wait_for(self._speaking.wait(), self.START_TIMEOUT)
-        started = self._started_at
-        await handle.wait_for_playout()
-        return started
+        # wait_for_playout() shields the speech, so cancelling this never cancels the line.
+        playout = asyncio.ensure_future(handle.wait_for_playout())
+        speaking = asyncio.ensure_future(self._speaking.wait())
+        try:
+            await asyncio.wait(
+                {playout, speaking}, timeout=self.START_TIMEOUT, return_when=asyncio.FIRST_COMPLETED
+            )
+            started = self._started_at
+            await playout
+            return started
+        finally:
+            speaking.cancel()
+            playout.cancel()
 
     def stop(self) -> None:
         self._session.interrupt(force=True)

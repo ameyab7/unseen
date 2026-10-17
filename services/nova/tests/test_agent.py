@@ -118,6 +118,25 @@ async def test_stopping_cuts_nova_off_mid_line():
     assert session.interrupts == [True]
 
 
+class CutSession(FakeSession):
+    """Each line is done at once without ever turning to speaking: cut before its first
+    audio, or its voice failed."""
+
+    def say(self, text: str, **options) -> FakeHandle:
+        self.said.append((text, options))
+        handle = FakeHandle()
+        handle.played.set()
+        return handle
+
+
+async def test_a_line_cut_before_its_first_audio_is_done_at_once():
+    """Waiting START_TIMEOUT (10 s) for audio that never comes would hold up the next line,
+    which after a stop is the kind line."""
+    clock = Clock()
+    speaker = SessionSpeaker(CutSession(clock), clock=clock)
+    assert await asyncio.wait_for(speaker.speak("Good evening, room."), 1.0) is None
+
+
 # --- The entrypoint: how the session is set up and started --------------------------------
 
 

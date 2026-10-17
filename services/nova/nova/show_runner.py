@@ -220,6 +220,11 @@ class ShowRunner:
         return self._advance(now)
 
     @property
+    def speaking(self) -> frozenset[Seat]:
+        """The daters the voice detector hears right now."""
+        return frozenset(self._speaking)
+
+    @property
     def started(self) -> bool:
         return self._started_at is not None
 
@@ -676,7 +681,7 @@ class ShowRunner:
             return cues
         on_time: list[Cue] = []
         for cue in cues:
-            if _waits_for_speech(cue):
+            if waits_for_speech(cue):
                 if self._waiting_until is None:
                     self._waiting_until = now + self._timing.talk_over_grace
                 self._waiting.append(cue)
@@ -794,9 +799,10 @@ def rounded_share(yes: int, total: int) -> float:
     return round(steps * VERDICT_STEP, 1)
 
 
-def _waits_for_speech(cue: Cue) -> bool:
+def waits_for_speech(cue: Cue) -> bool:
     """Lines and sounds wait for a dater to finish; NEVER_HELD lines and everything else go
-    on time."""
+    on time. Whoever plays the cues asks again before each one (nova/rehearsal.py): a beat's
+    lines go out together, and a dater may start speaking while the first plays."""
     if isinstance(cue, PlaySound | PlayVoiceIntro):
         return True
     return isinstance(cue, Say) and cue.moment not in NEVER_HELD

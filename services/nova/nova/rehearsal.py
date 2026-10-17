@@ -15,7 +15,7 @@ import statistics
 import time
 from collections import Counter
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 
@@ -31,7 +31,7 @@ from nova.measure import ms
 from nova.models import LineModel, warm_up
 from nova.on_air import Closed, OnAirCues, OnAirListener
 from nova.questions import AudienceQuestion, QuestionStatus
-from nova.show_runner import NoVotes, ShowRunner
+from nova.show_runner import NoVotes, ShowRunner, waits_for_speech
 from nova.timing import REHEARSAL, Timing
 from nova.tonight import Tonight
 
@@ -119,6 +119,8 @@ class _Pending:
     line: asyncio.Task[Line]
     hold: asyncio.Future[Verdict] | None = None  # a reply waiting for the distress check
     closed_at: float | None = None  # replies: when Nova acted on what the dater said
+    # Set when Nova is told to stop while this is the line being spoken or waited for.
+    stopped: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class Rehearsal:
@@ -179,6 +181,10 @@ class Rehearsal:
             max_wait=utterance_max_wait,
         )
         self._queue: asyncio.Queue[_Pending] = asyncio.Queue()
+        self._current: _Pending | None = None  # the line Nova is speaking or waiting for
+        self._talk_over_grace = timing.talk_over_grace
+        self._quiet = asyncio.Event()  # nobody is speaking
+        self._quiet.set()
         self._listening_since: float | None = None  # speech recognition ran from here
         self._started_at: float | None = None
         self._ended_at: float | None = None
@@ -334,6 +340,7 @@ class Rehearsal:
         self._listening()
         self._speaking = self.seat
         self._on_air.speech_started(self.seat)
+        self._heard_who_speaks()
 
     def speech_ended(self) -> None:
         """The voice detector heard the dater stop: the end of their sentence. It ends the
@@ -341,6 +348,7 @@ class Rehearsal:
         seat, self._speaking = self._speaking or self.seat, None
         self._ended = seat, self._clock()
         self._on_air.speech_ended(seat)
+        self._heard_who_speaks()
 
     def transcript(self, text: str) -> None:
         """A final transcript of what the speaking dater said, to Nova or not. It joins
@@ -364,6 +372,12 @@ class Rehearsal:
     def _listening(self) -> None:
         if self._listening_since is None:
             self._listening_since = self._clock()
+
+    def _heard_who_speaks(self) -> None:
+        if self._runner.speaking:
+            self._quiet.clear()
+        else:
+            self._quiet.set()
 
     def _transcript_seat(self) -> Seat:
         if self._speaking is not None:
@@ -414,20 +428,63 @@ class Rehearsal:
             self._queue.put_nowait(_Pending(cue, kind, now, ends, line, held, closed))
 
     def _stop(self) -> None:
-        """Nova stops mid-line, and nothing already queued is said."""
+        """Nova stops mid-line, and nothing already queued is said: not the line the
+        speaking task has already picked up either, whether it's playing, waiting for the
+        model or waiting for a distress verdict. What comes after the stop is said at once."""
         while not self._queue.empty():
             self._queue.get_nowait().line.cancel()
             self._queue.task_done()
+        if self._current is not None:
+            self._current.stopped.set()
+            self._current.line.cancel()
         self.speaker.stop()
 
     async def _speak_forever(self) -> None:
         while True:
             await self._speak(await self._queue.get())
 
+    async def _unless_stopped[T](self, item: _Pending, waited: asyncio.Future[T]) -> T | None:
+        """What waited gives (the line, or the distress verdict), or None if Nova is told to
+        stop first, or the line was cancelled. It never awaits waited itself, so cancelling
+        the speaking task never cancels the line, and nothing needs to swallow its own
+        cancellation."""
+        if not waited.done():
+            stop = asyncio.ensure_future(item.stopped.wait())
+            try:
+                await asyncio.wait({waited, stop}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                stop.cancel()
+        if item.stopped.is_set() or waited.cancelled():
+            return None
+        return waited.result()
+
+    async def _polite(self, item: _Pending) -> float | None:
+        """A line that waits for a dater to finish (show_runner.waits_for_speech) waits here
+        too, up to the talk-over grace: the runner holds a beat's lines only if someone is
+        speaking when the beat fires, and a dater may start while the line before plays.
+        Returns when the wait ended, if there was one."""
+        if item.kind is Kind.REPLY or not waits_for_speech(item.say) or self._quiet.is_set():
+            return None
+        quiet = asyncio.ensure_future(self._quiet.wait())
+        stop = asyncio.ensure_future(item.stopped.wait())
+        try:
+            await asyncio.wait(
+                {quiet, stop}, timeout=self._talk_over_grace, return_when=asyncio.FIRST_COMPLETED
+            )
+        finally:
+            quiet.cancel()
+            stop.cancel()
+        return self._clock()
+
     async def _speak(self, item: _Pending) -> None:
+        self._current = item
         try:
             picked = self._clock()
-            verdict = await item.hold if item.hold is not None else None
+            verdict = None
+            if item.hold is not None:
+                verdict = await self._unless_stopped(item, item.hold)
+                if item.stopped.is_set():
+                    return
             if verdict is Verdict.YES:
                 item.line.cancel()  # the dater wants to stop: never answer them
                 return
@@ -438,9 +495,18 @@ class Rehearsal:
                 item.line.cancel()
                 line = Line(script.TAKE_YOUR_TIME, Source.FALLBACK, Moment.REPLY)
             else:
-                line = await item.line
+                written = await self._unless_stopped(item, item.line)
+                if written is None:
+                    return
+                line = written
             if not line.text:  # Nova says nothing for this cue
                 return
+            cue_at = item.cue_at
+            waited = await self._polite(item)
+            if item.stopped.is_set():
+                return
+            if waited is not None:  # measured from when the dater finished, as the runner does
+                cue_at = picked = max(cue_at, waited)
             try:
                 started = await self.speaker.speak(line.text)
                 if started is not None:
@@ -448,14 +514,16 @@ class Rehearsal:
             except Exception:  # the voice failed: this line never played, the date goes on
                 started = None
                 self._events.emit(Event.VOICE_ERROR, moment=line.moment)
+            if started is None and item.stopped.is_set():
+                return  # cut before its first word, on purpose: not a line that never played
             if started is not None:  # only what played is billed and counted
                 self.characters_spoken += len(line.text)
             spoken = Spoken(
                 moment=line.moment,
                 kind=item.kind,
                 source=line.source,
-                from_cue_ms=_since(item.cue_at, started),
-                from_free_ms=_since(max(item.cue_at, picked), started),
+                from_cue_ms=_since(cue_at, started),
+                from_free_ms=_since(max(cue_at, picked), started),
                 from_sentence_end_ms=_since(item.sentence_end_at, started),
                 model_ms=line.ms,
                 grace_ms=_since(item.sentence_end_at, item.closed_at),
@@ -473,9 +541,10 @@ class Rehearsal:
                 grace_ms=spoken.grace_ms,
             )
         except asyncio.CancelledError:
-            if not item.line.cancelled():
-                raise
+            item.line.cancel()
+            raise
         finally:
+            self._current = None
             self._queue.task_done()
 
 

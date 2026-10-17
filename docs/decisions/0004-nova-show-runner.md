@@ -99,7 +99,10 @@ Date: 2026-10-13. Status: accepted.
   kind line, the need-a-moment cover, "Bear with us", "And we're back", a dater leaving,
   the moderator ending, the result). What's waiting is dropped if a pause starts or the
   date ends. No silence prompt comes while a dater is speaking, and silence counts from
-  when they stop.
+  when they stop. Whoever plays the cues asks again before each line that waits
+  (`waits_for_speech`): a beat's lines go out together (the result, the outro and the
+  invitation), and a dater often starts talking while the first plays, so the next one
+  waits for them too, up to the same grace, and is measured from when they finished.
 - **Fairness:** who answers first (first question, last word) is chosen at random for each
   date, and the long-silence prompt is an open one to both daters, so nobody is singled out
   for being quiet. *Proposed, for the product owner*: the brand book's example silence
