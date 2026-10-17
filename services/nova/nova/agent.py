@@ -169,6 +169,7 @@ async def rehearse(ctx: JobContext) -> None:
         live_timeout=settings.live_timeout,
         prep_timeout=settings.prep_timeout,
         prep_budget=settings.prep_budget,
+        prep_parallel=settings.prep_parallel,
         distress_timeout=settings.distress_timeout,
         utterance_grace=settings.utterance_grace,
         utterance_max_wait=settings.utterance_max_wait,

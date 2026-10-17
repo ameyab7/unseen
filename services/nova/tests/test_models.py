@@ -1,11 +1,20 @@
 """The language-model adapters, checked against fake SDK clients: no network, no cost."""
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 
 from nova.config import Settings
-from nova.models import AnthropicModel, ModelRefused, OllamaModel, build_classifier, build_model
+from nova.models import (
+    AnthropicModel,
+    ModelRefused,
+    OllamaModel,
+    WarmUpError,
+    build_classifier,
+    build_model,
+    warm_up,
+)
 
 ENV = {
     "LIVEKIT_URL": "wss://example.livekit.cloud",
@@ -150,3 +159,58 @@ def test_the_model_follows_nova_llm_with_no_code_change():
         )
     )
     assert isinstance(claude, AnthropicModel) and claude.name == "anthropic/claude-haiku-5-5"
+
+
+# --- Review of main at bfaed17 ---------------------------------------------------------------
+
+LABEL_SCHEMA = {"type": "object"}
+
+
+@pytest.mark.parametrize(
+    "name", ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-sonnet-4-5-20250929"]
+)
+async def test_claude_models_that_reject_effort_are_never_sent_it(name):
+    """A smaller Claude is an obvious NOVA_CLASSIFIER_LLM: with effort, every check failed."""
+    client, messages, _ = fake_anthropic(claude_reply('{"label": "no", "conduct": "none"}'))
+    model = AnthropicModel(name, client=client)
+    await model.write(system="RULES", prompt="TASK")
+    await model.label(system="RULES", prompt="TASK", schema=LABEL_SCHEMA)
+    write, label = messages.calls
+    assert "output_config" not in write
+    assert label["output_config"] == {"format": {"type": "json_schema", "schema": LABEL_SCHEMA}}
+
+
+@pytest.mark.parametrize("name", ["claude-haiku-5-5", "claude-opus-4-5", "claude-sonnet-4-6"])
+async def test_other_claude_models_are_asked_for_low_effort(name):
+    client, messages, _ = fake_anthropic(claude_reply())
+    await AnthropicModel(name, client=client).write(system="RULES", prompt="TASK")
+    assert messages.calls[0]["output_config"] == {"effort": "low"}
+
+
+class Down:
+    name = "fake/down"
+
+    def __init__(self, error: Exception | None = None, *, hang: bool = False) -> None:
+        self.error, self.hang = error, hang
+
+    async def label(self, *, system: str, prompt: str, schema=None) -> str:
+        if self.hang:
+            await asyncio.Event().wait()
+        if self.error:
+            raise self.error
+        return "ok"
+
+
+@pytest.mark.parametrize(
+    ("model", "error"),
+    [
+        (Down(RuntimeError("connection refused")), WarmUpError.ERROR),
+        (Down(ModelRefused("refused")), WarmUpError.REFUSED),
+        (Down(hang=True), WarmUpError.TIMEOUT),
+        (Down(), None),
+    ],
+)
+async def test_a_warm_up_says_when_the_model_cant_answer(model, error):
+    """A dead or misconfigured model used to look warm: 0 ms and no error."""
+    warmed = await warm_up(model, timeout=0.05)
+    assert warmed.error is error

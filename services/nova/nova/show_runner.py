@@ -428,7 +428,8 @@ class ShowRunner:
         if is_unmistakable(words) if wants_to_stop is None else wants_to_stop:
             return cues + self._wants_to_stop(now, seat)
         if self._live and self._held_since is None and self.segment in ON_AIR:
-            cues.append(Say(Moment.REPLY, about=seat, detail=words))
+            away = seat.other if seat.other in self._absent else None
+            cues.append(Say(Moment.REPLY, about=seat, detail=words, away=away))
         return cues
 
     def dater_said(
@@ -740,6 +741,9 @@ class ShowRunner:
         something off limits: the console gets a code, and the next in the queue takes the
         slot."""
         cues: list[Cue] = []
+        if len(self._absent) == len(Seat):  # nobody on air to ask: it keeps for later
+            return cues
+        away = next(iter(self._absent), None)  # the one dater away, if one is
         while self._questions and self._questions_asked < running_order.AUDIENCE_QUESTIONS:
             question = self._questions.popleft()
             reasons = screen_question(question)
@@ -748,7 +752,7 @@ class ShowRunner:
                 continue
             self._questions_asked += 1
             self._quiet_since = at
-            cues.append(Say(Moment.FROM_THE_ROOM, detail=question))
+            cues.append(Say(Moment.FROM_THE_ROOM, detail=question, away=away))
             break
         return cues
 

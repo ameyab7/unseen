@@ -115,7 +115,8 @@ class Say:
     """A line for Nova. With text, Nova says exactly that (an approved line). Without,
     the line writer writes one for this moment, about this dater, from detail; talk to the
     room works from the room facts. number of of: a question's place in its round (the
-    lightning round's "2 of 3")."""
+    lightning round's "2 of 3"). away: a dater off air after the moderator resumed without
+    them, whom an audience question or a reply must not name or address."""
 
     moment: Moment
     text: str | None = None
@@ -124,6 +125,7 @@ class Say:
     room: RoomFacts | None = None
     number: int | None = None
     of: int | None = None
+    away: Seat | None = None
 
 
 @dataclass(frozen=True)

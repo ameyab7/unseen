@@ -57,6 +57,11 @@ ONE_DATER_SILENCE = (
     "{name}, one for you: what's a small thing that reliably makes your day?",
 )
 
+# docs/sign-off/2026-10-one-dater.md: an audience question, and a reply's fallback, while
+# one dater is away. Today's name or address both daters, so Nova says nothing instead.
+ONE_DATER_FROM_THE_ROOM = ("Room, keep the questions coming. {name}, back to you.",)
+ONE_DATER_REPLY = ("Good question. I'll hand that one back to you, {name}.",)
+
 # docs/sign-off/2026-10-room-talk.md: more talk to the room for a hold (decision 0004).
 ROOM_TALK = (
     "Room, thanks for staying with us. The chat has been lovely tonight.",

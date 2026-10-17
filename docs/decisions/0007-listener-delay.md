@@ -46,7 +46,7 @@ short delay on what listeners hear, they could act before listeners hear it.
 
   | N | Gives the checks and the moderator | Costs the room |
   | --- | --- | --- |
-  | 5 s | Time for the instant layers and most model checks (median 377 ms, worst 424 ms on Gemma; decision 0005); little time for a person | Gestures and votes land 5 s after the moment |
+  | 5 s | Time for most model checks once an utterance has closed (median 377 ms, worst 424 ms on Gemma; decision 0005), but see below; little time for a person | Gestures and votes land 5 s after the moment |
   | 8 s | The checks, and a moderator who is already listening | Gestures, questions and votes 8 s late; the daters hear reactions to what they said 8 s ago |
   | 10 s | A moderator a few seconds to decide | The room feels behind; a lightning unlock or a question may come after its moment |
 
@@ -73,6 +73,15 @@ audio buffered (a few megabytes). Listener minutes don't change. Measured in the
 Build a relay for one rehearsal in the Agents Playground (decision 0003's way of working),
 two rooms, N = 8 s, on LiveKit credit.
 
+The instant layers act only once an utterance closes (decision 0005): the time from the
+words to any automatic dump is the rest of the utterance, the grace (at most
+`NOVA_UTTERANCE_MAX_WAIT_SECONDS`, 1.5 s) and the check, and an utterance can run 10 s
+before it's closed for checking. A street said early in a long turn has reached listeners
+before anything can dump it, at N = 5 s especially. So the relay build needs conduct's
+instant layer to act on each final as it arrives (sending its alert and dump at once, and
+remembering it so the close doesn't flag it twice), with the street line still waiting for
+the dater to finish.
+
 Pass criteria:
 
 1. Listener audio is N seconds behind live, within ±150 ms, over a 10-minute date, with
@@ -83,6 +92,8 @@ Pass criteria:
 3. A delayed data cue (the verdict) and its audio arrive within 100 ms of each other.
 4. The relay recovers from a restart within 3 s, the fallback segment covering the gap.
 5. Cost per show-hour measured and written into `docs/spike-results.md`.
+6. A street said in the first final of a 15-second utterance is dumped before any listener
+   hears it.
 
 ## Open questions
 

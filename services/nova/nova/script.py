@@ -7,6 +7,7 @@ product owner's sign-off before it goes on air.
 
 from nova.cards import BlindCard, Pair, Prompt
 from nova.decisions import Outcome
+from nova.text import plain
 
 # Brand book, "Nova on air".
 RESULT_MUTUAL = "It's mutual. What happens next is theirs."
@@ -78,11 +79,12 @@ CARD_FALLBACKS_ON = False
 def card_says(prompt: Prompt) -> str:
     """The card as the dater wrote it: the app's fixed question with its first letter
     lowercased (not the pronoun I: "I claim I can"), then the answer as written, ending a
-    sentence. No grammar is rewritten."""
-    question = prompt.question
+    sentence. No grammar is rewritten; curly quotes are straightened and line breaks made
+    spaces, as typed on a phone."""
+    question = plain(prompt.question)
     if question.split(" ", 1)[0].split("'", 1)[0] != "I":
         question = question[:1].lower() + question[1:]
-    answer = prompt.answer.strip()
+    answer = plain(prompt.answer)
     return f"{question} {answer}" + ("" if answer[-1:] in ".?!" else ".")
 
 

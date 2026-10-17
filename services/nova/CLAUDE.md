@@ -38,5 +38,7 @@ nova/sign_off.py.
   (from the repository root). Natively:
   `uv run python -m pytest --ignore=tests/test_agent.py --ignore=tests/test_voices.py`
   (`python -m pytest`, since Smart App Control may also block the pytest launcher).
-- The evaluation and rehearsals need services/nova/.env (see .env.example). A rehearsal
-  and voice samples cost LiveKit credit; the evaluation with Ollama costs nothing.
+- The evaluation and rehearsals need services/nova/.env (see .env.example). Open
+  .env.example by its exact path: Claude Code's Glob and Grep can't see it under the Read
+  deny rules for .env files. A rehearsal and voice samples cost LiveKit credit; the
+  evaluation with Ollama costs nothing.

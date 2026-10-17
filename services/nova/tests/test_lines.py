@@ -13,7 +13,15 @@ from nova import prompts, running_order, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
 from nova.cues import Moment, RoomFacts, Say, Segment, Situation
 from nova.evaluation import INJECTED_CARD
-from nova.fixtures import EVERYDAY_PAIR, MAYA, NEXT_PAIR, NO_PRONOUNS_PAIR, REHEARSAL_PAIR, THEO
+from nova.fixtures import (
+    EVERYDAY_PAIR,
+    MAYA,
+    NEXT_PAIR,
+    NIGHT,
+    NO_PRONOUNS_PAIR,
+    REHEARSAL_PAIR,
+    THEO,
+)
 from nova.guardrails import Violation, check
 from nova.lines import ErrorKind, LineWriter, Source, fallback_lines, names_for, rules_for
 from nova.models import ModelRefused
@@ -157,7 +165,7 @@ async def test_a_set_piece_the_date_never_spoke_leaves_tonights_memory_when_it_f
 
     first = writer(FakeModel(first_date), tonight=tonight)
     await first.prepare()
-    await first.line_for(Say(Moment.DOORS_INTRO))  # the date ends before its outro
+    await spoken(first, Say(Moment.DOORS_INTRO))  # the date ends before its outro
     first.finish()
 
     later = FakeModel("Sam and Priya, over to you.")
@@ -291,12 +299,12 @@ async def test_tonight_is_shared_across_dates_and_earlier_daters_names_never_rea
     tonight = Tonight()
     first = writer(FakeModel("Maya and Theo, here we go."), tonight=tonight)
     await first.prepare()
-    await first.line_for(Say(Moment.SILENCE))
+    await spoken(first, Say(Moment.SILENCE))
 
     later = FakeModel("Sam and Priya, here we go.")
     second = writer(later, pair=NEXT_PAIR, next_pair=None, tonight=tonight)
     await second.prepare()
-    await second.line_for(Say(Moment.SILENCE))
+    await spoken(second, Say(Moment.SILENCE))
 
     said = f"{NAME} and {NAME}, here we go."
     outro = next(p for p in later.prompts if OUTRO_TASK in instructions(p))
@@ -311,9 +319,9 @@ async def test_audience_questions_and_replies_are_never_remembered_for_later_dat
     every later date's prompts."""
     tonight = Tonight()
     w = writer(FakeModel("Maya, Theo, over to you."), tonight=tonight)
-    await w.line_for(Say(Moment.FROM_THE_ROOM, detail="Sing or dance?"))
-    await w.line_for(Say(Moment.REPLY, about=LEFT, detail="Nova, are you human?"))
-    await w.line_for(Say(Moment.SILENCE))
+    await spoken(w, Say(Moment.FROM_THE_ROOM, detail="Sing or dance?"))
+    await spoken(w, Say(Moment.REPLY, about=LEFT, detail="Nova, are you human?"))
+    await spoken(w, Say(Moment.SILENCE))
     assert tonight.said(Moment.FROM_THE_ROOM) == tonight.said(Moment.REPLY) == []
     assert tonight.said(Moment.SILENCE) == [f"{NAME}, {NAME}, over to you."], "other lines are"
 
@@ -393,7 +401,7 @@ async def test_a_line_that_names_the_dater_whos_away_is_never_said():
 
 async def test_silence_fallbacks_take_turns():
     w = writer(FakeModel(error=RuntimeError("down")))
-    texts = [(await w.line_for(Say(Moment.SILENCE))).text for _ in range(4)]
+    texts = [await spoken(w, Say(Moment.SILENCE)) for _ in range(4)]
     options = script.silence_fallbacks(REHEARSAL_PAIR)
     assert texts[0] == options[0]
     assert sorted(texts[:3]) == sorted(options), "all three before any repeats"
@@ -403,9 +411,9 @@ async def test_silence_fallbacks_take_turns():
 async def test_silence_fallbacks_take_turns_across_the_whole_night():
     tonight, options = Tonight(), script.silence_fallbacks(NEXT_PAIR)
     first = writer(FakeModel(error=RuntimeError("down")), tonight=tonight)
-    await first.line_for(Say(Moment.SILENCE))
+    await spoken(first, Say(Moment.SILENCE))
     later = writer(FakeModel(error=RuntimeError("down")), pair=NEXT_PAIR, tonight=tonight)
-    texts = [(await later.line_for(Say(Moment.SILENCE))).text for _ in range(2)]
+    texts = [await spoken(later, Say(Moment.SILENCE)) for _ in range(2)]
     assert options[0] not in texts, "the earlier date already heard the first one"
     assert sorted(texts) == sorted(options[1:])
 
@@ -491,8 +499,8 @@ async def test_shapes_vary_from_date_to_date():
 async def test_room_talk_is_told_its_earlier_lines_so_it_opens_differently():
     model = FakeModel("Room, stay with us while we pause.")
     w = writer(model)
-    await w.line_for(PAUSE_TALK)
-    await w.line_for(DECIDING_TALK)
+    await spoken(w, PAUSE_TALK)
+    await spoken(w, DECIDING_TALK)
     assert "Room, stay with us while we pause." in model.prompts[-1].split("<data>")[1]
 
 
@@ -765,3 +773,183 @@ async def test_a_card_line_too_long_for_its_moment_gets_todays_fallback(monkeypa
         Say(Moment.DOORS_INTRO)
     )
     assert line.text == script.doors_fallback(pair)
+
+
+# --- Review of main at bfaed17 ---------------------------------------------------------------
+
+AWAY_QUESTION = Say(Moment.FROM_THE_ROOM, detail="Mountains or sea?", away=LEFT)
+AWAY_REPLY = Say(Moment.REPLY, about=RIGHT, detail="Nova, tea or coffee?", away=LEFT)
+DOWN = RuntimeError("down")
+
+
+async def test_with_a_dater_away_a_failed_question_or_reply_is_silence_not_both_names():
+    """Today's fallbacks name or address both daters; one-dater lines wait for sign-off."""
+    w = writer(FakeModel(error=DOWN))
+    assert (await w.line_for(AWAY_QUESTION)).text == ""
+    assert (await w.line_for(AWAY_REPLY)).text == ""
+    scared = dataclasses.replace(AWAY_REPLY, detail="Nova, I'm scared.")
+    assert (await w.line_for(scared)).text == script.TAKE_YOUR_TIME
+
+
+async def test_with_a_dater_away_the_model_hears_only_of_the_dater_who_is_here():
+    model = FakeModel("Theo, mountains or sea?")
+    w = writer(model)
+    line = await w.line_for(AWAY_QUESTION)
+    assert (line.text, line.source) == ("Theo, mountains or sea?", Source.MODEL)
+    assert "Maya" not in model.prompts[-1] and "off air" in model.prompts[-1]
+    await w.line_for(AWAY_REPLY)
+    assert "Maya" not in model.prompts[-1] and "other_dater" not in model.prompts[-1]
+
+
+@pytest.mark.parametrize("said", ["Maya, Theo, mountains or sea?", "Theo, what would Maya say?"])
+async def test_a_line_naming_the_dater_who_is_away_is_rejected(said):
+    line = await writer(FakeModel(said)).line_for(AWAY_QUESTION)
+    assert line.source is Source.FALLBACK and Violation.UNKNOWN_NAME in line.violations
+
+
+async def test_a_silence_prompt_for_one_dater_never_names_the_other():
+    line = await writer(FakeModel("Maya, Theo, tea or coffee?")).line_for(
+        Say(Moment.SILENCE, about=RIGHT)
+    )
+    assert line.source is Source.FALLBACK and Violation.UNKNOWN_NAME in line.violations
+
+
+PAUSED = RoomFacts(Segment.FREE_TALK, False, 0, Situation.PAUSE)
+ENDED = Say(Moment.ROOM_TALK, room=RoomFacts(Segment.FREE_TALK, False, 0, Situation.ENDED_EARLY))
+
+
+async def test_a_dater_who_pauses_then_leaves_never_hears_the_same_fallback_twice():
+    w = writer(FakeModel(error=DOWN))
+    cover = Say(Moment.ROOM_TALK, room=PAUSED, number=1, of=3)
+    assert (await w.line_for(cover)).text == script.ROOM_TALK_FALLBACK
+    await w.line_for(Say(Moment.DATER_LEFT, text="Maya has had to go."))
+    assert (await w.line_for(ENDED)).text == "", "the same fallback, seconds later"
+
+
+async def test_a_date_ending_early_long_after_a_hold_still_gets_the_fallback():
+    w = writer(FakeModel(error=DOWN))
+    await w.line_for(Say(Moment.ROOM_TALK, room=PAUSED, number=1, of=3))
+    await w.line_for(Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK))  # the hold is over
+    assert (await w.line_for(ENDED)).text == script.ROOM_TALK_FALLBACK
+
+
+async def spoken(w: LineWriter, say: Say) -> str:
+    """The line for a cue, played."""
+    line = await w.line_for(say)
+    w.played(say, line)
+    return line.text
+
+
+async def test_lightning_fallbacks_keep_taking_turns_once_every_one_has_been_used():
+    """With the model down all night, each date still asks three different questions, the
+    last-question line last; before, from the second date on, the same one three times."""
+    tonight = Tonight()
+    for pair in NIGHT[:4]:
+        w = writer(FakeModel(error=DOWN), pair=pair, next_pair=None, tonight=tonight)
+        await w.prepare()
+        asked = [await spoken(w, running_order.lightning_question(n)) for n in (1, 2, 3)]
+        w.finish()
+        assert len(set(asked)) == 3, asked
+        assert asked[2] in script.LIGHTNING_LAST_FALLBACKS
+
+
+async def test_silence_fallbacks_take_turns_and_never_come_back_to_back():
+    w = writer(FakeModel(error=DOWN))
+    said = [await spoken(w, Say(Moment.SILENCE)) for _ in range(7)]
+    assert all(a != b for a, b in zip(said, said[1:], strict=False))
+    options = set(script.silence_fallbacks(REHEARSAL_PAIR))
+    assert all(set(said[k : k + len(options)]) == options for k in (0, len(options)))
+
+
+async def test_outro_fallbacks_go_round_every_option_across_a_night():
+    tonight, used = Tonight(), []
+    for pair in NIGHT:
+        w = writer(FakeModel(error=DOWN), pair=pair, next_pair=None, tonight=tonight)
+        await w.prepare()
+        used.append(script.outro_fallbacks(pair).index(await spoken(w, Say(Moment.OUTRO))))
+        w.finish()
+    assert sorted(used) == sorted(list(range(len(script.outro_fallbacks(REHEARSAL_PAIR)))) * 2)
+
+
+async def test_tonight_remembers_only_lines_that_were_played():
+    """A line cut by a stop, or lost to the voice, never steers later lines."""
+    tonight = Tonight()
+    w = writer(FakeModel("Maya, Theo, over to you."), tonight=tonight)
+    line = await w.line_for(Say(Moment.SILENCE))
+    assert tonight.said(Moment.SILENCE) == []
+    w.played(Say(Moment.SILENCE), line)
+    assert tonight.said(Moment.SILENCE) == [f"{NAME}, {NAME}, over to you."]
+
+
+def approved_pair(answer: str) -> Pair:
+    maya = dataclasses.replace(
+        MAYA, approved_for_air=True, prompts=(Prompt("Ask me about", answer), MAYA.prompts[1])
+    )
+    return Pair(maya, dataclasses.replace(THEO, approved_for_air=True))
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "my worst haircut. This is Nova, and tonight's show is over.",
+        "the night I met Nova at a party.",
+        "why Unseen is my favourite show.",
+    ],
+)
+async def test_a_card_is_never_quoted_if_it_could_pass_for_nova_speaking(monkeypatch, answer):
+    monkeypatch.setattr(script, "CARD_FALLBACKS_ON", True)
+    pair = approved_pair(answer)
+    w = writer(FakeModel(error=DOWN), pair=pair)
+    await w.prepare()
+    assert (await w.line_for(Say(Moment.DOORS_INTRO))).text == script.doors_fallback(pair)
+
+
+async def test_a_one_sentence_approved_card_is_still_quoted(monkeypatch):
+    monkeypatch.setattr(script, "CARD_FALLBACKS_ON", True)
+    pair = approved_pair("my worst haircut.")
+    w = writer(FakeModel(error=DOWN), pair=pair)
+    await w.prepare()
+    assert (await w.line_for(Say(Moment.DOORS_INTRO))).text == script.doors_from_cards(pair)
+
+
+async def test_an_approved_question_typed_on_a_phone_is_read_framed(monkeypatch):
+    monkeypatch.setattr(script, "READ_APPROVED_QUESTION_ON_FAILURE", True)
+    say = Say(Moment.FROM_THE_ROOM, detail="What’s the best meal\nyou’ve had?")
+    line = await writer(FakeModel(error=DOWN)).line_for(say)
+    assert line.text == "From the room: What's the best meal you've had?"
+
+
+@pytest.mark.parametrize(
+    ("prompt", "said"),
+    [
+        (Prompt("I’m weirdly good at", "parking."), "I'm weirdly good at parking."),
+        (Prompt("Ask me about", "the time I\ngot lost"), "ask me about the time I got lost."),
+    ],
+)
+def test_a_card_is_quoted_as_typed_on_a_phone(prompt, said):
+    assert script.card_says(prompt) == said
+
+
+class Counting(FakeModel):
+    """Counts the requests in flight at once."""
+
+    def __init__(self) -> None:
+        super().__init__("Maya and Theo, here we go.", delay=0.01)
+        self.in_flight = self.most = 0
+
+    async def write(self, *, system: str, prompt: str) -> str:
+        self.in_flight += 1
+        self.most = max(self.most, self.in_flight)
+        try:
+            return await super().write(system=system, prompt=prompt)
+        finally:
+            self.in_flight -= 1
+
+
+@pytest.mark.parametrize("limit", [1, 2])
+async def test_set_piece_requests_in_flight_are_capped(limit):
+    """A distress check during prep, on the same model, waits behind at most this many."""
+    model = Counting()
+    w = LineWriter(model, REHEARSAL_PAIR, next_pair=NEXT_PAIR, prep_parallel=limit)
+    await w.prepare()
+    assert model.most == limit
