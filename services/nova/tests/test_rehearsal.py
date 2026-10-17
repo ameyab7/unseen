@@ -837,3 +837,72 @@ async def test_the_report_holds_codes_and_numbers_never_what_anyone_said_or_type
         assert secret not in report, secret
         assert secret not in caplog.text, secret
     assert "prepared lines" in report and "Fallback rate" in report and "credit" in report
+
+
+# --- Hearing the right dater, to the end of the date ----------------------------------------
+
+
+async def test_a_final_that_comes_after_the_dater_stopped_is_still_theirs():
+    """Speech-to-text's final lands a moment after the voice detector hears the words end.
+    If the chat picks the other seat in between, the final is still the one who spoke."""
+    clock = Clock()
+    r = await started(clock)
+    clock.now = 40.0
+    r.speech_started()
+    clock.now = 41.0
+    r.speech_ended()
+    r.command("theo")
+    clock.now = 41.3
+    r.transcript("I want to stop.")
+    close(r, clock)
+    distressed = [cue for cue in r.cues if isinstance(cue, AlertModerator)]
+    assert distressed == [AlertModerator(ModeratorAlert.DATER_DISTRESSED, Seat.LEFT)]
+
+
+async def test_a_final_long_after_anyone_stopped_belongs_to_the_seat_the_chat_chose():
+    clock = Clock()
+    r = await started(clock)
+    clock.now = 40.0
+    r.speech_started()
+    r.speech_ended()
+    r.command("theo")
+    clock.now = 45.0
+    r.transcript("I want to stop.")
+    close(r, clock)
+    alerted = [cue.seat for cue in r.cues if isinstance(cue, AlertModerator)]
+    assert alerted == [Seat.RIGHT]
+
+
+async def test_what_a_dater_says_as_the_date_ends_still_reaches_the_moderator():
+    """The date's last lines play, then whatever a dater was still saying is acted on and
+    its check gets time to finish, before the rehearsal stops listening."""
+    clock = TickingClock()
+    model = FakeModel(labels={"is this almost over": "yes"})
+    r = rehearsal(clock, StuckVoice(clock), model=model)
+    await r.prepare()
+    running = asyncio.create_task(r.run(every=0, final_wait=0.5))
+    while not r.finished:
+        await asyncio.sleep(0)
+    r.speech_ended()
+    r.transcript("is this almost over")
+    await asyncio.wait_for(running, 5)
+    assert model.checked[-1] == "is this almost over"
+    assert ModeratorAlert.DATER_DISTRESSED in alerts(r)
+
+
+async def test_speech_recognition_is_billed_from_when_the_session_started_listening():
+    """The agent listens from the start of the session, through the warm-up and the prep
+    budget, so the credit estimate counts that too; the date's own minutes don't."""
+    clock = Clock()
+    r = rehearsal(clock)
+    listening = asyncio.create_task(r.listen())
+    await asyncio.sleep(0)
+    try:
+        clock.now = 60.0
+        await r.prepare()
+        r.start()
+        clock.now = 240.0
+        assert (r.stt_seconds, r.date_seconds) == (240.0, 180.0)
+        assert "speech recognition 4.0 min" in render_report(r)
+    finally:
+        listening.cancel()

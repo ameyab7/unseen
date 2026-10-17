@@ -30,6 +30,18 @@ async def test_daters_audio_goes_to_speech_recognition_and_no_other_livekit_serv
     assert session.options.interruption["enabled"] is False
 
 
+async def test_daters_are_transcribed_while_nova_speaks(monkeypatch):
+    """Nova's lines can't be interrupted, and by default LiveKit sends speech recognition
+    silence for as long as such a line plays: "I want to stop" said over Nova would reach
+    neither layer of the distress check. Only the echo-cancellation warm-up stays deaf."""
+    monkeypatch.setenv("LIVEKIT_DEV_MODE", "1")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "test-key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "test-secret")
+    session = new_session(SETTINGS)
+    assert session.options.interruption["discard_audio_if_uninterruptible"] is False
+    assert session.options.aec_warmup_duration == agent.AEC_WARMUP == 3.0
+
+
 def test_what_people_said_or_typed_is_redacted_from_every_log_record():
     record = logging.LogRecord("livekit.agents", logging.WARNING, "x", 1, "skipping", (), None)
     record.__dict__["lk.pii.user_input"] = "Nova, I work at Northwind Bank"

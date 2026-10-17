@@ -60,9 +60,27 @@ Date: 2026-10-13. Status: accepted.
     stopped and no new final has come for `NOVA_UTTERANCE_GRACE_SECONDS` (default 0.6),
     or at most `NOVA_UTTERANCE_MAX_WAIT_SECONDS` (default 1.5) after they stopped. A
     pause the voice detector ends and restarts within the grace stays in one utterance;
-    a final after the close starts the next. Each dater has their own. Whoever runs the
-    show ticks the listener as time passes; the rehearsal's agent does it from the start
-    of the session (`listen()`), so a dater is heard on time before the date too.
+    a final after the close starts the next. Each dater has their own. An utterance also
+    closes 10 s after its first final while the dater is still speaking (`MAX_UTTERANCE`),
+    so a long story, sobbing, or a TV that keeps the voice detector hearing speech is
+    still checked: the words so far go to both layers, with no reply, since Nova never
+    talks over a dater. Whoever runs the show ticks the listener as time passes; the
+    rehearsal's agent does it from the start of the session (`listen()`), so a dater is
+    heard on time before the date too. When the date is over, whatever a dater was still
+    saying is closed and checked, and the checks in flight get the distress timeout to
+    finish; one still running then alerts the moderator as `distress_unchecked`
+    (`OnAirListener.finish`), so distress said during Nova's last line is never dropped.
+  - **Daters are heard while Nova speaks.** Nova's lines can't be interrupted, and by
+    default LiveKit then sends speech recognition silence for as long as a line plays,
+    so "I want to stop" said over Nova reached neither layer. The agent turns that off
+    (`discard_audio_if_uninterruptible: False`); the session has no language model, so
+    these transcripts start no automatic reply. LiveKit's echo-cancellation warm-up still
+    deafens speech recognition for the first 3 s of Nova's speech in a session (the
+    doors intro), so Nova's own voice isn't transcribed while the browser's echo
+    cancellation settles: the product owner chose to keep it (2026-10-16). If echo did
+    leak, Nova's pause lines contain warning words and would reach the meaning check as
+    a dater's words, so the next Playground rehearsal checks that none of Nova's lines
+    turn up as transcripts.
   - **Instant layer:** unmistakable phrases only ("I want to stop", "I want to stop now",
     "stop the date", "I need a moment", "I'm not comfortable", "get me out of here" and
     the like). A phrase counts only when the request ends there or is about the date:
@@ -70,7 +88,18 @@ Date: 2026-10-13. Status: accepted.
     as it arrives, joined with the same dater's last five seconds (a sentence can still
     span two utterances: "I'm not", a long pause, "comfortable."), but a match is acted
     on only when the utterance closes, and only if the whole utterance still matches, so
-    "I want to stop" then "eating sugar" is no request. If the dater keeps talking, the
+    "I want to stop" then "eating sugar" is no request. Deepgram punctuates every final,
+    so the instant layer reads an utterance without the punctuation that ends each final
+    but the last (`instant_view`): "I want to stop." then "Eating sugar, I mean." runs on,
+    and isn't a request. A request heard only with that punctuation might be a fragment
+    or might be meant ("I want to stop." then "Sorry, it's just a lot."), so the moderator
+    is alerted at once (`possible_distress`), when the utterance closes or 3 s after the
+    request if the dater keeps talking, and the meaning layer decides whether the date
+    pauses, about 200 ms later on a yes: the product owner's choice (2026-10-16) over
+    pausing at once, which paused on fragments. One final such as "I want to stop, I
+    can't do this." still pauses at once. Filler words ("um", "uh", "erm", with the commas
+    around them) don't count, a request may carry two adverbs ("I just really want to
+    stop") and end with "okay" or "yeah". If the dater keeps talking, the
     words so far are checked again 3 s after the match (`MATCH_CAP`) and acted on if they
     still match, so a request never waits for the end of a long utterance. The show
     runner alerts the moderator (`dater_distressed`), and if a pause can start, Nova stops
@@ -81,9 +110,11 @@ Date: 2026-10-13. Status: accepted.
   - **Meaning layer:** every other utterance goes to the language model in
     `NOVA_CLASSIFIER_LLM` (optional; it defaults to `NOVA_LLM`, and lets a smaller model
     label without queueing behind live lines on the same Ollama), once, as the sentence it
-    judges, with what the same dater said in the 15 seconds before it and what the other
-    dater said in those 15 seconds (`other_dater_earlier`: distress can answer the other
-    dater, "please don't"), and the model answers only yes, maybe or no (Gemma at
+    judges, with what the same dater said in the 15 seconds before the utterance closed
+    (not the utterance itself) and what the other dater said in those 15 seconds
+    (`other_dater_earlier`: distress can answer the other dater, "please don't"). The
+    window is measured from the close, so the 15-second memory holds: a 10 s utterance
+    has about 5 s of what came before. The model answers only yes, maybe or no (Gemma at
     temperature 0). The label is structured output, JSON with an enum (Ollama's
     `response_format` with a JSON schema; Claude's `output_config.format`), with the old
     bare-word parse kept for a model that ignores it. The rules name the indirect signals
@@ -113,7 +144,9 @@ Date: 2026-10-13. Status: accepted.
   - **Words to Nova wait for the verdict.** Words are to Nova only when Nova is addressed:
     "Nova" among the first three words ("Nova, ...", "Hey Nova ...", "OK so Nova ...") or
     as the last word ("..., Nova?") of any sentence in the utterance or any final in it,
-    so "That's so funny." then "Nova, what do you think?" is to Nova. "Nova" directly
+    so "That's so funny." then "Nova, what do you think?" is to Nova. Hesitations and
+    openers before those three words don't count ("Okay, so, um, Nova, who goes first?",
+    "Oh, wait, hey Nova, ..."), since speech-to-text keeps them. "Nova" directly
     followed by said, says, asked, asks, is, isn't, was, wasn't, thinks or thought is
     talked about ("Honestly, Nova is so funny", "did you hear what" then "Nova said?"),
     and "Nova's" is never Nova. Limits: the comma matters, so "Nova, is it my turn?" is
@@ -134,11 +167,12 @@ Date: 2026-10-13. Status: accepted.
   - **The distress test set** (`nova/distress_set.py`) runs with the evaluation, or alone
     with `--distress`: real distress in varied wording, and ordinary talk that uses the
     same words, each through the real listener, check and show runner; ten of each half
-    use none of the usual warning words. Twelve, six of each, come split in two finals,
+    use none of the usual warning words. Sixteen, eight of each, come split in two finals,
     heard through the listener with a short pause between (`evaluation.spoken`), so a
     pause on a fragment ("I want to stop" before "eating sugar") shows up as a false
-    pause. Targets: no missed distress (no pause and no alert), and false pauses under 1
-    in 20 of ordinary talk. The evaluation also reports alerts without a pause, false
+    pause; in four of them, as Deepgram gives it, the first final ends with a full stop
+    (added 2026-10-16, with four in the dev set). Targets: no missed distress (no pause
+    and no alert), and false pauses under 1 in 20 of ordinary talk. The evaluation also reports alerts without a pause, false
     alerts and the check's time.
     Second run, 2026-10-15, Gemma (`gemma4:26b`, thinking off, warm), every sentence
     checked, 90 sentences, 45 of each: no false pauses and no false alerts, but 3 missed,
@@ -266,7 +300,7 @@ fallback line, never an unsafe one.
 | Unkind | A short list of insults (stupid, pathetic, desperate, creepy, shut up) | Sarcasm, tone, mockery without those words |
 | Instructions | Talk of instructions, rules, the system, data, prompts, angle brackets, "I was told"; Nova claiming any name but Nova ("I'm Kate", "call me Kate"), though not a fixed word ("I'm OK with either answer") | An injection that steers Nova into an ordinary-looking line, such as an untrue but harmless claim about a dater |
 | Voice and format | Exclamation marks, emoji, symbols (a slash too, which the voice reads aloud as "slash"; the model is told to join options with "or" and write no slashes or ampersands), markdown, length (characters and sentences), a name with a capital in the wrong place ("MAYA", "MaYa": the voice may spell it out). A name all in lowercase is an ordinary word, so a dater called Will, Hope or May keeps lines that say will, hope or may; the model's outro is one sentence with no question; a lightning question is one sentence and doesn't open with both daters' names | Tone, wrong pronouns, a question ending in a full stop (handled by the instructions only) |
-| A dater who wants to stop (what a dater says on air, not Nova's line) | On whole utterances, not speech-to-text fragments. Instant layer: unmistakable requests that end there or are about the date (want to stop, need a moment, not comfortable, don't feel safe, get me out of here, stop the date, a panic attack, harassing me), acted on once the utterance closes, or 3 s after the match if the dater keeps talking. Meaning layer: every other utterance goes to the model once, with the same dater's last 15 seconds, which answers yes, maybe or no; a failed or slow check alerts the moderator | Distress the model misjudges (the test set measures this; it missed "Is this almost over?"), or heard only in a voice; the instant layer pausing a story that happens to use a stop phrase ("we had to end the date early") |
+| A dater who wants to stop (what a dater says on air, not Nova's line) | On whole utterances, not speech-to-text fragments. Instant layer: unmistakable requests that end there or are about the date (want to stop, need a moment, not comfortable, don't feel safe, get me out of here, stop the date, a panic attack, harassing me), acted on once the utterance closes, or 3 s after the match if the dater keeps talking; read past the punctuation that ends each final, and a request heard only with it alerts the moderator and leaves the pause to the meaning layer; filler words ignored. Meaning layer: every other utterance goes to the model once, and anything said for 10 s without a break, with both daters' last 15 seconds, which answers yes, maybe or no; a failed or slow check, or one still running when the date ends, alerts the moderator. Daters are heard while Nova speaks, except for the first 3 s of Nova's speech in a session | Distress the model misjudges (the test set measures this; it missed "Is this almost over?"), or heard only in a voice; the instant layer pausing a story that happens to use a stop phrase ("we had to end the date early") |
 
 Moderator approval is the main gate for audience questions. The automatic screen
 (`screen_question`) gives the console a warning before the moderator approves: a code for

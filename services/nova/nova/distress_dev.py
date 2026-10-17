@@ -6,7 +6,8 @@ distress, half ordinary talk that looks like it, in six kinds: wanting to leave 
 to end, asking how long is left, panic and physical symptoms, wanting to be elsewhere,
 asking for someone from the show, and distress in reply to what the other dater said. Some
 are written as speech-to-text gives them: lowercase, no punctuation, fillers ("um",
-"like") and repeated words. All data here is made up.
+"like") and repeated words; a few as two finals, the first punctuated ("Can we stop?"
+then more). All data here is made up.
 """
 
 from nova.distress import has_warning
@@ -20,6 +21,12 @@ def _real(sentence: str, *other: str) -> Sample:
 
 def _ordinary(sentence: str, *other: str) -> Sample:
     return Sample(sentence, False, plain=not has_warning(sentence), other=other)
+
+
+def _split(distress: bool, *finals: str) -> Sample:
+    """The sentence as speech-to-text finalizes it at a pause."""
+    sentence = " ".join(finals)
+    return Sample(sentence, distress, plain=not has_warning(sentence), split=finals)
 
 
 DEV_SET: tuple[Sample, ...] = (
@@ -159,4 +166,9 @@ DEV_SET: tuple[Sample, ...] = (
     _ordinary("uh can someone just check the score for me later"),
     _ordinary("this is this is the best question so far"),
     _ordinary("no no no i don't believe you, that's amazing"),
+    # Two finals, the first punctuated by speech-to-text, and more said after it.
+    _split(True, "Can we stop?", "Honestly, I'm done, this isn't for me."),
+    _split(True, "I need some air.", "It's getting really hard to breathe in here."),
+    _split(False, "Can we stop,", "just for a sec, and admire how good that question was?"),
+    _split(False, "I need some space.", "In my flat, I mean, it's tiny."),
 )

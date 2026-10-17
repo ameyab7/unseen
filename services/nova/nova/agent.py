@@ -56,7 +56,18 @@ START_OPTIONS: dict[str, Any] = {"record": False, "session_host": False}
 # would also stream it to its cloud turn detector and its adaptive barge-in service. Nova
 # never takes turns from speech and can't be talked over, so the local voice detector
 # decides turns, and with interruptions off LiveKit never creates the barge-in detector.
-TURN_HANDLING: TurnHandlingOptions = {"turn_detection": "vad", "interruption": {"enabled": False}}
+# Daters are still heard while Nova speaks: by default LiveKit sends silence to speech
+# recognition during a line that can't be interrupted, so "I want to stop" said over Nova
+# would never be heard. The session has no language model, so these transcripts start no
+# automatic reply; they reach the on-air listener like any other.
+TURN_HANDLING: TurnHandlingOptions = {
+    "turn_detection": "vad",
+    "interruption": {"enabled": False, "discard_audio_if_uninterruptible": False},
+}
+# For the first seconds of Nova's speech in a session (the doors intro), LiveKit still sends
+# speech recognition silence while the browser's echo cancellation settles, so Nova's own
+# voice isn't transcribed as a dater's. Daters aren't heard in that window (decision 0005).
+AEC_WARMUP = 3.0
 REPORTS = Path(__file__).parents[1] / "rehearsals"  # never committed
 REDACTED = "[redacted]"
 
@@ -123,6 +134,7 @@ def new_session(settings: Settings) -> AgentSession:
         stt=inference.STT(settings.stt, language="en"),
         tts=inference.TTS(model, voice=voice) if voice else inference.TTS(model),
         turn_handling=TURN_HANDLING,
+        aec_warmup_duration=AEC_WARMUP,
     )
 
 

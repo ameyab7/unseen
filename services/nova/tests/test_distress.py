@@ -18,6 +18,7 @@ from nova.distress import (
     Verdict,
     check_prompt,
     has_warning,
+    instant_view,
     is_unmistakable,
     parse,
 )
@@ -70,6 +71,17 @@ UNMISTAKABLE = [
     "I'm having a panic attack.",
     "I'm overwhelmed.",
     "He's harassing me.",
+    # As speech-to-text gives them: filler words kept, a tag, two adverbs.
+    "i want to stop uh",
+    "I want to stop uh.",
+    "i need a moment uh",
+    "i want to um stop",
+    "I want to, um, stop.",
+    "can we um stop",
+    "i want to stop okay",
+    "i want to stop yeah",
+    "i just really want to stop",
+    "i'm not comfortable um",
 ]
 
 # The same words with more to say, about something else or not, and other warning words:
@@ -97,6 +109,8 @@ FOR_THE_MEANING_LAYER = [
     "I'd rather be anywhere else.",
     "I don't want to keep talking to him.",
     "Can we not do this?",
+    "I want to, um, stop eating sugar.",
+    "i want to stop um eating sugar",
 ]
 
 ORDINARY = [
@@ -251,7 +265,7 @@ def said(prompt: str) -> tuple[str, str]:
 def heard(ears: Listener, at: float, seat: Seat, words: str) -> Hearing:
     """One final transcript that is a whole utterance, closed as soon as it arrives."""
     ears.remember(at, seat, words)
-    return ears.utterance(at, seat, words, since=at)
+    return ears.utterance(at, seat, [words], since=at)
 
 
 async def test_an_unmistakable_request_is_acted_on_without_the_model():
@@ -264,20 +278,20 @@ async def test_an_unmistakable_request_is_acted_on_without_the_model():
 async def test_a_phrase_split_across_transcripts_is_heard_whole():
     ears, _ = listener()
     ears.remember(10.0, LEFT, "I'm not")
-    assert ears.unmistakable(10.0, LEFT, "I'm not") is None
+    assert ears.unmistakable(10.0, LEFT, ["I'm not"]) is None
     ears.remember(11.0, LEFT, "comfortable.")
-    assert ears.unmistakable(11.0, LEFT, "comfortable.") == "I'm not comfortable."
+    assert ears.unmistakable(11.0, LEFT, ["comfortable."]) == "I'm not comfortable."
 
 
 async def test_a_request_the_dater_carries_on_from_is_no_longer_heard():
     """Each final is heard as it arrives, but only the whole utterance counts."""
     ears, _ = listener()
     ears.remember(10.0, LEFT, "I want to stop")
-    assert ears.unmistakable(10.0, LEFT, "I want to stop") == "I want to stop"
+    assert ears.unmistakable(10.0, LEFT, ["I want to stop"]) == "I want to stop"
     ears.remember(11.0, LEFT, "eating sugar.")
-    whole = "I want to stop eating sugar."
-    assert ears.unmistakable(11.0, LEFT, whole) is None
-    assert ears.utterance(11.6, LEFT, whole, since=10.0).unmistakable is None
+    finals = ["I want to stop", "eating sugar."]
+    assert ears.unmistakable(11.0, LEFT, finals) is None
+    assert ears.utterance(11.6, LEFT, finals, since=10.0).unmistakable is None
 
 
 async def test_the_instant_layer_joins_only_the_same_daters_last_five_seconds():
@@ -285,15 +299,46 @@ async def test_the_instant_layer_joins_only_the_same_daters_last_five_seconds():
     ears.remember(10.0, LEFT, "I'm not")
     ears.remember(12.0, RIGHT, "I'm not")
     ears.remember(16.0, LEFT, "comfortable.")
-    assert ears.unmistakable(16.0, LEFT, "comfortable.") is None
+    assert ears.unmistakable(16.0, LEFT, ["comfortable."]) is None
 
 
 async def test_a_long_utterance_is_heard_whole_even_past_the_last_five_seconds():
     ears, _ = listener()
-    for at, words in ((10.0, "I need a moment."), (13.0, "Sorry, it's"), (16.0, "a lot today.")):
+    finals = ["I'm not", "comfortable", "with this."]
+    for at, words in zip((10.0, 13.0, 16.0), finals, strict=True):
+        ears.remember(at, LEFT, words)
+    whole = "I'm not comfortable with this."
+    assert ears.utterance(16.6, LEFT, finals, since=10.0).unmistakable == whole
+
+
+async def test_a_request_heard_only_with_the_punctuation_ending_a_final_is_not_unmistakable():
+    """Speech-to-text ends a final at any short pause, with a full stop: "I need a moment."
+    then more is a fragment as often as a request. Read loosely, it's heard, so the
+    on-air listener alerts the moderator and lets the meaning layer decide."""
+    ears, model = listener()
+    finals = ["I need a moment.", "Sorry, it's", "a lot today."]
+    for at, words in zip((10.0, 13.0, 16.0), finals, strict=True):
         ears.remember(at, LEFT, words)
     whole = "I need a moment. Sorry, it's a lot today."
-    assert ears.utterance(16.6, LEFT, whole, since=10.0).unmistakable == whole
+    assert ears.unmistakable(16.0, LEFT, finals) is None
+    assert ears.unmistakable(16.0, LEFT, finals, loose=True) == whole
+    hearing = ears.utterance(16.6, LEFT, finals, since=10.0)
+    assert hearing.unmistakable is None
+    await hearing.check
+    assert said(model.prompts[-1])[1] == whole, "the meaning layer hears every word"
+
+
+@pytest.mark.parametrize(
+    ("finals", "view"),
+    [
+        (["I want to stop."], "I want to stop."),
+        (["I want to stop.", "Eating sugar, I mean."], "I want to stop Eating sugar, I mean."),
+        (["Nova,", "what's your favourite film?"], "Nova what's your favourite film?"),
+        (["I need a break!  ", "from work."], "I need a break from work."),
+    ],
+)
+def test_the_instant_layer_reads_past_the_punctuation_that_ends_each_final(finals, view):
+    assert instant_view(finals) == view
 
 
 async def test_the_check_sees_the_same_daters_last_15_seconds_before_the_utterance():
@@ -304,7 +349,7 @@ async def test_the_check_sees_the_same_daters_last_15_seconds_before_the_utteran
     ears.remember(9.0, RIGHT, "Theo's words are his own.")
     ears.remember(19.0, LEFT, "I want to stop")
     ears.remember(20.0, LEFT, "talking to him.")
-    hearing = ears.utterance(20.6, LEFT, target, since=19.0)
+    hearing = ears.utterance(20.6, LEFT, ["I want to stop", "talking to him."], since=19.0)
     assert hearing.unmistakable is None
     checked = await hearing.check
     assert checked.verdict is Verdict.YES
@@ -403,14 +448,16 @@ def test_what_a_dater_said_before_a_sample_is_ordinary_so_each_sample_tests_one_
             assert not has_warning(line) and not is_unmistakable(line), line
 
 
-def test_twelve_samples_come_split_in_two_as_speech_to_text_splits_them():
+def test_sixteen_samples_come_split_in_two_as_speech_to_text_splits_them():
     split = [s for s in DISTRESS_SET if s.split]
-    assert len(split) == 12 and sum(s.distress for s in split) == 6
+    assert len(split) == 16 and sum(s.distress for s in split) == 8
     for sample in split:
         assert len(sample.finals) == 2 and " ".join(sample.finals) == sample.sentence
     assert Sample("I couldn't stop laughing.", False).finals == ("I couldn't stop laughing.",)
     sounds_like_a_request = [s for s in split if not s.distress and is_unmistakable(s.finals[0])]
-    assert len(sounds_like_a_request) == 5, "a pause on a fragment shows up as a false pause"
+    assert len(sounds_like_a_request) == 7, "a pause on a fragment shows up as a false pause"
+    punctuated = [s for s in split if s.finals[0].endswith(".")]
+    assert len(punctuated) == 4 and sum(s.distress for s in punctuated) == 2
 
 
 # --- The label, and both daters' words ------------------------------------------------------
@@ -442,7 +489,7 @@ async def test_the_listener_gives_the_check_both_daters_last_fifteen_seconds():
     listener = Listener(DistressCheck(model, timeout=1.0))
     listener.remember(10.0, RIGHT, "Tell me your address.")
     listener.remember(11.0, LEFT, "Haha.")
-    hearing = listener.utterance(12.0, LEFT, "um okay", since=11.5)
+    hearing = listener.utterance(12.0, LEFT, ["um okay"], since=11.5)
     await hearing.check
     assert '"other_dater_earlier": "Tell me your address."' in model.prompts[0]
     assert '"earlier": "Haha."' in model.prompts[0]

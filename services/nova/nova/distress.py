@@ -6,12 +6,17 @@ The instant layer: unmistakable phrases ("I want to stop", "I need a moment", "g
 of here") pause the dater and alert the moderator, with no model. A phrase only counts
 when the request ends there or is about the date: "I want to stop." does, "I want to stop
 eating sugar" doesn't, so a phrase heard in a final only counts if the whole utterance
-still ends that way.
+still ends that way. Speech-to-text punctuates every final, so the instant layer reads an
+utterance without the punctuation that ends each final but the last (instant_view): "I
+want to stop." then "eating sugar, I mean." runs on. A request heard only with that
+punctuation may be one or may be a fragment, so it alerts the moderator at once and the
+meaning layer decides whether the date pauses (nova/on_air.py). Filler words ("um", "uh")
+are ignored.
 
 The meaning layer: every other utterance goes to the language model with what both
-daters said in the 15 seconds before it (distress can answer the other dater: "please
-don't"), and the model answers only yes, maybe or no, as structured output where the model
-supports it.
+daters said in the 15 seconds before it closed, without the utterance itself (distress can
+answer the other dater: "please don't"), and the model answers only yes, maybe or no, as
+structured output where the model supports it.
 Yes pauses the dater and alerts the moderator, maybe alerts the moderator, no does nothing.
 If the check fails, is too slow or answers anything but a label, the moderator is alerted.
 Distress needn't use any particular word ("can someone come get me?"), so nothing is
@@ -26,6 +31,7 @@ import json
 import math
 import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -61,15 +67,20 @@ _ABOUT_THE_DATE = (
     r"(?:\s+(?:this|it|that|here|the date|this date|the show|this show|the call|this call))?"
 )
 _TAIL = (
-    r"(?:[\s,]+(?:now|right now|please|here|already|anymore|for now"
+    r"(?:[\s,]+(?:now|right now|please|here|already|anymore|for now|okay|ok|yeah|alright"
     r"|for a (?:bit|moment|minute|second|sec)))*"
 )
 _END = rf"{_ABOUT_THE_DATE}{_TAIL}\s*(?:[.?!;,:]|$)"
 _WITH_IT = r"(?:\s+(?:with (?:this|that|it|him|her|them)|here|right now|now|anymore))?"
+# Hesitations speech-to-text keeps (LiveKit's Deepgram keeps filler words by default), with
+# the commas around them: "I want to, um, stop." is "I want to stop."
+FILLER = re.compile(r"[,\s]*\b(?:u+h+|u+m+|e+r+m+|hm+|mm+)\b,?", re.IGNORECASE)
+# The punctuation speech-to-text ends a final with.
+FINAL_PUNCTUATION = ".?!;,:"
 
 INSTANT = any_of(
     # "I want to stop", "I'd like to leave", "we need to end this", "I have to go now".
-    r"\b(?:i|we)(?:'d|\s+would)?\s+(?:(?:really|just|honestly|actually|seriously)\s+)?"
+    r"\b(?:i|we)(?:'d|\s+would)?\s+(?:(?:really|just|honestly|actually|seriously)\s+){0,2}"
     r"(?:want\s+to|wanna|need\s+to|have\s+to|like\s+to|gotta)\s+"
     rf"(?:stop|end|leave|quit|pause|go home|go|get out|get off|be done){_END}",
     # "Can we stop?", "Could we pause for a moment?", "Can I leave?"
@@ -148,8 +159,17 @@ WARNING = any_of(
 
 
 def is_unmistakable(words: str) -> bool:
-    """An unmistakable request to stop: the instant layer pauses for it."""
-    return bool(INSTANT.search(plain(words)))
+    """An unmistakable request to stop: the instant layer pauses for it. Filler words
+    don't count."""
+    return bool(INSTANT.search(plain(FILLER.sub(" ", words))))
+
+
+def instant_view(finals: Sequence[str]) -> str:
+    """Final transcripts as the instant layer reads them: joined, each but the last without
+    the punctuation speech-to-text ended it with, since a final ends at any short pause.
+    "I want to stop." then "eating sugar." reads "I want to stop eating sugar."."""
+    *before, last = finals
+    return " ".join([*(final.rstrip().rstrip(FINAL_PUNCTUATION) for final in before), last])
 
 
 def has_warning(words: str) -> bool:
@@ -319,7 +339,8 @@ class Listener:
     """Hears every dater, to anyone: each final transcript is remembered as it arrives,
     and each utterance goes through the instant layer, then the meaning layer, once it has
     closed (nova/on_air.py). Holds the last 15 seconds of each dater's words in memory, and
-    nothing longer."""
+    nothing longer: the on-air listener prunes it as time passes and clears it when the date
+    is over."""
 
     def __init__(self, check: DistressCheck) -> None:
         self._check = check
@@ -330,31 +351,48 @@ class Listener:
         The evaluation also uses it to set up what came before the words it tests."""
         self._recent.append((now, seat, text))
 
-    def unmistakable(self, now: float, seat: Seat, words: str) -> str | None:
+    def unmistakable(
+        self, now: float, seat: Seat, finals: Sequence[str], *, loose: bool = False
+    ) -> str | None:
         """The words the instant layer would act on now, or None: the dater's last five
-        seconds, which end with words, or words alone, just in case."""
-        for heard in (self._words(now, seat, JOINED), words):
+        seconds, which end with the utterance's finals, or the finals alone, just in case.
+        Read as instant_view() reads them. loose: the utterance's own finals with every
+        final's punctuation kept; a request heard only that way may be a fragment ("I want
+        to stop." then more)."""
+        joined = [] if loose else self._finals(now, seat, JOINED)
+        views = (joined, finals) if joined else (finals,)
+        for view in views:
+            heard = " ".join(view) if loose else instant_view(view)
             if is_unmistakable(heard):
                 return heard
         return None
 
-    def utterance(self, now: float, seat: Seat, words: str, *, since: float) -> Hearing:
-        """A dater's utterance once it has closed: words, whose finals have been remembered
-        since the first arrived. The instant layer first; then the meaning layer on the
-        whole utterance, with what the dater said before it as context."""
-        heard = self.unmistakable(now, seat, words)
+    def utterance(self, now: float, seat: Seat, finals: Sequence[str], *, since: float) -> Hearing:
+        """A dater's utterance once it has closed: its finals, remembered since the first
+        arrived. The instant layer first; then the meaning layer on the whole utterance,
+        with what the dater said in the 15 seconds before it closed as context."""
+        heard = self.unmistakable(now, seat, finals)
         if heard is not None:
             self.forget(seat)
             return Hearing(unmistakable=heard)
+        words = " ".join(finals)
         if not words.strip():
             return Hearing()
-        earlier = self._words(now, seat, CONTEXT, before=since)
-        other = self._words(now, seat.other, CONTEXT)  # what the sentence may answer
+        earlier = " ".join(self._finals(now, seat, CONTEXT, before=since))
+        other = " ".join(self._finals(now, seat.other, CONTEXT))  # what the sentence may answer
         return Hearing(check=asyncio.ensure_future(self._listen(seat, words, earlier, other)))
 
     def forget(self, seat: Seat) -> None:
         """Heard and acted on: what this dater says next is new."""
         self._recent = [r for r in self._recent if r[1] is not seat]
+
+    def prune(self, now: float) -> None:
+        """Lets go of anything said more than 15 seconds ago."""
+        self._recent = [r for r in self._recent if now - r[0] <= CONTEXT]
+
+    def clear(self) -> None:
+        """Lets go of everything: the date is over."""
+        self._recent = []
 
     async def _listen(self, seat: Seat, text: str, earlier: str, other: str) -> Checked:
         checked = await self._check.check(text, earlier, other)
@@ -362,10 +400,12 @@ class Listener:
             self.forget(seat)
         return checked
 
-    def _words(self, now: float, seat: Seat, window: float, *, before: float = math.inf) -> str:
-        self._recent = [r for r in self._recent if now - r[0] <= CONTEXT]
-        return " ".join(
+    def _finals(
+        self, now: float, seat: Seat, window: float, *, before: float = math.inf
+    ) -> list[str]:
+        self.prune(now)
+        return [
             text
             for at, said_by, text in self._recent
             if said_by is seat and now - at <= window and at < before
-        )
+        ]

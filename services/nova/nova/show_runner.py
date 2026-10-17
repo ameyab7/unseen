@@ -342,7 +342,9 @@ class ShowRunner:
             self._questions.append(question.text)
         return cues
 
-    def dater_asked_nova(self, now: float, seat: Seat, words: str) -> list[Cue]:
+    def dater_asked_nova(
+        self, now: float, seat: Seat, words: str, *, wants_to_stop: bool | None = None
+    ) -> list[Cue]:
         """A dater spoke to Nova on air. Their words are data for the reply, never
         instructions. Only while they're on air: not on a pause, not while deciding.
 
@@ -350,22 +352,26 @@ class ShowRunner:
         gets a reply, so Nova can't deflect them: the moderator is alerted at once, whenever
         it happens, and if a pause can start, Nova stops mid-line, says the kind line and
         starts a need-a-moment pause for that dater; if not (another pause, the decision
-        window), Nova stays quiet and the moderator acts. Anything else that needs a closer
-        listen is checked for meaning outside the runner, and the verdict comes back through
-        distress_check; whoever runs the show holds the reply until then."""
+        window), Nova stays quiet and the moderator acts. wants_to_stop: what the on-air
+        listener's instant layer heard in the whole utterance (nova/on_air.py), which
+        decides; None hears words here. Anything else that needs a closer listen is checked
+        for meaning outside the runner, and the verdict comes back through distress_check;
+        whoever runs the show holds the reply until then."""
         cues = self._due(now)
-        if is_unmistakable(words):
+        if is_unmistakable(words) if wants_to_stop is None else wants_to_stop:
             return cues + self._wants_to_stop(now, seat)
         if self._live and self._held_since is None and self.segment in ON_AIR:
             cues.append(Say(Moment.REPLY, about=seat, detail=words))
         return cues
 
-    def dater_said(self, now: float, seat: Seat, words: str) -> list[Cue]:
+    def dater_said(
+        self, now: float, seat: Seat, words: str, *, wants_to_stop: bool | None = None
+    ) -> list[Cue]:
         """What a dater said on air that wasn't to Nova: to the other dater, or to nobody.
         Nova doesn't answer, but the instant layer hears it just as in dater_asked_nova,
         since a dater who wants to stop won't always say so to Nova."""
         cues = self._due(now)
-        if is_unmistakable(words):
+        if is_unmistakable(words) if wants_to_stop is None else wants_to_stop:
             cues += self._wants_to_stop(now, seat)
         return cues
 
