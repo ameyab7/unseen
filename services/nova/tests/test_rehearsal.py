@@ -3,6 +3,7 @@ delay to Nova's first word measured for every line. No LiveKit, no network."""
 
 import asyncio
 import logging
+import time
 
 import pytest
 
@@ -123,6 +124,8 @@ class FakeModel:
         return self.reply
 
     async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
+        if '"sentence": "' not in prompt:
+            return "ok"  # the warm-up's tiny request
         sentence = prompt.split('"sentence": "')[1].split('"')[0]
         self.checked.append(sentence)
         if self.gate is not None:
@@ -573,9 +576,67 @@ async def test_the_report_says_when_the_prep_budget_ran_out():
 async def test_the_model_is_warmed_up_with_one_tiny_request_whatever_it_answers(caplog):
     caplog.set_level(logging.INFO, logger="nova")
     r = rehearsal(Clock())
-    await r.warm_up()  # FakeModel can't label "Say ok.": a failure is ignored
+    await r.warm_up()
     assert r.warm_up_ms is not None and "warmup ms=" in caplog.text
     assert "Model warmed up in" in render_report(r)
+
+
+class DownModel(FakeModel):
+    async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
+        raise RuntimeError("connection refused")
+
+
+async def test_a_model_that_cant_answer_is_never_reported_as_warm(caplog):
+    """Ollama not running, a model not pulled, a bad key: the report and the log say so."""
+    caplog.set_level(logging.INFO, logger="nova")
+    r = rehearsal(Clock(), model=DownModel())
+    await r.warm_up()
+    assert "warmup ms=" in caplog.text and "error=error" in caplog.text
+    assert "Model warm-up failed (error)" in render_report(r)
+
+
+class Hanging(FakeModel):
+    """Answers nothing until cancelled, counting the requests it was sent."""
+
+    def __init__(self, name: str = "fake/model") -> None:
+        super().__init__()
+        self.name, self.asked = name, 0
+
+    async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
+        self.asked += 1
+        await asyncio.Event().wait()
+        return "ok"
+
+
+async def test_the_same_model_is_warmed_up_once_and_another_at_the_same_time():
+    """Twice, one after the other, a hung model held the date for two warm-up timeouts."""
+    model = Hanging()
+    r = Rehearsal(
+        REHEARSAL_PAIR,
+        model=model,
+        classifier=Hanging(),
+        speaker=FakeSpeaker(Clock()),
+        voice="fake/voice",
+        stt="deepgram/nova-3",
+        clock=Clock(),
+    )
+    started = time.monotonic()
+    await r.warm_up(timeout=0.2)
+    assert model.asked == 1 and time.monotonic() - started < 0.35
+    classifier = Hanging("fake/classifier")
+    r = Rehearsal(
+        REHEARSAL_PAIR,
+        model=Hanging(),
+        classifier=classifier,
+        speaker=FakeSpeaker(Clock()),
+        voice="fake/voice",
+        stt="deepgram/nova-3",
+        clock=Clock(),
+    )
+    started = time.monotonic()
+    await r.warm_up(timeout=0.2)
+    assert classifier.asked == 1 and time.monotonic() - started < 0.35, "at the same time"
+    assert "Distress check's model warm-up failed (timeout)" in render_report(r)
 
 
 async def test_an_approved_question_the_screen_catches_is_never_spoken_or_declined(caplog):

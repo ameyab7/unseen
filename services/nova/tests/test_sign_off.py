@@ -42,10 +42,15 @@ def drafted() -> list[tuple[Moment, str, frozenset[str]]]:
         names = names_for(Moment.SILENCE, pair, None)
         lines += [(Moment.SILENCE, line, names) for line in sign_off.both(sign_off.SILENCE, pair)]
         lines += [(Moment.OUTRO, line, names) for line in sign_off.both(sign_off.OUTRO, pair)]
-        lines += [
-            (Moment.SILENCE, line, frozenset({pair.right.first_name, "Nova"}))
-            for line in sign_off.one(sign_off.ONE_DATER_SILENCE, pair.right.first_name)
-        ]
+        one_dater = frozenset({pair.right.first_name, "Nova"})
+        for moment, drafts in (
+            (Moment.SILENCE, sign_off.ONE_DATER_SILENCE),
+            (Moment.FROM_THE_ROOM, sign_off.ONE_DATER_FROM_THE_ROOM),
+            (Moment.REPLY, sign_off.ONE_DATER_REPLY),
+        ):
+            lines += [
+                (moment, line, one_dater) for line in sign_off.one(drafts, pair.right.first_name)
+            ]
         lines += [(Moment.ROOM_TALK, line, names) for line in sign_off.ROOM_TALK]
     lightning = (*sign_off.LIGHTNING, *sign_off.LIGHTNING_LAST)
     lines += [(Moment.LIGHTNING_QUESTION, line, frozenset({"Nova"})) for line in lightning]
@@ -76,7 +81,14 @@ def test_last_question_lines_say_so_and_the_others_dont():
             "2026-10-nova-fallbacks.md",
             (*sign_off.LIGHTNING, *sign_off.LIGHTNING_LAST, *sign_off.SILENCE, *sign_off.OUTRO),
         ),
-        ("2026-10-one-dater.md", sign_off.ONE_DATER_SILENCE),
+        (
+            "2026-10-one-dater.md",
+            (
+                *sign_off.ONE_DATER_SILENCE,
+                *sign_off.ONE_DATER_FROM_THE_ROOM,
+                *sign_off.ONE_DATER_REPLY,
+            ),
+        ),
         ("2026-10-room-talk.md", sign_off.ROOM_TALK),
         ("2026-10-conduct.md", sign_off.CONDUCT_DETAIL),
         ("2026-10-reply-fallback.md", sign_off.REPLY_FALLBACK),

@@ -24,6 +24,8 @@ SHOWN = 24  # lines per moment shown to the model: about three a date for eight 
 # Live moments (a silence, talk to the room) show fewer, so a late-night prompt stays small
 # and quick: the silence prompt grew from 777 characters on date 1 to 2,437 on date 8.
 SHOWN_LIVE = 8
+# Similarity at which two lines count as the same line said again (a fixed fallback).
+SAME = 0.9
 
 
 @dataclass(eq=False)
@@ -76,6 +78,16 @@ class Tonight:
     def said(self, moment: Moment, *, limit: int = SHOWN) -> list[str]:
         """The most recent lines for this moment, oldest first, names masked."""
         return [line.text for line in self._lines.get(moment, [])[-limit:]]
+
+    def uses(self, moment: Moment, text: str, *, names: Iterable[str]) -> tuple[int, int]:
+        """How often this line has been said (or planned) tonight for the moment, near
+        enough word for word, and where it last was among the moment's lines: -1 if never."""
+        masked = mask(text, names)
+        count, last = 0, -1
+        for k, line in enumerate(self._lines.get(moment, [])):
+            if similarity(masked, line.text) >= SAME:
+                count, last = count + 1, k
+        return count, last
 
     def closeness(self, moment: Moment, text: str, *, names: Iterable[str]) -> float:
         """How close a line is to the most similar line said tonight for this moment."""

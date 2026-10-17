@@ -181,3 +181,37 @@ def test_speech_recognition_is_provider_slash_model(stt):
 def test_a_malformed_speech_recognition_setting_is_caught(stt):
     with pytest.raises(ConfigError, match="NOVA_STT"):
         Settings.from_env({**GOOD, "NOVA_STT": stt})
+
+
+# --- Review of main at bfaed17 ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["gemma-secret-value", "openai/gpt-secret-value"])
+def test_a_malformed_classifier_setting_is_named_itself_not_nova_llm(value):
+    with pytest.raises(ConfigError, match="NOVA_CLASSIFIER_LLM") as raised:
+        Settings.from_env({**GOOD, "NOVA_CLASSIFIER_LLM": value})
+    assert "secret" not in str(raised.value)
+
+
+def test_set_pieces_requested_at_once_is_a_setting_one_by_default():
+    assert Settings.from_env(GOOD).prep_parallel == 1
+    assert Settings.from_env({**GOOD, "NOVA_PREP_PARALLEL": "4"}).prep_parallel == 4
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "two", "1.5", "secret-count"])
+def test_a_malformed_prep_parallel_is_caught_without_its_value(value):
+    with pytest.raises(ConfigError, match="NOVA_PREP_PARALLEL") as raised:
+        Settings.from_env({**GOOD, "NOVA_PREP_PARALLEL": value})
+    assert "secret" not in str(raised.value)
+
+
+def test_docker_never_copies_an_env_file_from_any_folder():
+    """Like .gitignore, a .dockerignore pattern without **/ matches only at the root."""
+    ignore = (Path(__file__).parents[1] / ".dockerignore").read_text(encoding="utf-8")
+    patterns = [line for line in ignore.splitlines() if ".env" in line and not line.startswith("#")]
+    assert patterns and all(p.lstrip("!").startswith("**/") for p in patterns)
+
+
+def test_docker_runs_the_tests_without_an_env_file():
+    compose = (Path(__file__).parents[1] / "compose.yaml").read_text(encoding="utf-8")
+    assert "required: false" in compose and "host.docker.internal:host-gateway" in compose

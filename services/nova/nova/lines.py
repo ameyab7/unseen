@@ -17,7 +17,9 @@ timings only, never text.
 """
 
 import asyncio
+import contextlib
 import random
+import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -26,12 +28,21 @@ from enum import StrEnum
 from nova import prompts, running_order, script
 from nova.cards import BlindCard, Pair, Seat
 from nova.config import Settings
-from nova.cues import Moment, RoomFacts, Say
+from nova.cues import Moment, RoomFacts, Say, Situation
 from nova.distress import has_warning, is_unmistakable
 from nova.events import Event, EventLog
-from nova.guardrails import Violation, card_words, check, clean, question_is_off_limits
+from nova.guardrails import (
+    SENTENCE_END,
+    SHOW_NAME,
+    Violation,
+    card_words,
+    check,
+    clean,
+    question_is_off_limits,
+)
 from nova.measure import ms_since
-from nova.models import LineModel, ModelRefused, warm_up
+from nova.models import WARM_UP_TIMEOUT, LineModel, ModelRefused, Warmed, warm_up
+from nova.text import plain
 from nova.tonight import SHOWN, SHOWN_LIVE, Remembered, Tonight
 
 SET_PIECES = frozenset(
@@ -49,6 +60,17 @@ LIVE_REACTIONS = frozenset({Moment.SILENCE, Moment.FROM_THE_ROOM, Moment.ROOM_TA
 # carry what a listener or dater said, and the memory reaches every later date's prompts.
 REMEMBERED_LIVE = frozenset({Moment.SILENCE, Moment.ROOM_TALK})
 CANDIDATES = 3  # model lines written for each set piece; the best one is kept
+# What Nova says while the show is held, or as a date ends early: any other line means the
+# hold is over, and the next hold may use the room-talk fallback again.
+HOLD_MOMENTS = frozenset(
+    {
+        Moment.ROOM_TALK,
+        Moment.NEED_A_MOMENT,
+        Moment.SHOW_PAUSE,
+        Moment.BEAR_WITH_US,
+        Moment.DATER_LEFT,
+    }
+)
 
 
 class Source(StrEnum):
@@ -157,11 +179,15 @@ class LineWriter:
         live_timeout: float = Settings.live_timeout,
         prep_timeout: float = Settings.prep_timeout,
         prep_budget: float = Settings.prep_budget,
+        prep_parallel: int | None = None,
         events: EventLog | None = None,
         rng: random.Random | None = None,
         tonight: Tonight | None = None,
     ) -> None:
+        """prep_parallel: at most this many requests for set pieces in flight at once
+        (NOVA_PREP_PARALLEL); None, no limit."""
         self._model = model
+        self._prep_slots = asyncio.Semaphore(prep_parallel) if prep_parallel else None
         self._pair = pair
         self._next_pair = next_pair
         self._live_timeout = live_timeout
@@ -184,12 +210,12 @@ class LineWriter:
 
     # --- Before the date ------------------------------------------------------------------
 
-    async def warm_up(self) -> int:
+    async def warm_up(self, *, timeout: float = WARM_UP_TIMEOUT) -> Warmed:
         """One tiny request (nova/models.py, warm_up), so a cold model loads now and not
-        inside the prep budget. Returns how long it took, in ms."""
-        ms = await warm_up(self._model)
-        self._events.emit(Event.WARMUP, ms=ms)
-        return ms
+        inside the prep budget: how long it took, and whether it failed."""
+        warmed = await warm_up(self._model, timeout=timeout)
+        self._events.emit(Event.WARMUP, ms=warmed.ms, error=warmed.error, classifier=False)
+        return warmed
 
     async def prepare(self) -> None:
         """Writes every set piece within the prep budget. Different moments are written at
@@ -222,12 +248,9 @@ class LineWriter:
     # --- During the date ------------------------------------------------------------------
 
     async def line_for(self, say: Say) -> Line:
+        """The line for a cue. Tonight's memory hears of it only once it's played
+        (played()), so a line cut by a stop or lost to the voice never steers later ones."""
         line = await self._line_for(say)
-        planned = self._planned.get(_key(say)) if say.text is None else None
-        if planned is not None and say.moment in SET_PIECES:
-            self._tonight.heard(planned)
-        if line.text and line.source is not Source.FIXED and line.moment in REMEMBERED_LIVE:
-            self._tonight.remember(line.moment, line.text, names=self._names)
         self._events.emit(
             Event.LINE,
             moment=line.moment,
@@ -238,6 +261,15 @@ class LineWriter:
         )
         return line
 
+    def played(self, say: Say, line: Line) -> None:
+        """The room heard this line: a set piece stays in tonight's memory, and silences and
+        room talk are remembered, so later prompts and fallbacks don't repeat them."""
+        planned = self._planned.get(_key(say)) if say.text is None else None
+        if planned is not None and say.moment in SET_PIECES:
+            self._tonight.heard(planned)
+        if line.text and line.source is not Source.FIXED and line.moment in REMEMBERED_LIVE:
+            self._tonight.remember(line.moment, line.text, names=self._names)
+
     async def attempt_for(self, say: Say) -> Attempt:
         """One model attempt for a cue, with no fallback: for the evaluation script. An
         audience question Nova declines never reaches the model, as in line_for."""
@@ -247,8 +279,8 @@ class LineWriter:
         return await self._attempt(say, self._prompt_for(say), timeout)
 
     async def _line_for(self, say: Say) -> Line:
-        if say.moment is Moment.ROOM_TALK and say.number == 1:
-            self._fallback_in_hold = False  # a new hold
+        if say.moment not in HOLD_MOMENTS or (say.moment is Moment.ROOM_TALK and say.number == 1):
+            self._fallback_in_hold = False  # the hold is over, or a new one starts
         if say.text is not None:
             return Line(say.text, Source.FIXED, say.moment)
         if say.moment in SET_PIECES:
@@ -297,12 +329,7 @@ class LineWriter:
     async def _prepare_one(self, say: Say) -> Line:
         """Three candidates at once; keeps the one that passes the guardrails and is least
         like what Nova has said tonight for this moment. If none passes, the fallback."""
-        attempts = await asyncio.gather(
-            *(
-                self._attempt(say, self._prompt_for(say), self._prep_timeout)
-                for _ in range(CANDIDATES)
-            )
-        )
+        attempts = await asyncio.gather(*(self._prepare_attempt(say) for _ in range(CANDIDATES)))
         passing = [attempt for attempt in attempts if attempt.ok]
         best = min(
             passing,
@@ -310,6 +337,13 @@ class LineWriter:
             default=attempts[0],
         )
         return self._settle(say, best, Source.PREPARED)
+
+    async def _prepare_attempt(self, say: Say) -> Attempt:
+        """One candidate, taking a slot if NOVA_PREP_PARALLEL limits them, so a distress
+        check during prep never queues behind a dozen requests on the same model."""
+        slot = self._prep_slots or contextlib.nullcontext()
+        async with slot:
+            return await self._attempt(say, self._prompt_for(say), self._prep_timeout)
 
     async def _attempt(self, say: Say, prompt: str, timeout: float) -> Attempt:
         started = time.monotonic()
@@ -332,11 +366,12 @@ class LineWriter:
         audience question) is passed in so no proper noun from it is repeated."""
         rules = rules_for(say.moment)
         said = [say.detail] if say.moment in (Moment.REPLY, Moment.FROM_THE_ROOM) else []
-        if say.moment is Moment.SILENCE and say.about is not None:
-            cards = [self._pair.card(say.about)]  # one dater is away: only the one who's here
+        away = _away(say)
+        if away is not None:
+            cards = [self._pair.card(away.other)]  # one dater is away: only the one who's here
         else:
             cards = cards_for(say.moment, self._pair, self._next_pair)
-        return check(
+        found = check(
             text,
             names=frozenset({card.first_name for card in cards} | {"Nova"}),
             max_chars=rules.max_chars,
@@ -346,6 +381,13 @@ class LineWriter:
             questions=rules.questions,
             open_with_names=rules.open_with_names,
         )
+        # The dater who's away is never named, even to open a sentence, where a capitalised
+        # word passes as an ordinary one.
+        if away is not None:
+            absent = self._pair.card(away).first_name
+            if re.search(rf"\b{re.escape(absent)}\b", text):
+                found = tuple(v for v in Violation if v in {*found, Violation.UNKNOWN_NAME})
+        return found
 
     def _settle(self, say: Say, attempt: Attempt, success: Source) -> Line:
         if attempt.ok and attempt.text is not None:
@@ -396,14 +438,20 @@ class LineWriter:
                 return self._least_like_tonight(say, script.silence_fallbacks(pair))
             case Moment.FROM_THE_ROOM:
                 # Proposed, off until sign-off: the approved question, framed, if that
-                # passes the guardrails (docs/sign-off/2026-10-audience-questions.md).
+                # passes the guardrails (docs/sign-off/2026-10-audience-questions.md). As
+                # typed, quotes straightened (iOS) and line breaks made spaces.
                 if script.READ_APPROVED_QUESTION_ON_FAILURE and say.detail:
-                    framed = script.from_the_room_framed(say.detail)
+                    framed = script.from_the_room_framed(plain(say.detail))
                     if not self._check(say, framed):
                         return framed
+                if say.away is not None:
+                    # The fallback names both daters: say nothing (one-dater lines wait for
+                    # sign-off: docs/sign-off/2026-10-one-dater.md).
+                    return ""
                 return script.from_the_room_fallback(pair)
             case Moment.ROOM_TALK:
-                if say.number is not None:  # a hold's cover line
+                ended = say.room is not None and say.room.situation is Situation.ENDED_EARLY
+                if say.number is not None or ended:  # a hold's cover, or the close after one
                     if self._fallback_in_hold:
                         return ""  # never the same fallback twice in one hold
                     self._fallback_in_hold = True
@@ -412,6 +460,8 @@ class LineWriter:
                 words = say.detail or ""
                 if is_unmistakable(words) or has_warning(words):
                     return script.TAKE_YOUR_TIME  # never "I'll stay out of that one"
+                if say.away is not None:
+                    return ""  # the fallback hands back to both daters
                 return script.REPLY_FALLBACK
         raise ValueError(f"No fallback for {say.moment}")
 
@@ -421,14 +471,22 @@ class LineWriter:
         the guardrails for its moment, card words allowed as for a model line."""
         if not script.CARD_FALLBACKS_ON:
             return False
-        if not (pair.left.approved_for_air and pair.right.approved_for_air):
+        if not all(card.approved_for_air and _quotable(card) for card in (pair.left, pair.right)):
             return False
         return not self._check(say, build(pair))
 
     def _least_like_tonight(self, say: Say, options: Sequence[str]) -> str:
-        """The option least like what Nova has said tonight for this moment, so fixed
-        fallbacks take turns across the night; ties go to the first."""
-        return min(options, key=lambda o: self._tonight.closeness(say.moment, o, names=self._names))
+        """The option said least often tonight for this moment, then the one said longest
+        ago, then the one least like anything said, so fixed fallbacks take turns across the
+        night even once every option has been used; ties go to the first."""
+        tonight, names = self._tonight, self._names
+
+        def turn(option: str) -> tuple[int, int, float, int]:
+            count, last = tonight.uses(say.moment, option, names=names)
+            close = tonight.closeness(say.moment, option, names=names)
+            return count, last, close, options.index(option)
+
+        return min(options, key=turn)
 
     def _prompt_for(self, say: Say) -> str:
         limit = SHOWN_LIVE if say.moment in LIVE_REACTIONS else SHOWN
@@ -454,12 +512,15 @@ class LineWriter:
                     return prompts.silence_to_one(pair, say.about, tonight=tonight)
                 return prompts.silence(pair, tonight=tonight)
             case Moment.FROM_THE_ROOM:
-                return prompts.from_the_room(pair, say.detail or "", tonight=tonight)
+                to = say.away.other if say.away is not None else None
+                return prompts.from_the_room(pair, say.detail or "", to=to, tonight=tonight)
             case Moment.ROOM_TALK:
                 opening = self._rng.choice(prompts.ROOM_TALK_OPENINGS)
                 return prompts.room_talk(_room(say), opening=opening, tonight=tonight)
             case Moment.REPLY:
-                return prompts.reply(pair, _seat(say), say.detail or "", tonight=tonight)
+                away = say.away is not None
+                words = say.detail or ""
+                return prompts.reply(pair, _seat(say), words, other_away=away, tonight=tonight)
         raise ValueError(f"No prompt for {say.moment}")
 
     def _set_piece_cues(self) -> list[Say]:
@@ -475,6 +536,23 @@ def _key(say: Say) -> _Key:
     if say.moment in (Moment.FIRST_QUESTION, Moment.LAST_WORD):
         return (say.moment, say.about, None)
     return (say.moment, None, None)
+
+
+def _away(say: Say) -> Seat | None:
+    """The dater a line must not name: the one away (the moderator resumed without them)."""
+    if say.away is not None:
+        return say.away
+    if say.moment is Moment.SILENCE and say.about is not None:
+        return say.about.other  # a silence prompt for the one who's here
+    return None
+
+
+def _quotable(card: BlindCard) -> bool:
+    """A card answer Nova may quote in its own voice: one sentence, since on audio a second
+    would sound like Nova's own words, and never naming Nova or the show."""
+    answer = plain(card.prompts[0].answer).rstrip(".?!")
+    host = rf"\b(?:Nova|{SHOW_NAME})\b"
+    return not (SENTENCE_END.search(answer) or re.search(host, answer, re.IGNORECASE))
 
 
 def _seat(say: Say) -> Seat:

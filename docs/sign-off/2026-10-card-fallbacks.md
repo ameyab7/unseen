@@ -28,8 +28,11 @@ anything."
 ## When they're used
 
 Only when the switch is on, both cards on the date (or the next pair, for Next up) are
-`approved_for_air`, and the line passes the same guardrails as a model line for its moment,
-card words allowed, within its length. Otherwise today's fallback. A card carrying
+`approved_for_air`, each quoted answer is one sentence and names neither Nova nor the show
+(on audio there's no closing quote, so a second sentence would sound like Nova's own
+words), and the line passes the same guardrails as a model line for its moment, card
+words allowed, within its length. Otherwise today's fallback. The card is quoted as typed,
+with curly quotes straightened and line breaks made spaces. A card carrying
 injected instructions, even an approved one, fails the guardrails and gets today's line.
 
 ## Sign-off

@@ -5,9 +5,10 @@ Nova uses a fallback line instead of waiting.
 """
 
 import asyncio
-import contextlib
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Protocol
 
 from anthropic import AsyncAnthropic
@@ -111,14 +112,18 @@ class AnthropicModel:
     """
 
     MAX_TOKENS = 2048  # room for adaptive thinking; the line itself is short
+    # Models that reject output_config.effort (the Claude API reference): a smaller one is
+    # an obvious NOVA_CLASSIFIER_LLM, and with effort every check would fail.
+    NO_EFFORT = ("claude-haiku-4-5", "claude-sonnet-4-5")
 
     def __init__(self, model: str, *, api_key: str | None = None, client: Any = None) -> None:
         self.name = f"anthropic/{model}"
         self._model = model
         self._client = client or AsyncAnthropic(api_key=api_key, max_retries=0)
+        self._effort: dict[str, Any] = {} if model.startswith(self.NO_EFFORT) else {"effort": "low"}
 
     async def write(self, *, system: str, prompt: str) -> str:
-        return await self._create(system, prompt, {"effort": "low"})
+        return await self._create(system, prompt, dict(self._effort))
 
     async def label(
         self, *, system: str, prompt: str, schema: Mapping[str, object] | None = None
@@ -126,18 +131,19 @@ class AnthropicModel:
         """The same request as a line, with the schema as structured output
         (output_config.format), so the answer is JSON that follows it. Claude takes no
         sampling settings to make it more repeatable."""
-        config: dict[str, Any] = {"effort": "low"}
+        config: dict[str, Any] = dict(self._effort)
         if schema is not None:
             config["format"] = {"type": "json_schema", "schema": dict(schema)}
         return await self._create(system, prompt, config)
 
     async def _create(self, system: str, prompt: str, output_config: dict[str, Any]) -> str:
+        options: dict[str, Any] = {"output_config": output_config} if output_config else {}
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=self.MAX_TOKENS,
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": prompt}],
-            output_config=output_config,
+            **options,
         )
         if response.stop_reason == "refusal":
             raise ModelRefused("refused")
@@ -150,20 +156,42 @@ class AnthropicModel:
 
 
 # The warm-up's wait: long enough for the 20-28 s cold load measured on the development PC,
-# short next to the prep timeout. Its answer, or failure, is ignored.
+# short next to the prep timeout. Its answer is ignored.
 WARM_UP_TIMEOUT = 30.0
 WARM_UP_SYSTEM = "Reply with one word."
 
 
-async def warm_up(model: LineModel, *, timeout: float = WARM_UP_TIMEOUT) -> int:
+class WarmUpError(StrEnum):
+    TIMEOUT = "timeout"
+    REFUSED = "refused"
+    ERROR = "error"  # not running, not pulled, a bad key, a parameter it rejects
+
+
+@dataclass(frozen=True)
+class Warmed:
+    """How long the warm-up took, and why it failed, if it did: a model that can't answer
+    at all shows up here, not as a warm model."""
+
+    ms: int
+    error: WarmUpError | None = None
+
+
+async def warm_up(model: LineModel, *, timeout: float = WARM_UP_TIMEOUT) -> Warmed:
     """One tiny request, so a cold model loads now. Without it, a short timeout (the
     distress check's 2 s) gives up on the load, the next request starts it again, and every
-    check fails until something waits long enough. Returns how long it took, in ms; the
-    answer, or a failure, is ignored."""
+    check fails until something waits long enough. The answer is ignored; whether there was
+    one, and how long it took, are not."""
     started = time.monotonic()
-    with contextlib.suppress(Exception):
+    error: WarmUpError | None = None
+    try:
         await asyncio.wait_for(model.label(system=WARM_UP_SYSTEM, prompt="Say ok."), timeout)
-    return ms_since(started)
+    except TimeoutError:
+        error = WarmUpError.TIMEOUT
+    except ModelRefused:
+        error = WarmUpError.REFUSED
+    except Exception:  # any failure is reported, never raised
+        error = WarmUpError.ERROR
+    return Warmed(ms_since(started), error)
 
 
 def build_model(settings: Settings, choice: LlmChoice | None = None) -> LineModel:

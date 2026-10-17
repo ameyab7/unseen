@@ -1474,3 +1474,23 @@ def test_an_approved_question_dropped_by_a_pause_is_read_later():
     asked = [c.detail for _, c in show.says(Moment.FROM_THE_ROOM)]
     assert asked.count("Mountains or sea?") == 1
     assert show.runner._questions_asked == 1
+
+
+def test_with_a_dater_away_questions_and_replies_say_who_is_away():
+    """So the line writer never names or addresses them (decision 0004)."""
+    show = resumed_without_maya()
+    show.at(141, "queue_question", approved("Mountains or sea?"))
+    show.until(300)
+    asked = show.says(Moment.FROM_THE_ROOM)
+    assert asked and all(say.away is LEFT for _, say in asked)
+    reply = show.at(301, "dater_asked_nova", RIGHT, "Nova, tea or coffee?")
+    assert Say(Moment.REPLY, about=RIGHT, detail="Nova, tea or coffee?", away=LEFT) in reply
+
+
+def test_with_both_daters_away_no_audience_question_is_read():
+    show = resumed_without_maya()
+    show.at(141, "queue_question", approved("Mountains or sea?"))
+    show.at(200, "need_a_moment", RIGHT)
+    show.at(230, "moderator_resume")
+    show.until(400)
+    assert show.says(Moment.FROM_THE_ROOM) == []

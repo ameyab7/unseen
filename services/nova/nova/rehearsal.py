@@ -30,7 +30,7 @@ from nova.distress import Checked, DistressCheck, Verdict
 from nova.events import Event, EventLog
 from nova.lines import LIVE_REACTIONS, Line, LineWriter, Source
 from nova.measure import ms
-from nova.models import LineModel, warm_up
+from nova.models import WARM_UP_TIMEOUT, LineModel, Warmed, warm_up
 from nova.on_air import Closed, OnAirCues, OnAirListener, ReplyAction
 from nova.questions import AudienceQuestion, QuestionStatus
 from nova.show_runner import NoVotes, ShowRunner, waits_for_speech
@@ -142,6 +142,7 @@ class Rehearsal:
         live_timeout: float = Settings.live_timeout,
         prep_timeout: float = Settings.prep_timeout,
         prep_budget: float = Settings.prep_budget,
+        prep_parallel: int | None = Settings.prep_parallel,
         distress_timeout: float = Settings.distress_timeout,
         utterance_grace: float = Settings.utterance_grace,
         utterance_max_wait: float = Settings.utterance_max_wait,
@@ -171,6 +172,7 @@ class Rehearsal:
             live_timeout=live_timeout,
             prep_timeout=prep_timeout,
             prep_budget=prep_budget,
+            prep_parallel=prep_parallel,
             events=self._events,
             tonight=Tonight(),
         )
@@ -204,6 +206,7 @@ class Rehearsal:
         self.nova_seconds = 0.0  # how long Nova's voice played, measured
         self.prep_ms = 0
         self.warm_up_ms: int | None = None
+        self.warmed: list[tuple[str, Warmed]] = []  # each model warmed up: what for, and how
 
     @property
     def finished(self) -> bool:
@@ -244,13 +247,25 @@ class Rehearsal:
 
     # --- The date ---------------------------------------------------------------------------
 
-    async def warm_up(self) -> None:
+    async def warm_up(self, *, timeout: float = WARM_UP_TIMEOUT) -> None:
         """One tiny request to the model before anything else (nova/lines.py), so a cold
         model loads before prepare() and its budget start; and to the distress check's own
-        model too, if it has one, so its first checks don't time out on the load."""
-        self.warm_up_ms = await self._writer.warm_up()
-        if self._classifier is not None and self._classifier is not self._model:
-            await warm_up(self._classifier)
+        model too, at the same time, if it's another model, so its first checks don't time
+        out on the load. The same model is warmed once: twice, one after the other, held a
+        date for two warm-up timeouts when the model hung."""
+        warming = [self._writer.warm_up(timeout=timeout)]
+        separate = self._classifier is not None and self._classifier.name != self._model.name
+        if separate:
+            warming.append(self._warm_classifier(timeout))
+        warmed = await asyncio.gather(*warming)
+        self.warm_up_ms = warmed[0].ms
+        self.warmed = list(zip(("model", "classifier"), warmed, strict=False))
+
+    async def _warm_classifier(self, timeout: float) -> Warmed:
+        assert self._classifier is not None
+        warmed = await warm_up(self._classifier, timeout=timeout)
+        self._events.emit(Event.WARMUP, ms=warmed.ms, error=warmed.error, classifier=True)
+        return warmed
 
     async def prepare(self) -> None:
         started = self._clock()
@@ -522,8 +537,9 @@ class Rehearsal:
                 self._events.emit(Event.VOICE_ERROR, moment=line.moment)
             if started is None and item.stopped.is_set():
                 return  # cut before its first word, on purpose: not a line that never played
-            if started is not None:  # only what played is billed and counted
+            if started is not None:  # only what played is billed, counted and remembered
                 self.characters_spoken += len(line.text)
+                self._writer.played(item.say, line)
             spoken = Spoken(
                 moment=line.moment,
                 kind=item.kind,
@@ -645,8 +661,7 @@ def render_report(rehearsal: Rehearsal) -> str:
         if r.prep_budget_exhausted
         else ""
     )
-    warmed = r.warm_up_ms
-    warm_up = f"Model warmed up in {warmed / 1000:.1f} s. " if warmed is not None else ""
+    warm_up = "".join(_warm_up_text(what, warmed) for what, warmed in r.warmed)
     lines = [
         f"Nova rehearsal: voice {r.voice}, model {r.model_name}, speech recognition {r.stt}",
         f"{warm_up}Set pieces prepared in {r.prep_ms / 1000:.1f} s.{budget} {len(r.spoken)} "
@@ -690,6 +705,14 @@ def render_report(rehearsal: Rehearsal) -> str:
         f"{r.stt_seconds / 60:.1f} min, voice {r.characters_spoken} characters)",
     ]
     return "\n".join(lines)
+
+
+def _warm_up_text(what: str, warmed: Warmed) -> str:
+    """The warm-up of the model (or the classifier): a failure says so, never "warmed up"."""
+    name = "Model" if what == "model" else "Distress check's model"
+    if warmed.error is not None:
+        return f"{name} warm-up failed ({warmed.error}) after {warmed.ms / 1000:.1f} s. "
+    return f"{name} warmed up in {warmed.ms / 1000:.1f} s. "
 
 
 def _utterance_row(r: Rehearsal) -> str:

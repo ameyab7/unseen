@@ -231,7 +231,8 @@ Date: 2026-10-13. Status: accepted.
   are never remembered: they carry what a listener or dater said, and the memory reaches
   every later date's prompts. Set pieces are kept as planned for their date: prompts see
   them while it runs, and if it ends early, the ones never spoken are dropped, so lines
-  the room never heard don't steer later dates. Each set piece gets three candidates
+  the room never heard don't steer later dates. A line counts as heard only once it has
+  played (`LineWriter.played`): one cut by a stop, or lost to the voice, is never kept. Each set piece gets three candidates
   during prep; Nova keeps the one that passes the guardrails and is least similar to
   tonight's lines. The
   line writer also picks a shape for Next up and an opening for talk to the room at
@@ -242,8 +243,11 @@ Date: 2026-10-13. Status: accepted.
   the poll is open, how many audience questions so far), and never mentions the outcome,
   spending or anyone's looks.
 - **Fixed fallbacks take turns across the night.** Silence, lightning and outro
-  fallbacks each use the option least like what Nova has said tonight, so a night
-  doesn't hear the same fallback twice while another is unused. The last-question
+  fallbacks each use the option said least often tonight, then the one said longest ago,
+  then the one least like anything Nova has said, so a night doesn't hear the same
+  fallback twice while another is unused, and once every option has been used they keep
+  taking turns (before, the first option then came every time: the same lightning
+  question three times in one date). The last-question
   lightning fallbacks are their own list (`LIGHTNING_LAST_FALLBACKS`) and only ever come
   last. Bigger pools (15 lightning, 10 silence, 4 more outros) wait for sign-off in
   `docs/sign-off/2026-10-nova-fallbacks.md`; every draft line is checked against the
@@ -262,9 +266,14 @@ Date: 2026-10-13. Status: accepted.
   runs out every set piece not yet chosen gets its fallback and the date can start. Before,
   ten set pieces were written one after another, each with its own 60 s, so a model that
   hung held the date for about ten minutes. Writing at the same time helps only as far as
-  the model serves requests at once (Ollama: `OLLAMA_NUM_PARALLEL`). At the start, the
-  agent sends the model one tiny request (`warm_up`, its answer ignored, its time logged
-  as a `warmup` event), so a cold load happens before the budget starts.
+  the model serves requests at once (Ollama: `OLLAMA_NUM_PARALLEL`), so
+  `NOVA_PREP_PARALLEL` (default 1, set to match it) caps the set-piece requests in
+  flight: a distress check during prep, on the same model, then waits behind at most that
+  many, not eighteen. At the start, the agent sends each model one tiny request at the
+  same time (`warm_up`, its answer ignored, its time and any failure logged as a `warmup`
+  event and shown in the report), so a cold load happens before the budget starts; the
+  check's model is warmed separately only if it is another model. A model that hangs holds
+  the date for the warm-up's 30 s and the budget, not two warm-ups one after the other.
   `NOVA_DISTRESS_TIMEOUT_SECONDS` (default 2) for the
   distress check: warm Gemma took a median of 193-195 ms and at most 278 ms, so 2 s leaves
   room for a slower model; a check that times out alerts the moderator, and a yes that
@@ -378,15 +387,20 @@ right-hand column above). Before the first real show, Nova needs these:
   its codes (`personal_detail`, `looks`, `instructs_nova`) as a warning before the
   moderator approves, and shows `QuestionSkipped` when an approved question is skipped on
   air.
-- The distress check sends everything daters say to the model in `NOVA_LLM`, one call per
-  utterance, about 60 to 90 a date: on this PC's Gemma, nothing leaves the machine; with
-  Claude, every utterance goes to Anthropic, so the cost and the privacy notice need a
-  look first.
+- The distress check sends everything daters say to the model in `NOVA_CLASSIFIER_LLM`
+  (`NOVA_LLM` if it isn't set), one call per utterance, about 60 to 90 a date, with both
+  daters' last 15 seconds: with a local model (this PC's Gemma), nothing leaves the
+  machine; with an `anthropic/` model in that setting, every utterance goes to Anthropic,
+  so the cost and the privacy notice need a look first. Claude Haiku 4.5 and Sonnet 4.5
+  are asked for no effort setting, which they reject.
 - Each model change runs the evaluation first; a failing case blocks the change.
 - The blind card schema in `packages/shared` must apply the same rules, so the app never
   accepts a card Nova can't put on air: first name letters with single spaces, hyphens or
-  apostrophes, 1 to 30 characters, a capital first letter, and not "Nova" or "AI" in any
-  case (the app's name field should auto-capitalise); age a whole number from 18 to 99;
+  apostrophes, 1 to 30 characters, composed (NFC) and in ordinary letters (no lookalikes
+  NFKC would change), a capital first letter where the script has capitals, no part of
+  three letters or more in capitals (AJ is fine, MAYA isn't), not "Nova" or "AI" in any
+  case nor starting with "Nova" (the app's name field should auto-capitalise), and two
+  names on one date that don't sound the same (Zoë and Zoe); age a whole number from 18 to 99;
   exactly two prompts, each question 1 to 60 characters and each answer 1 to 120, not
   blank once trimmed; pronouns optional, and if given letters, slashes, spaces and
   hyphens, at most 20 characters. Casting must not pair two daters with the same first

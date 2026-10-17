@@ -11,11 +11,18 @@
 services:
   nova:
     build: .
-    # The keys stay on this PC: Docker hands them to the container when it starts.
-    env_file: .env
+    # The keys stay on this PC: Docker hands them to the container when it starts. Not
+    # required, so the tests run on a fresh clone with no .env.
+    env_file:
+      - path: .env
+        required: false
     environment:
-      # Ollama runs on Windows; inside Docker the host is host.docker.internal.
+      # Ollama runs on Windows; inside Docker the host is host.docker.internal. This wins
+      # over OLLAMA_BASE_URL in .env: for an Ollama on another machine, change it here.
       OLLAMA_BASE_URL: http://host.docker.internal:11434
+    # host.docker.internal resolves on a plain Linux engine too (Docker Desktop has it).
+    extra_hosts:
+      - host.docker.internal:host-gateway
     volumes:
       - ./rehearsals:/app/rehearsals
       - ./voice-samples:/app/voice-samples

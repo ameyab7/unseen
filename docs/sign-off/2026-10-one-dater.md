@@ -1,4 +1,4 @@
-# Sign-off: silence fallbacks for one dater
+# Sign-off: fallbacks for one dater
 
 Status: proposed. Waiting for the product owner. Until then they are not in
 `services/nova/nova/script.py`, and when the model fails on a one-dater silence prompt,
@@ -24,6 +24,19 @@ other dater or why they're away.
 
 Both pass the guardrails for a silence prompt (checked with Theo, Will and Robin as the
 name): 84 to 85 and 69 to 70 characters, one question each.
+
+## An audience question, and a reply, for one dater
+
+While a dater is away, an approved audience question and a reply to the dater who spoke to
+Nova go only to the dater who's here (decision 0004). If the model fails, today's
+fallbacks name or address both daters ("Room, keep the questions coming. Maya, Theo, back
+to you."; "Back to you two."), so Nova says nothing until one of these is signed off:
+
+3. Audience question: "Room, keep the questions coming. {name}, back to you."
+4. Reply: "Good question. I'll hand that one back to you, {name}."
+
+Both pass the guardrails for their moments (a test checks them with Theo, Will and Robin as
+the name).
 
 ## Sign-off
 

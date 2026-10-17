@@ -40,7 +40,11 @@ Date: 2026-10-13. Status: accepted.
   and a long silence brings a prompt for the dater who's on air only, written by the
   model from that dater's card alone; if the model fails, Nova says nothing, since every
   silence fallback names both daters (one-dater fallbacks wait for sign-off in
-  `docs/sign-off/2026-10-one-dater.md`). If the dater comes back while the date is live,
+  `docs/sign-off/2026-10-one-dater.md`). Audience questions and replies to Nova go to
+  the dater who's here too: the model is given only their name, a line naming the absent
+  dater is rejected, and since today's fallbacks name or address both daters, Nova says
+  nothing if the model fails (one-dater lines wait in the same document). With both
+  daters away, audience questions wait. If the dater comes back while the date is live,
   Nova says "And we're back.", which is true then (before, a return after a resume got
   nothing). Their decision is unchanged: they can still decide in the app, and no answer
   counts as keep it unseen. After a report, the reporter isn't welcomed back: their date

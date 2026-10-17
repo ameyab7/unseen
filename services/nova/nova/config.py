@@ -34,12 +34,13 @@ class LlmChoice:
     model: str
 
     @classmethod
-    def parse(cls, value: str) -> Self:
+    def parse(cls, value: str, *, setting: str = "NOVA_LLM") -> Self:
+        """setting: the name a ConfigError gives, the one that's wrong."""
         provider, _, model = value.strip().partition("/")
         if not provider or not model:
-            raise ConfigError('NOVA_LLM must look like "provider/model"')
+            raise ConfigError(f'{setting} must look like "provider/model"')
         if provider not in PROVIDERS:
-            raise ConfigError(f"NOVA_LLM's provider must be one of {', '.join(PROVIDERS)}")
+            raise ConfigError(f"{setting}'s provider must be one of {', '.join(PROVIDERS)}")
         return cls(provider, model)
 
 
@@ -65,8 +66,14 @@ class Settings:
     prep_timeout: float = 60.0
     # How long preparing all of a date's set pieces may take. When it runs out, every set
     # piece not yet chosen gets its fallback and the date can start, so a model that hangs
-    # holds a show for this long, not ten set pieces times the prep timeout.
+    # holds a show for the warm-up's timeout (30 s, nova/models.py) and this, not ten set
+    # pieces times the prep timeout.
     prep_budget: float = 45.0
+    # How many requests for set pieces may be in flight at once while they're prepared. A
+    # distress check during prep queues behind them on the same model, and with Ollama
+    # serving one request at a time (OLLAMA_NUM_PARALLEL), more never prepared faster: set
+    # it to match OLLAMA_NUM_PARALLEL.
+    prep_parallel: int = 1
     # How long the distress check (decision 0005, the meaning layer) may take before the
     # moderator is alerted instead. A "yes" pauses the dater only once it arrives, so this
     # also bounds how late the kind line can come.
@@ -97,6 +104,7 @@ class Settings:
         "NOVA_LIVE_TIMEOUT_SECONDS",
         "NOVA_PREP_TIMEOUT_SECONDS",
         "NOVA_PREP_BUDGET_SECONDS",
+        "NOVA_PREP_PARALLEL",
         "NOVA_DISTRESS_TIMEOUT_SECONDS",
         "NOVA_UTTERANCE_GRACE_SECONDS",
         "NOVA_UTTERANCE_MAX_WAIT_SECONDS",
@@ -112,7 +120,11 @@ class Settings:
 
         llm = LlmChoice.parse(env["NOVA_LLM"])
         classifier_value = env.get("NOVA_CLASSIFIER_LLM", "").strip()
-        classifier = LlmChoice.parse(classifier_value) if classifier_value else None
+        classifier = (
+            LlmChoice.parse(classifier_value, setting="NOVA_CLASSIFIER_LLM")
+            if classifier_value
+            else None
+        )
         anthropic_api_key = env.get("ANTHROPIC_API_KEY", "").strip() or None
         uses_anthropic = "anthropic" in {llm.provider, classifier.provider if classifier else ""}
         if uses_anthropic and anthropic_api_key is None:
@@ -138,6 +150,7 @@ class Settings:
             live_timeout=_seconds(env, "NOVA_LIVE_TIMEOUT_SECONDS", cls.live_timeout),
             prep_timeout=_seconds(env, "NOVA_PREP_TIMEOUT_SECONDS", cls.prep_timeout),
             prep_budget=_seconds(env, "NOVA_PREP_BUDGET_SECONDS", cls.prep_budget),
+            prep_parallel=_count(env, "NOVA_PREP_PARALLEL", cls.prep_parallel),
             distress_timeout=_seconds(env, "NOVA_DISTRESS_TIMEOUT_SECONDS", cls.distress_timeout),
             utterance_grace=grace,
             utterance_max_wait=max_wait,
@@ -159,6 +172,15 @@ def _stt(value: str) -> str:
     if not provider or not model or ":" in value:
         raise ConfigError('NOVA_STT must look like "provider/model"')
     return value
+
+
+def _count(env: Mapping[str, str], name: str, default: int) -> int:
+    raw = env.get(name, "").strip()
+    if not raw:
+        return default
+    if not raw.isdigit() or int(raw) < 1:
+        raise ConfigError(f"{name} must be a whole number, 1 or more")
+    return int(raw)
 
 
 def _seconds(env: Mapping[str, str], name: str, default: float) -> float:

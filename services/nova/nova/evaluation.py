@@ -1224,6 +1224,7 @@ async def run_night(
     live_timeout: float,
     prep_timeout: float,
     prep_budget: float = Settings.prep_budget,
+    prep_parallel: int | None = Settings.prep_parallel,
     pairs=NIGHT,
 ) -> Night:
     tonight = Tonight()
@@ -1241,6 +1242,7 @@ async def run_night(
             live_timeout=live_timeout,
             prep_timeout=prep_timeout,
             prep_budget=prep_budget,
+            prep_parallel=prep_parallel,
             events=EventLog(logging.getLogger("nova.evaluation")),
             tonight=tonight,
         )
@@ -1251,6 +1253,7 @@ async def run_night(
         names = [card.first_name for p in (pair, next_pair) if p for card in (p.left, p.right)]
         for say in date_cues(pair, next_pair, n):
             line = await writer.line_for(say)
+            writer.played(say, line)  # the room hears every line of a night here
             why = tuple(str(v) for v in line.violations) or (
                 (str(line.error),) if line.error else ()
             )
@@ -1418,6 +1421,7 @@ def main(argv: list[str] | None = None) -> int:
                 live_timeout=settings.live_timeout,
                 prep_timeout=settings.prep_timeout,
                 prep_budget=settings.prep_budget,
+                prep_parallel=settings.prep_parallel,
             )
 
         tonight = asyncio.run(night())

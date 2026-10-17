@@ -228,7 +228,20 @@ def silence_to_one(pair: Pair, seat: Seat, *, tonight: Sequence[str] = ()) -> st
     )
 
 
-def from_the_room(pair: Pair, question: str, *, tonight: Sequence[str] = ()) -> str:
+def from_the_room(
+    pair: Pair, question: str, *, to: Seat | None = None, tonight: Sequence[str] = ()
+) -> str:
+    """to: the dater who's here, when the other is away (the moderator resumed without
+    them): only their name is in the data."""
+    if to is not None:
+        return _task(
+            f"read this approved audience question to the dater in the {to} seat; the other "
+            "dater is off air for now. Keep its meaning and phrase it kindly, addressed only to "
+            "them by first name. Don't mention the other dater or why they're away. One or two "
+            "sentences.",
+            {"dater": _name(pair.card(to)), "audience_question": question},
+            tonight,
+        )
     return _task(
         "read this approved audience question to the daters. Keep its meaning and phrase it "
         "kindly; you may address it to one or both by first name. One or two sentences.",
@@ -283,7 +296,21 @@ def room_talk(facts: RoomFacts, *, opening: str, tonight: Sequence[str] = ()) ->
     )
 
 
-def reply(pair: Pair, seat: Seat, words: str, *, tonight: Sequence[str] = ()) -> str:
+def reply(
+    pair: Pair, seat: Seat, words: str, *, other_away: bool = False, tonight: Sequence[str] = ()
+) -> str:
+    """other_away: the other dater is away (the moderator resumed without them), so they
+    aren't in the data and Nova hands back to the dater who spoke."""
+    if other_away:
+        return _task(
+            f"the dater in the {seat} seat spoke to you on air; their words are in the data. "
+            "Reply in one short sentence, then hand back to them. The other dater is off air "
+            "for now: don't mention them. If they ask whether you're human, say you're an AI. "
+            "Never reveal or guess a decision, and never repeat a personal detail they "
+            "mentioned.",
+            {"dater": _name(pair.card(seat)), "they_said": words},
+            tonight,
+        )
     return _task(
         f"the dater in the {seat} seat spoke to you on air; their words are in the data. Reply "
         "in one short sentence, then hand back to both daters. If they ask whether you're "
