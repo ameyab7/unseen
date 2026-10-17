@@ -18,10 +18,10 @@ from nova.cues import (
     StopSpeaking,
 )
 from nova.decisions import InMemoryDecisionDesk
-from nova.distress import LABEL_SCHEMA, DistressCheck, parse_conduct
+from nova.distress import LABEL_SCHEMA, DistressCheck, Verdict, parse, parse_conduct
 from nova.evaluation import FakeClock, conduct_found, render_conduct, run_conduct
 from nova.fixtures import REHEARSAL_PAIR
-from nova.on_air import OnAirCues, OnAirListener
+from nova.on_air import MATCH_CAP, OnAirCues, OnAirListener
 from nova.show_runner import NoVotes, ShowRunner
 from nova.timing import FULL
 
@@ -159,13 +159,41 @@ def test_serious_conduct_alerts_the_moderator_at_once_and_nova_says_nothing(cond
     assert cues == [AlertModerator(ModeratorAlert.CONDUCT_FLAG, RIGHT, conduct)]
 
 
+UNKIND_FLAG = AlertModerator(ModeratorAlert.CONDUCT_FLAG, LEFT, Conduct.UNKIND)
+
+
 def test_off_air_conduct_still_reaches_the_moderator_and_nova_says_nothing():
     runner = ShowRunner(REHEARSAL_PAIR, desk=InMemoryDecisionDesk(), poll=NoVotes(), first_up=LEFT)
     assert runner.dater_conduct(5.0, LEFT, Conduct.PERSONAL_DETAIL, street=True) == [DETAIL_ALERT]
-    assert runner.dater_conduct(6.0, LEFT, Conduct.UNKIND) == []
-    runner.dater_conduct(7.0, LEFT, Conduct.UNKIND)
+    assert runner.dater_conduct(6.0, LEFT, Conduct.UNKIND) == [UNKIND_FLAG]
+    assert runner.dater_conduct(7.0, LEFT, Conduct.UNKIND) == [UNKIND_FLAG]
     flagged = runner.dater_conduct(8.0, LEFT, Conduct.THREAT)
     assert flagged == [AlertModerator(ModeratorAlert.CONDUCT_FLAG, LEFT, Conduct.THREAT)]
+
+
+def test_unkind_remarks_off_air_never_count_towards_the_pause():
+    """Only a remark Nova answered with "Let's keep it kind." is a warning: the first one
+    on air after any number off air gets the warning, not a pause."""
+    runner = ShowRunner(REHEARSAL_PAIR, desk=InMemoryDecisionDesk(), poll=NoVotes(), first_up=LEFT)
+    runner.dater_conduct(5.0, LEFT, Conduct.UNKIND)  # before the date
+    runner.start(0.0)
+    runner.tick(FREE_TALK)
+    runner.need_a_moment(FREE_TALK, RIGHT)
+    assert runner.dater_conduct(FREE_TALK + 1, LEFT, Conduct.UNKIND) == [UNKIND_FLAG], "on a hold"
+    runner.back(FREE_TALK + 5, RIGHT)
+    assert runner.dater_conduct(FREE_TALK + 10, LEFT, Conduct.UNKIND) == [KIND]
+
+
+def test_a_dater_who_may_be_distressed_is_never_told_to_keep_it_kind():
+    """They may be describing what was said to them: the moderator is alerted, and it never
+    counts as a strike."""
+    runner = on_air_runner()
+    assert runner.dater_conduct(FREE_TALK, LEFT, Conduct.UNKIND, distressed=True) == [UNKIND_FLAG]
+    assert runner.dater_conduct(FREE_TALK + 5, LEFT, Conduct.UNKIND, distressed=True) == [
+        UNKIND_FLAG
+    ]
+    said = runner.dater_conduct(FREE_TALK + 10, LEFT, Conduct.UNKIND)
+    assert KIND in said and UNKIND_FLAG not in said, "the first strike"
 
 
 # --- The meaning layer: one call, two labels ------------------------------------------------
@@ -264,3 +292,210 @@ async def test_the_conduct_run_reports_recall_and_false_alerts_per_category():
 def test_working_at_getting_better_is_effort_not_a_workplace():
     assert personal_detail("I work at being a better listener, honestly.") is None
     assert personal_detail("i work at lumen dental") is not None, "a place still is"
+
+
+# --- The street line only for a street ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "it's a 40 minute drive",
+        "we did a big road trip",
+        "i live on coffee",
+        "rocky road is the best ice cream",
+        "i'm a fan of rocky road",
+        "abbey road is my favourite album",
+        "a trip down memory lane",
+        "life in the fast lane",
+        "wall street bankers",
+        "a one way street",
+        "i still live at home with my parents",
+        "i live near the station",
+        "i basically live at the gym",
+        "My mum lives near the sea now, she loves it.",
+        "i'm on my way",
+        "close to the square",
+        "at joe's place",
+    ],
+)
+def test_ordinary_talk_never_gets_the_street_line(said):
+    slipped = personal_detail(said)
+    assert slipped is None or not slipped.street
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "i live on harbour street",
+        "i live at 42 elm road",
+        "my address is 4 elm road",
+        "i live at the top of quarry road",
+        "Harbour Street, the blue door, that's me.",
+        "i live on maple drive",
+        "we're near kings close",
+        "i'm just off ashby gardens",
+        "I'm at 9 willow lane, the one with the red door.",
+    ],
+)
+def test_a_street_still_gets_the_street_line(said):
+    slipped = personal_detail(said)
+    assert slipped is not None and slipped.street
+
+
+@pytest.mark.parametrize(
+    "said",
+    ["why do you keep asking what street i live on", "stop asking what road i'm on"],
+)
+def test_asking_about_a_street_or_refusing_to_give_one_is_not_a_street_slipping(said):
+    assert personal_detail(said) is None
+
+
+# --- A bare answer with both labels --------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("answer", "verdict", "conduct"),
+    [
+        ("no, none", Verdict.NO, Conduct.NONE),
+        ("maybe, harassment", Verdict.MAYBE, Conduct.HARASSMENT),
+        ("yes\nconduct: threat", Verdict.YES, Conduct.THREAT),
+        ("Label: no. Conduct: threat.", Verdict.NO, Conduct.THREAT),
+        ("label: yes", Verdict.YES, None),
+        ('{"label": "no", "conduct": "Harassment"}', Verdict.NO, Conduct.HARASSMENT),
+        ("No.", Verdict.NO, None),
+    ],
+)
+def test_a_model_that_ignores_the_format_can_still_answer_both_labels(answer, verdict, conduct):
+    """The rules ask for the label and the conduct label, so a bare answer may carry both."""
+    assert (parse(answer), parse_conduct(answer)) == (verdict, conduct)
+
+
+@pytest.mark.parametrize("answer", ["none", "no no", "Yes, she wants to stop.", "no, maybe"])
+def test_anything_more_than_the_two_labels_is_still_no_answer(answer):
+    assert parse(answer) is None
+
+
+def test_a_conduct_label_alone_is_no_conduct_label():
+    assert parse_conduct("harassment") is None
+
+
+# --- Whose conduct it is, and what Nova says -------------------------------------------------
+
+
+class Answers:
+    """A check that answers each sentence with a given label and conduct label."""
+
+    name = "fake/answers"
+
+    def __init__(self, answers: dict[str, tuple[str, str]]) -> None:
+        self.answers = answers
+        self.checked: list[str] = []
+
+    async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
+        sentence = prompt.split('"sentence": "')[1].split('"')[0]
+        self.checked.append(sentence)
+        label, conduct = self.answers.get(sentence, ("no", "none"))
+        return f'{{"label": "{label}", "conduct": "{conduct}"}}'
+
+    async def write(self, *, system: str, prompt: str) -> str:
+        return "Here we go, Maya and Theo."
+
+
+async def hear(*said: tuple[Seat, str], answers: dict[str, tuple[str, str]]) -> list:
+    """Each utterance said in turn, five seconds apart, in free talk: everything Nova did."""
+    runner = on_air_runner()
+    delivered: list[OnAirCues] = []
+    clock = FakeClock(FREE_TALK)
+    model = Answers(answers)
+    listener = OnAirListener(
+        runner, DistressCheck(model, timeout=1.0), deliver=delivered.append, clock=clock
+    )
+    for seat, words in said:
+        listener.speech_ended(seat)
+        listener.hear(seat, words)
+        clock.now += 1.0
+        listener.tick()
+        await listener.heard()
+        clock.now += 4.0
+    return [cue for d in delivered for cue in d.cues]
+
+
+async def test_a_dater_reporting_what_was_said_to_them_is_never_told_to_keep_it_kind():
+    """If the model labels the report itself unkind, the dater who may be distressed is not
+    the one it's held against: the moderator hears of it, with no line and no strike."""
+    first, second = (
+        "he just called me ugly and boring",
+        "and now he says i'm stupid for being upset",
+    )
+    cues = await hear(
+        (LEFT, first),
+        (LEFT, second),
+        answers={first: ("maybe", "unkind"), second: ("maybe", "unkind")},
+    )
+    assert KIND not in cues
+    assert not any(isinstance(c, Say) and c.moment is Moment.SHOW_PAUSE for c in cues)
+    assert cues.count(UNKIND_FLAG) == 2
+
+
+async def test_a_first_unkind_remark_to_nova_gets_no_answer_only_lets_keep_it_kind():
+    words = "Nova, isn't Theo the most boring man alive?"
+    runner_said = await hear((LEFT, words), answers={words: ("no", "unkind")})
+    assert KIND in runner_said
+
+
+async def test_a_threat_in_the_same_breath_as_a_request_to_stop_is_still_flagged():
+    words = "I need to go. Give me your number or I'll find you after the show."
+    cues = await hear((RIGHT, words), answers={words: ("no", "threat")})
+    assert AlertModerator(ModeratorAlert.DATER_DISTRESSED, RIGHT) in cues
+    assert AlertModerator(ModeratorAlert.CONDUCT_FLAG, RIGHT, Conduct.THREAT) in cues
+
+
+async def test_a_bare_request_to_stop_still_needs_no_model():
+    model_checked: list[str] = []
+    words = "Nova, I want to stop. Can we end this?"
+
+    class Never(Answers):
+        async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
+            model_checked.append(prompt)
+            return await super().label(system=system, prompt=prompt, schema=schema)
+
+    runner = on_air_runner()
+    listener = OnAirListener(
+        runner, DistressCheck(Never({}), timeout=1.0), deliver=lambda _: None, clock=lambda: 0.0
+    )
+    listener.hear(LEFT, words)
+    listener.speech_ended(LEFT)
+    listener.flush()
+    await listener.heard()
+    assert model_checked == []
+
+
+async def test_a_detail_in_a_request_acted_on_while_the_dater_keeps_talking_is_still_heard():
+    """After MATCH_CAP the request is acted on mid-speech; the street said in the same words
+    still alerts the moderator."""
+    runner = on_air_runner()
+    delivered: list[OnAirCues] = []
+    clock = FakeClock(FREE_TALK)
+    listener = OnAirListener(
+        runner, DistressCheck(Answers({}), timeout=1.0), deliver=delivered.append, clock=clock
+    )
+    listener.speech_started(LEFT)
+    clock.now += 1.0
+    listener.hear(LEFT, "I live on mercer street and I want to stop.")
+    clock.now += MATCH_CAP
+    listener.tick()
+    await listener.heard()
+    cues = [cue for d in delivered for cue in d.cues]
+    assert AlertModerator(ModeratorAlert.DATER_DISTRESSED, LEFT) in cues
+    assert DETAIL_ALERT in cues
+
+
+def test_a_date_held_for_conduct_reminds_the_moderator_if_it_runs_long():
+    """Only the moderator can lift it, so the console hears again at the 30 s mark, as for a
+    dater who isn't back."""
+    runner = on_air_runner()
+    runner.dater_conduct(FREE_TALK, LEFT, Conduct.UNKIND)
+    runner.dater_conduct(FREE_TALK + 10, LEFT, Conduct.UNKIND)
+    later = runner.tick(FREE_TALK + 10 + FULL.moment_alert_after)
+    assert AlertModerator(ModeratorAlert.SHOW_HELD, LEFT) in later

@@ -2,8 +2,9 @@
 0006) should hear, and ordinary talk that looks like it. Written fresh, in two halves: the
 dev half is what the rules are tuned on, the held-out half is the measure. Each sample says
 what Nova should do: say the street line, alert the moderator to a personal detail, say
-"Let's keep it kind", flag a category to the moderator, or nothing. All data here is made
-up, and none of it is a real slur, address or number.
+"Let's keep it kind", flag a category to the moderator, or nothing. A few have a dater
+reporting what the other dater said or did, which is never the reporter's conduct. All
+data here is made up, and none of it is a real slur, address or number.
 """
 
 from dataclasses import dataclass
@@ -79,6 +80,13 @@ DEV_HALF: tuple[ConductSample, ...] = (
     _s("I'm sixteen days into learning the guitar, it's going badly.", NONE),
     _s("My niece is fifteen and already better at maths than me.", NONE),
     _s("That ending gave me chills, I'll find you a copy.", NONE),
+    # A dater reporting or refusing what the other dater did: the other dater's conduct.
+    _s(
+        "He keeps asking for my address and I've said no twice.",
+        NONE,
+        "Come on, just tell me roughly where.",
+    ),
+    _s("why do you keep asking what street i live on", NONE, "So what street are you on?"),
 )
 
 HELD_OUT_HALF: tuple[ConductSample, ...] = (
@@ -126,4 +134,7 @@ HELD_OUT_HALF: tuple[ConductSample, ...] = (
     _s("I'll be waiting for your book recommendation, don't forget.", NONE),
     _s("That film was a crime against cinema, ha.", NONE),
     _s("My grandparents met at seventeen, can you imagine?", NONE),
+    # A dater reporting or refusing what the other dater did: the other dater's conduct.
+    _s("he just called me ugly and boring, I don't like this", NONE),
+    _s("He said he'd wait for me outside after, that's not okay.", NONE),
 )

@@ -17,10 +17,12 @@ heard only with that punctuation might be a fragment or might be meant: the mode
 alerted at once (possible distress), and the meaning layer decides whether the date
 pauses. If a dater who said a request keeps talking, the words so far are checked again
 after MATCH_CAP seconds and acted on if they still end with it. An unmistakable request
-goes to the show runner and is never answered. Every other utterance goes to the meaning
-check once; if it was said to Nova, the reply cue is asked for at the same time and handed
-on with a hold, which resolves to the verdict once the verdict's own cues have been handed
-on. Whoever speaks the reply waits for the hold and drops the reply on a yes.
+goes to the show runner and is never answered, though if the dater said more than the
+request, the meaning layer's call is still made for its conduct label. Every other
+utterance goes to the meaning check once; if it was said to Nova, the reply cue is asked
+for at the same time and handed on with a hold, which resolves, once the verdict's own cues
+have been handed on, to what happens to the reply (reply_after): said, replaced with the
+kind line, or dropped. Whoever speaks the reply waits for the hold.
 
 An utterance also closes MAX_UTTERANCE seconds after its first final while the dater is
 still speaking, so a long story, or noise that keeps the voice detector hearing speech, is
@@ -44,13 +46,14 @@ import time
 from bisect import bisect_left
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from nova.cards import Seat
-from nova.conduct import personal_detail
+from nova.conduct import Slipped, personal_detail
 from nova.config import Settings
 from nova.cues import Conduct, Cue
 from nova.distress import Checked, DistressCheck, Listener, Verdict
-from nova.show_runner import ShowRunner
+from nova.show_runner import FLAGGED, ShowRunner
 from nova.text import straight_quotes
 
 # A request the instant layer heard waits this long for the dater to stop speaking, then
@@ -111,6 +114,30 @@ def addresses_nova(*finals: str) -> bool:
     return any(_asked(text, words, k) for k in named)
 
 
+class ReplyAction(StrEnum):
+    """What happens to Nova's reply to words a dater said to it, once the check is in."""
+
+    SPEAK = "speak"  # Nova answers as written
+    KIND_LINE = "kind_line"  # "Take all the time you need." instead, whatever was written
+    DROP = "drop"  # Nova doesn't answer
+
+
+def reply_after(verdict: Verdict, conduct: Conduct | None = None) -> ReplyAction:
+    """One rule, for the rehearsal, the agent for real shows and the evaluation alike
+    (decision 0005). A dater who wants to stop is never answered. One who may be
+    distressed, or whose check failed, never hears a quip, and never "I'll stay out of that
+    one": the kind line signed off for this case. Nova doesn't answer a remark it is about
+    to call unkind ("Let's keep it kind." comes instead) or that the moderator is alerted
+    to (the product owner's choice, 2026-10-16). Otherwise Nova answers."""
+    if verdict is Verdict.YES:
+        return ReplyAction.DROP
+    if verdict in (Verdict.MAYBE, Verdict.UNCHECKED):
+        return ReplyAction.KIND_LINE
+    if conduct is Conduct.UNKIND or conduct in FLAGGED:
+        return ReplyAction.DROP
+    return ReplyAction.SPEAK
+
+
 def _asked(text: str, words: list[re.Match[str]], k: int) -> bool:
     """Word k is Nova, and not directly followed by a verb that talks about Nova."""
     if words[k].group() != "nova":
@@ -128,11 +155,11 @@ class OnAirCues:
     """Cues for whoever runs the show, in the order they came. sentence_end: when the dater
     stopped speaking, if the first line here answers them (Nova's replies are measured from
     it). closed_at: when Nova acted on what they said; from sentence_end, the grace. hold:
-    the distress verdict a reply here waits for."""
+    what happens to a reply here, once the distress check is in (reply_after)."""
 
     cues: list[Cue]
     sentence_end: float | None = None
-    hold: asyncio.Future[Verdict] | None = None
+    hold: asyncio.Future[ReplyAction] | None = None
     closed_at: float | None = None
 
 
@@ -188,9 +215,10 @@ class OnAirListener:
         self.grace, self.max_wait = grace, max_wait
         self._daters = {seat: _Dater() for seat in Seat}
         # Each meaning check in flight: what acts on it, with the dater, the hold it resolves
-        # and the model call itself.
+        # (none for a check made only for its conduct label) and the model call itself.
         self._checks: dict[
-            asyncio.Task[None], tuple[Seat, asyncio.Future[Verdict], asyncio.Task[Checked]]
+            asyncio.Task[None],
+            tuple[Seat, asyncio.Future[ReplyAction] | None, asyncio.Task[Checked]],
         ] = {}
         self.checks: list[Checked] = []  # distress checks: verdict and time only
         self.closed: list[Closed] = []  # utterances: layer and wait only
@@ -318,8 +346,8 @@ class OnAirListener:
                 continue
             task.cancel()
             check.cancel()  # in case the task never started, and so never awaited it
-            if not hold.done():
-                hold.set_result(Verdict.UNCHECKED)
+            if hold is not None and not hold.done():
+                hold.set_result(reply_after(Verdict.UNCHECKED))
                 self._send(self._runner.distress_check(self._clock(), seat, Verdict.UNCHECKED))
         self._checks.clear()
         self._listener.clear()
@@ -366,30 +394,20 @@ class OnAirListener:
         hearing = self._listener.utterance(now, seat, utterance.words, since=utterance.started)
         instant = hearing.unmistakable is not None
         self.closed.append(Closed(seat, instant=instant, waited=None if capped else now - ended))
-        slipped = personal_detail(words)  # conduct's instant layer (decision 0006)
-        if slipped is not None:
-            self._send(runner.dater_conduct(now, seat, slipped.conduct, street=slipped.street))
+        slipped = self._conduct_instant(now, seat, words)
         if hearing.unmistakable is not None:
             self._wants_to_stop(now, seat, hearing.unmistakable, utterance, ended)
+            if hearing.check is not None:  # the rest of what they said, for its conduct
+                self._act_later(hearing.check, seat, ended, now, None, slipped, distress=False)
             return
         if self._listener.unmistakable(now, seat, utterance.words, loose=True) is not None:
             self._possible_request(now, seat, utterance)
-        hold: asyncio.Future[Verdict] | None = None
+        hold: asyncio.Future[ReplyAction] | None = None
         if hearing.check is not None:
             hold = asyncio.get_running_loop().create_future()
-            task = asyncio.ensure_future(
-                self._act_on(
-                    hearing.check,
-                    seat,
-                    ended,
-                    now,
-                    hold,
-                    heard_detail=bool(slipped),
-                    alerted=utterance.alerted,
-                )
+            self._act_later(
+                hearing.check, seat, ended, now, hold, slipped, alerted=utterance.alerted
             )
-            self._checks[task] = (seat, hold, hearing.check)
-            task.add_done_callback(self._done)
         if not capped and addresses_nova(*utterance.words):  # one reply, to the whole utterance
             asked = runner.dater_asked_nova(now, seat, words, wants_to_stop=False)
             self._send(asked, ended, hold, now)
@@ -406,11 +424,15 @@ class OnAirListener:
         ended = dater.ended if stopped else utterance.matched
         assert ended is not None
         dater.utterance, dater.ended = None, None
+        rest = self._listener.check_rest(now, seat, utterance.words, since=utterance.started)
         self._listener.forget(seat)
         if self._runner.started:
             self._send(self._runner.tick(now))
         self.closed.append(Closed(seat, instant=True, waited=now - ended if stopped else None))
+        slipped = self._conduct_instant(now, seat, utterance.text)
         self._wants_to_stop(now, seat, heard, utterance, ended)
+        if rest is not None:  # the rest of what they said, for its conduct
+            self._act_later(rest, seat, ended, now, None, slipped, distress=False)
 
     def _unmatched(self, now: float, seat: Seat, utterance: _Utterance) -> None:
         """The instant layer no longer hears a request in the utterance. If it still does with
@@ -437,6 +459,40 @@ class OnAirListener:
         said = runner.dater_asked_nova if addresses_nova(*utterance.words) else runner.dater_said
         self._send(said(now, seat, heard, wants_to_stop=True), ended, closed_at=now)
 
+    def _conduct_instant(self, now: float, seat: Seat, words: str) -> Slipped | None:
+        """Conduct's instant layer (decision 0006), on every utterance acted on."""
+        slipped = personal_detail(words)
+        if slipped is not None:
+            cues = self._runner.dater_conduct(now, seat, slipped.conduct, street=slipped.street)
+            self._send(cues)
+        return slipped
+
+    def _act_later(
+        self,
+        check: asyncio.Task[Checked],
+        seat: Seat,
+        sentence_end: float,
+        closed_at: float,
+        hold: asyncio.Future[ReplyAction] | None,
+        slipped: Slipped | None,
+        *,
+        alerted: bool = False,
+        distress: bool = True,
+    ) -> None:
+        act = self._act_on(
+            check,
+            seat,
+            sentence_end,
+            closed_at,
+            hold,
+            heard_detail=slipped is not None,
+            alerted=alerted,
+            distress=distress,
+        )
+        task = asyncio.ensure_future(act)
+        self._checks[task] = (seat, hold, check)
+        task.add_done_callback(self._done)
+
     def _done(self, task: asyncio.Task[None]) -> None:
         self._checks.pop(task, None)
 
@@ -446,36 +502,42 @@ class OnAirListener:
         seat: Seat,
         sentence_end: float,
         closed_at: float,
-        hold: asyncio.Future[Verdict],
+        hold: asyncio.Future[ReplyAction] | None,
         *,
         heard_detail: bool = False,
         alerted: bool = False,
+        distress: bool = True,
     ) -> None:
         """The verdict's cues are handed on first, then the hold resolves; then the conduct
         label from the same call, unless it's a personal detail the instant layer already
         heard. alerted: the moderator already heard of this utterance as possible distress,
-        so a maybe isn't sent twice."""
+        so a maybe isn't sent twice. distress: False for a check made only for its conduct
+        label, after the instant layer acted on a request to stop. A dater who may be
+        distressed, or who has asked to stop, may be describing what was done to them, which
+        the runner never holds against them."""
         verdict = Verdict.UNCHECKED
         conduct: Conduct | None = None
         try:
             checked = await check
             verdict, conduct = checked.verdict, checked.conduct
             self.checks.append(checked)
-            if not (alerted and verdict is Verdict.MAYBE):
+            if distress and not (alerted and verdict is Verdict.MAYBE):
                 cues = self._runner.distress_check(self._clock(), seat, verdict)
                 self._send(cues, sentence_end, closed_at=closed_at)
         finally:
-            if not hold.done():
-                hold.set_result(verdict)
+            if hold is not None and not hold.done():
+                hold.set_result(reply_after(verdict, conduct))
         repeat = conduct is Conduct.PERSONAL_DETAIL and heard_detail
         if conduct not in (None, Conduct.NONE) and not repeat:
-            self._send(self._runner.dater_conduct(self._clock(), seat, conduct))
+            distressed = not distress or verdict in (Verdict.YES, Verdict.MAYBE)
+            cues = self._runner.dater_conduct(self._clock(), seat, conduct, distressed=distressed)
+            self._send(cues)
 
     def _send(
         self,
         cues: Sequence[Cue],
         sentence_end: float | None = None,
-        hold: asyncio.Future[Verdict] | None = None,
+        hold: asyncio.Future[ReplyAction] | None = None,
         closed_at: float | None = None,
     ) -> None:
         if cues:

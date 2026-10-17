@@ -1137,3 +1137,14 @@ async def test_a_line_waiting_for_a_dater_is_dropped_if_nova_is_stopped():
     await r.speak_queued()
     assert lines(r, Moment.FIRST_QUESTION) == []
     assert r.speaker.texts[-1] == script.MODERATOR_END
+
+
+async def test_a_first_unkind_remark_said_to_nova_gets_only_lets_keep_it_kind():
+    """The product owner's choice: Nova doesn't answer a remark it is about to call unkind."""
+    clock = Clock()
+    words = "Nova, isn't Theo the most boring man alive?"
+    unkind = '{"label": "no", "conduct": "unkind"}'
+    r = await started(clock, model=FakeModel(labels={words: unkind}))
+    await transcripts(r, clock, (40.0, words))
+    assert lines(r, Moment.REPLY) == []
+    assert r.speaker.texts[-1] == script.KEEP_IT_KIND

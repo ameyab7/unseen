@@ -29,7 +29,7 @@ from nova.events import Event, EventLog
 from nova.lines import LIVE_REACTIONS, Line, LineWriter, Source
 from nova.measure import ms
 from nova.models import LineModel, warm_up
-from nova.on_air import Closed, OnAirCues, OnAirListener
+from nova.on_air import Closed, OnAirCues, OnAirListener, ReplyAction
 from nova.questions import AudienceQuestion, QuestionStatus
 from nova.show_runner import NoVotes, ShowRunner, waits_for_speech
 from nova.timing import REHEARSAL, Timing
@@ -117,7 +117,7 @@ class _Pending:
     cue_at: float
     sentence_end_at: float | None
     line: asyncio.Task[Line]
-    hold: asyncio.Future[Verdict] | None = None  # a reply waiting for the distress check
+    hold: asyncio.Future[ReplyAction] | None = None  # a reply: waits for the distress check
     closed_at: float | None = None  # replies: when Nova acted on what the dater said
     # Set when Nova is told to stop while this is the line being spoken or waited for.
     stopped: asyncio.Event = field(default_factory=asyncio.Event)
@@ -395,11 +395,11 @@ class Rehearsal:
         self,
         cues: Iterable[Cue],
         sentence_end: float | None = None,
-        hold: asyncio.Future[Verdict] | None = None,
+        hold: asyncio.Future[ReplyAction] | None = None,
         closed_at: float | None = None,
     ) -> None:
-        """hold: the distress check's verdict, which a reply waits for. closed_at: when
-        Nova acted on what the dater said."""
+        """hold: what the distress check decides for a reply, which waits for it.
+        closed_at: when Nova acted on what the dater said."""
         now = self._clock()
         reply_due = sentence_end is not None
         for cue in cues:
@@ -480,18 +480,16 @@ class Rehearsal:
         self._current = item
         try:
             picked = self._clock()
-            verdict = None
-            if item.hold is not None:
-                verdict = await self._unless_stopped(item, item.hold)
-                if item.stopped.is_set():
-                    return
-            if verdict is Verdict.YES:
-                item.line.cancel()  # the dater wants to stop: never answer them
+            action: ReplyAction | None = ReplyAction.SPEAK
+            if item.hold is not None:  # a reply: what the distress check decides for it
+                action = await self._unless_stopped(item, item.hold)
+            if action is None or item.stopped.is_set():
                 return
-            if verdict in (Verdict.MAYBE, Verdict.UNCHECKED):
-                # A dater who may be distressed never hears a quip, and never "I'll stay out
-                # of that one": the line already signed off for this case, whatever the model
-                # wrote (decision 0005).
+            if action is ReplyAction.DROP:
+                item.line.cancel()  # never answered (nova/on_air.py, reply_after)
+                return
+            if action is ReplyAction.KIND_LINE:
+                # The line signed off for this case, whatever the model wrote (decision 0005).
                 item.line.cancel()
                 line = Line(script.TAKE_YOUR_TIME, Source.FALLBACK, Moment.REPLY)
             else:
