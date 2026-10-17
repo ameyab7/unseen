@@ -159,7 +159,10 @@ Date: 2026-10-13. Status: accepted.
     check runs and said only if the answer is no; on yes the kind line comes instead, and
     on a maybe or a failed check Nova always says "Take all the time you need." (signed off
     by the product owner on 2026-10-13 for this case) instead of whatever the model wrote,
-    so a dater who may be distressed never hears a quip. Both are measured from the end of
+    so a dater who may be distressed never hears a quip. A remark the same check labels
+    unkind or flags (decision 0006) gets no answer either; for an unkind one "Let's keep
+    it kind." comes instead. One rule decides all of this, `on_air.reply_after`, for the
+    rehearsal and the evaluation alike. Both are measured from the end of
     the dater's sentence, so the grace and the check's time count against the 2.5 s reply
     target (`docs/spike-results.md`); the rehearsal report shows each reply's grace. If the
     reply's model line fails for words with a warning word (stop, help, scared, not okay,

@@ -9,13 +9,21 @@ import pytest
 
 from nova import script
 from nova.cards import Seat
-from nova.cues import AlertModerator, ModeratorAlert, Moment, Say
+from nova.cues import AlertModerator, Conduct, ModeratorAlert, Moment, Say
 from nova.decisions import InMemoryDecisionDesk
 from nova.distress import DistressCheck, Verdict
 from nova.evaluation import FakeClock as Clock
 from nova.evaluation import Speech, hear_on_air, spoken
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
-from nova.on_air import MATCH_CAP, MAX_UTTERANCE, OnAirCues, OnAirListener, addresses_nova
+from nova.on_air import (
+    MATCH_CAP,
+    MAX_UTTERANCE,
+    OnAirCues,
+    OnAirListener,
+    ReplyAction,
+    addresses_nova,
+    reply_after,
+)
 from nova.rehearsal import Rehearsal
 from nova.show_runner import NoVotes, ShowRunner
 from nova.timing import FULL
@@ -518,7 +526,7 @@ async def test_beats_already_due_come_first_and_are_never_the_reply():
     assert reply.cues == [Say(Moment.REPLY, about=LEFT, detail="Nova, tea or coffee?")]
     assert reply.sentence_end == ON_AIR_AT
     assert reply.closed_at == pytest.approx(ON_AIR_AT + GRACE)
-    assert reply.hold is not None and reply.hold.result() is Verdict.NO
+    assert reply.hold is not None and reply.hold.result() is ReplyAction.SPEAK
 
 
 async def test_the_reply_is_held_until_the_verdicts_cues_have_been_handed_on():
@@ -533,7 +541,7 @@ async def test_the_reply_is_held_until_the_verdicts_cues_have_been_handed_on():
     verdict = delivered[-1]
     assert verdict.cues[:2] == [DISTRESSED, verdict.cues[1]]
     assert Say(Moment.NEED_A_MOMENT, text=script.DISTRESS_PAUSE) in verdict.cues
-    assert reply.hold.result() is Verdict.YES, "the reply is dropped"
+    assert reply.hold.result() is ReplyAction.DROP, "the reply is dropped"
     assert [c.verdict for c in listener.checks] == [Verdict.YES]
 
 
@@ -736,7 +744,7 @@ async def test_a_check_stopped_at_the_end_of_the_date_alerts_the_moderator_as_un
     if started:
         await asyncio.sleep(0)
     listener.cancel()
-    assert hold.result() is Verdict.UNCHECKED
+    assert hold.result() is ReplyAction.KIND_LINE
     await asyncio.sleep(0)
     assert cues(delivered).count(UNCHECKED) == 1
 
@@ -778,3 +786,25 @@ async def test_nothing_a_dater_said_is_kept_once_the_date_is_over():
     listener.cancel()
     assert listener._listener._recent == []
     assert all(dater.utterance is None for dater in listener._daters.values())
+
+
+# --- What happens to a reply ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("verdict", "conduct", "action"),
+    [
+        (Verdict.NO, None, ReplyAction.SPEAK),
+        (Verdict.NO, Conduct.NONE, ReplyAction.SPEAK),
+        (Verdict.NO, Conduct.PERSONAL_DETAIL, ReplyAction.SPEAK),
+        (Verdict.YES, Conduct.NONE, ReplyAction.DROP),
+        (Verdict.MAYBE, Conduct.NONE, ReplyAction.KIND_LINE),
+        (Verdict.UNCHECKED, None, ReplyAction.KIND_LINE),
+        (Verdict.MAYBE, Conduct.UNKIND, ReplyAction.KIND_LINE),
+        (Verdict.NO, Conduct.UNKIND, ReplyAction.DROP),
+        (Verdict.NO, Conduct.HARASSMENT, ReplyAction.DROP),
+        (Verdict.NO, Conduct.UNSURE, ReplyAction.DROP),
+    ],
+)
+def test_one_rule_decides_what_happens_to_a_reply(verdict, conduct, action):
+    assert reply_after(verdict, conduct) is action

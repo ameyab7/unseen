@@ -73,7 +73,7 @@ from nova.fixtures import (
 from nova.lines import CANDIDATES, ErrorKind, LineWriter, Source
 from nova.measure import ms_since
 from nova.models import LineModel, build_classifier, build_model, warm_up
-from nova.on_air import OnAirCues, OnAirListener
+from nova.on_air import OnAirCues, OnAirListener, ReplyAction
 from nova.rehearsal import ms_text
 from nova.show_runner import NoVotes, ShowRunner
 from nova.timing import FULL
@@ -469,7 +469,7 @@ async def hear_on_air(
     cues = [cue for on_air_cues in delivered for cue in on_air_cues.cues]
     said = [cue for cue in cues if isinstance(cue, Say)]
     holds = [d.hold for d in delivered if d.hold is not None]
-    held_back = any(hold.result() is Verdict.YES for hold in holds)  # the reply is dropped
+    held_back = any(hold.result() is ReplyAction.DROP for hold in holds)  # never answered
     if any(closed.instant for closed in on_air.closed):
         layer = Layer.INSTANT
     elif on_air.closed:

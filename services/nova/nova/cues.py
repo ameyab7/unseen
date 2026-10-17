@@ -73,6 +73,7 @@ class ModeratorAlert(StrEnum):
     DISTRESS_UNCHECKED = "distress_unchecked"  # the distress check failed or was too slow
     PERSONAL_DETAIL_ON_AIR = "personal_detail_on_air"  # a dater said a phone, street, workplace...
     CONDUCT_FLAG = "conduct_flag"  # a dater's conduct, with its category: listen in now
+    SHOW_HELD = "show_held"  # the date is still held for a dater's conduct after 30 s: decide
 
 
 class Conduct(StrEnum):
