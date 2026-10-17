@@ -47,7 +47,7 @@ LATE_FINAL = 2.0
 class Command(StrEnum):
     """Typed in the Playground's chat box, at any time: before the date starts, a command
     that needs a running date does nothing, except a question or an unlock, which the
-    show runner keeps for the date."""
+    show runner keeps for the date, and end or leave, which end it at once."""
 
     MAYA = "maya"  # Maya is speaking from now on
     THEO = "theo"  # Theo is speaking from now on

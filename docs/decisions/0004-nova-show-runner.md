@@ -47,6 +47,15 @@ Date: 2026-10-13. Status: accepted.
   ended in the app. There is no limit on how often a dater can pause, but the
   moderator is also alerted when the same dater pauses a second time (counted per dater).
   Alerts go to the moderator console only, never to the room.
+- **Holds can overlap** (2026-10-16, from the review of main at bfaed17). A dater who asks
+  for a moment while the show is already held (the other dater's moment, a conduct pause)
+  gets their own pause as soon as that hold ends, rather than being put back on air.
+  A dater the moderator resumed without who comes back during another hold is welcomed
+  only once that hold ends, since "And we're back." must be true. Every dater the
+  moderator resumes without stays away until they come back: a later resume never
+  brings an absent dater back on air, and with both away nobody gets a silence prompt.
+  A lightning unlock that comes in during a hold is announced once the date is on air
+  again, never over the pause.
 - **A report pauses the date** until the moderator resumes or ends it (the prototype's
   report sheet: "Nova pauses the date and a live moderator listens in", "Pause and
   report"). The moderator is alerted first (`dater_reported`); then, if a pause can start,
@@ -54,14 +63,28 @@ Date: 2026-10-13. Status: accepted.
   naming the reporter or the report. The show clock holds as for a need a moment, with the
   usual 30-second alert and "Bear with us", but the reporter's own return doesn't end it,
   since their date ends in the app: only resume or end does. A report never counts as a
-  repeated pause. If a pause can't start (off air, deciding, the other dater already on a
-  pause, before the date or after it), the alert is all.
+  repeated pause. If the show is already held (the other dater's moment, a conduct pause),
+  that hold becomes the report's: the other dater's return no longer lifts it, and a
+  resume leaves the reporter off air. Otherwise (before the date, deciding, after it), the
+  alert is all.
 - **Alerts never depend on the show clock.** Daters, the moderator and the room can act at
   any moment of the night, before a date starts and after it ends, and nothing they do
   raises. Off air, a distress check or a report still reaches the moderator, and nothing
   else happens; an approved question or a lightning unlock that comes in before the date
   starts is kept for it (the unlock is announced after the doors intro, so a paid unlock
-  is never lost).
+  is never lost). The moderator's end, or a dater leaving, before the date starts ends it
+  at once, with nothing said and nobody named: the moderator's one real control is never
+  lost while set pieces are prepared. A beat that fails (in production, the room poll or
+  the decision desk behind it) is tried again a second later, up to five times, and the
+  console hears of each failure (`BeatFailed`, then `gave_up`, when the moderator decides
+  what happens next; what Nova says then is the product owner's call), so no beat, and no
+  alert asked for in the same instant, is lost. A poll that fails only loses the room's
+  verdict. Ending the date while the daters decide closes the decision window, and the
+  date reports Finished only once Next up is said, even if it waited for a dater; nothing
+  that waited is said after Finished. An approved audience question that was waiting for
+  a dater when a pause began goes back to the front of the queue, uncounted. The number
+  of lightning questions must fit before the last word, a full gap each, or the runner
+  refuses the timing; the signed-off unlock line says "Three", so a test pins the count.
 - **The lightning unlock meter closes at 5:30**, or as soon as the round is unlocked, or
   when the date ends early (the runner's `LightningMeterClosed` cue). No listener can pay
   toward an unlock that will be ignored. The gesture work must follow this: once the meter
@@ -125,6 +148,9 @@ Date: 2026-10-13. Status: accepted.
   "couldn't check what a dater said: listen in", decision 0005), and for a dater who isn't
   back or who reported, three controls: keep waiting,
   resume without them, and end the date (the runner's `moderator_keep_waiting`,
-  `moderator_resume` and `moderator_end`). It also needs a control to stop the fallback.
+  `moderator_resume` and `moderator_end`). It also needs a control to stop the fallback,
+  the conduct alerts of decision 0006 (with `show_held` when a conduct pause runs past 30
+  seconds), and `BeatFailed`: a beat retrying, or given up on, after which the moderator
+  ends or resumes the date.
 - The audio side plays the fallback segment on `PlayFallbackSegment` and stops it on
   `StopFallbackSegment`, before Nova's next line.

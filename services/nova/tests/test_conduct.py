@@ -9,11 +9,16 @@ from nova.conduct import personal_detail
 from nova.cues import (
     AlertModerator,
     Conduct,
+    DateEnded,
+    EndReason,
+    Finished,
     ModeratorAlert,
     Moment,
+    PlayFallbackSegment,
     RoomFacts,
     Say,
     Segment,
+    SegmentStarted,
     Situation,
     StopSpeaking,
 )
@@ -132,15 +137,35 @@ def test_a_second_unkind_remark_by_the_same_dater_pauses_the_whole_date():
     assert runner.dater_conduct(FREE_TALK + 230, LEFT, Conduct.NONE) == []
 
 
-def test_the_moderator_resumes_or_ends_a_paused_date():
+def paused_for_conduct() -> ShowRunner:
     runner = on_air_runner()
     runner.dater_conduct(FREE_TALK, LEFT, Conduct.UNKIND)
     runner.dater_conduct(FREE_TALK + 10, LEFT, Conduct.UNKIND)
+    return runner
+
+
+def test_the_moderator_resumes_a_paused_date_and_the_running_order_carries_on():
+    runner = paused_for_conduct()
     runner.moderator_resume(FREE_TALK + 20)
     later = runner.tick(FREE_TALK + 200)
-    assert any(isinstance(c, Say) and c.moment is Moment.FROM_THE_ROOM for c in later) or (
-        runner.segment is not None
-    ), "the running order carries on, 10 s late"
+    assert SegmentStarted(Segment.FROM_THE_ROOM) in later
+    assert runner.segment is Segment.FROM_THE_ROOM
+
+
+def test_without_the_moderator_a_paused_date_stays_held():
+    runner = paused_for_conduct()
+    later = runner.tick(FREE_TALK + 200)
+    assert SegmentStarted(Segment.FROM_THE_ROOM) not in later
+    assert runner.segment is Segment.FREE_TALK
+
+
+def test_the_moderator_ends_a_paused_date():
+    runner = paused_for_conduct()
+    ended = runner.moderator_end(FREE_TALK + 20)
+    assert Say(Moment.MODERATOR_END, text=script.MODERATOR_END) in ended
+    assert PlayFallbackSegment() in ended and Finished() in ended
+    assert DateEnded(EndReason.MODERATOR_ENDED, None) in ended
+    assert runner.tick(FREE_TALK + 200) == [] and runner.back(FREE_TALK + 210, LEFT) == []
 
 
 @pytest.mark.parametrize(
