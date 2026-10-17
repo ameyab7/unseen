@@ -22,6 +22,7 @@ from nova import running_order, script
 from nova.cards import Pair, Seat
 from nova.cues import (
     AlertModerator,
+    BeatFailed,
     Conduct,
     Cue,
     DateEnded,
@@ -95,6 +96,9 @@ FLAGGED = frozenset(
 # share again in their recap and a share of a handful of votes is noise.
 MIN_VOTES_FOR_VERDICT = 20
 VERDICT_STEP = 0.1
+# A beat that fails is tried again this many show seconds later, at most this many times.
+BEAT_RETRY = 1.0
+BEAT_RETRIES = 5
 
 
 @dataclass(frozen=True)
@@ -126,6 +130,7 @@ class _Beat:
     order: int
     action: str = field(compare=False)
     arg: object = field(default=None, compare=False)
+    tries: int = field(default=0, compare=False)  # how often it has failed already
 
 
 class ShowRunner:
@@ -141,6 +146,13 @@ class ShowRunner:
         first_up: Seat | None = None,
         rng: random.Random | None = None,
     ) -> None:
+        # Each lightning question gets a full gap before the last word.
+        questions = running_order.LIGHTNING_QUESTIONS
+        if timing.lightning + questions * timing.lightning_gap > timing.last_word:
+            raise ValueError(
+                f"{questions} lightning questions, {timing.lightning_gap:g} s apart, don't fit "
+                "before the last word: shorten the gap or move the last word"
+            )
         self._pair = pair
         self._desk = desk
         self._poll = poll
@@ -159,16 +171,25 @@ class ShowRunner:
         self._held_since: float | None = None  # wall time the show clock stopped, if it has
         self._away: Seat | None = None  # the dater on a "need a moment"
         self._overdue = False  # not back in time: the moderator decides what happens next
-        self._report_hold = False  # the pause is for a report: only the moderator lifts it
+        self._report_hold = False  # the hold is for a report: only the moderator lifts it
+        self._reporter: Seat | None = None  # who reported, while the hold is theirs
+        # A dater who asked for a moment while the show was held for something else: their
+        # own pause starts when that hold ends.
+        self._wanting: Seat | None = None
+        # A dater the moderator resumed without came back during another hold: Nova
+        # welcomes them back when that hold ends, not while it's still covering.
+        self._welcome_due = False
+        self._window_open = False  # the private decision window
+        self._finish_when_said = False  # Next up is waiting for a dater: finish once it's out
         self._cover_lines = 0  # lines Nova has said to the room in this hold
         self._show_paused_by: Seat | None = None  # the whole date is held for their conduct
         self._unkind: dict[Seat, int] = dict.fromkeys(Seat, 0)  # unkind remarks this date
         self._segment_playing = False  # the fallback segment is covering this hold
-        # A dater the moderator resumed the show without: their turns are skipped, silence
+        # Daters the moderator resumed the show without: their turns are skipped, silence
         # prompts go to the other dater, and if they come back, Nova welcomes them back. Not
         # after a report: the reporter's date ends in the app.
-        self._absent: Seat | None = None
-        self._absent_reported = False
+        self._absent: set[Seat] = set()
+        self._absent_reported: set[Seat] = set()
         self._pauses: dict[Seat, int] = dict.fromkeys(Seat, 0)
         self._poll_open = False
         self._meter_open = True
@@ -194,6 +215,8 @@ class ShowRunner:
         if self._started_at is not None:
             raise RuntimeError("This date has already started")
         self._started_at = now
+        if self.finished:  # ended before it started (moderator_end, dater_left)
+            return []
         t = self._timing
         plan = [
             (0.0, "doors", None),
@@ -254,23 +277,39 @@ class ShowRunner:
         is back. If they aren't back after timing.moment_alert_after, Nova asks the room to
         bear with us once, the moderator is alerted, and the show stays on hold until the
         moderator keeps waiting, resumes or ends the date. No limit on how often, but the
-        moderator is alerted when the same dater pauses a second time."""
+        moderator is alerted when the same dater pauses a second time. Asked while the show
+        is already held for something else, it's kept: their own pause starts when that
+        hold ends, instead of the show going on with them on air."""
         cues = self._due(now)
         if self._can_pause:
             cues += self._pause(now, seat, script.NEED_A_MOMENT)
+        elif self._live and self._held_since is not None and seat is not self._away:
+            self._wanting = seat
         return cues
 
     def back(self, now: float, seat: Seat) -> list[Cue]:
         """The dater who paused is back, during the pause or after the moderator resumed
-        without them: the only time Nova says "And we're back.". Not after a report: the
-        reporter's date ends in the app, and the moderator decides."""
+        without them: the only time Nova says "And we're back.", and only once the show is
+        no longer held for anyone else. Not after a report: the reporter's date ends in the
+        app, and the moderator decides; a dater who paused before someone reported is back,
+        but the hold stays for the report."""
         cues = self._due(now)
         if self._live and self._away is seat and not self._report_hold:
             cues += self._clear_pause(now)
-            cues.append(Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK))
-        elif self._live and self._absent is seat and not self._absent_reported:
-            self._absent = None
-            cues.append(Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK))
+            if self._wanting is not None:  # the other dater's own moment starts now
+                cues += self._take_waiting_moment(now)
+            else:
+                cues.append(Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK))
+        elif self._live and self._away is seat and self._reporter is not seat:
+            self._away = None  # back, while the show stays held for the other's report
+        elif self._live and self._wanting is seat:
+            self._wanting = None  # back before their moment started
+        elif self._live and seat in self._absent and seat not in self._absent_reported:
+            self._absent.discard(seat)
+            if self._held_since is None:
+                cues.append(Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK))
+            else:
+                self._welcome_due = True
         return cues
 
     def moderator_keep_waiting(self, now: float) -> list[Cue]:
@@ -278,22 +317,35 @@ class ShowRunner:
         return self._due(now)
 
     def moderator_resume(self, now: float) -> list[Cue]:
-        """The show carries on without the dater who paused. Nova says nothing: nobody is
-        back. While they're away, their first-question prompt and last word are skipped (the
-        other dater's turn comes on time), and silence prompts go to the other dater only.
-        Their decision is unchanged: they can still decide in the app."""
+        """The show carries on without the dater who paused, and without a dater who
+        reported. Nova says nothing about them: nobody is back. While they're away, their
+        first-question prompt and last word are skipped (the other dater's turn comes on
+        time), and silence prompts go to the other dater only; a dater who was already away
+        stays away. Their decision is unchanged: they can still decide in the app. A dater
+        who came back during the hold is welcomed now, and one who asked for a moment
+        during it gets their own pause."""
         cues = self._due(now)
         if self._live and self._held_since is not None:
-            absent, reported = self._away, self._report_hold
+            away, reporter, welcome = self._away, self._reporter, self._welcome_due
             cues += self._clear_pause(now)
-            self._absent, self._absent_reported = absent, reported
+            if away is not None:
+                self._absent.add(away)
+            if reporter is not None:
+                self._absent.add(reporter)
+                self._absent_reported.add(reporter)
+            if welcome:
+                cues.append(Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK))
+            cues += self._take_waiting_moment(now)
         return cues
 
     def dater_left(self, now: float, seat: Seat) -> list[Cue]:
         """Nova closes kindly, with no reason and no blame, then one line thanking the room;
         Next up follows after timing.next_up_after_leave, or the fallback segment if
-        there's no next pair."""
+        there's no next pair. Before the date starts, the date ends at once: nothing has
+        aired, so Nova says nothing and names nobody."""
         cues = self._due(now)
+        if not self.started and not self.finished:
+            return self._end_before_start(EndReason.DATER_LEFT)
         if not self._live:
             return cues
         segment = self.segment or Segment.FREE_TALK
@@ -310,11 +362,14 @@ class ShowRunner:
 
     def moderator_end(self, now: float) -> list[Cue]:
         """Nova stops at once and says only the approved closing line. The recorded fallback
-        segment then plays until the moderator chooses what happens next. Nothing to end
-        before the date has started."""
+        segment then plays until the moderator chooses what happens next. Before the date
+        starts, the date ends at once, with nothing said, so the moderator's end is never
+        lost."""
         cues = self._due(now)
-        if self.finished or not self.started:
+        if self.finished:
             return cues
+        if not self.started:
+            return self._end_before_start(EndReason.MODERATOR_ENDED)
         cues += self._clear_pause(now)
         cues.append(StopSpeaking())
         if self.end_reason is None:
@@ -326,16 +381,23 @@ class ShowRunner:
 
     def unlock_lightning_round(self, now: float) -> list[Cue]:
         """The room's gestures filled the lightning round. Too late once its slot starts.
-        Before the date, the unlock is kept and Nova announces it after the doors intro, so
-        a paid unlock is never lost; the meter closes at once either way."""
+        Before the date, or while the show is held (a dater's pause, a report, a conduct
+        pause), the unlock is kept and Nova announces it once the date is on air again, so
+        a paid unlock is never lost and never cheered over a pause; the meter closes at once
+        either way."""
         cues = self._due(now)
         if not self.started and not self._lightning_unlocked:
             self._lightning_unlocked = self._announce_unlock = True
             return cues + self._close_meter()
         if self._live and not self._lightning_decided and not self._lightning_unlocked:
             self._lightning_unlocked = True
-            unlocked: list[Cue] = [Say(Moment.LIGHTNING_UNLOCKED, text=script.LIGHTNING_UNLOCKED)]
-            cues += self._wait_for_speech(now, unlocked)
+            if self._held_since is not None:
+                self._announce_unlock = True
+            else:
+                unlocked: list[Cue] = [
+                    Say(Moment.LIGHTNING_UNLOCKED, text=script.LIGHTNING_UNLOCKED)
+                ]
+                cues += self._wait_for_speech(now, unlocked)
             cues += self._close_meter()
         return cues
 
@@ -448,14 +510,18 @@ class ShowRunner:
         the room, naming nobody and saying nothing about a report. The show clock holds for
         the reporter's seat until the moderator resumes or ends the date (the reporter's
         date ends in the app, so their own back() doesn't end it); the 30-second alert
-        works as usual, and it never counts as a repeated pause. If a pause can't start,
-        the alert is all."""
+        works as usual, and it never counts as a repeated pause. If the show is already held
+        (the other dater's moment, a conduct pause), that hold becomes the report's: only
+        the moderator lifts it, and the reporter is never put back on air. Otherwise (before
+        the date, while deciding) the alert is all."""
         cues = self._due(now)
         cues.append(AlertModerator(ModeratorAlert.DATER_REPORTED, seat))
         if self._can_pause:
             cues.append(StopSpeaking())
             cues += self._pause(now, seat, script.NEED_A_MOMENT, repeatable=False)
-            self._report_hold = True
+            self._report_hold, self._reporter = True, seat
+        elif self._live and self._held_since is not None:
+            self._report_hold, self._reporter = True, seat
         return cues
 
     # --- Internals ------------------------------------------------------------------------
@@ -479,7 +545,7 @@ class ShowRunner:
         the same dater is back. Anything still waiting for a dater to finish is dropped.
         repeatable: counts towards the repeated-pause alert."""
         self._away, self._held_since, self._overdue = seat, now, False
-        self._waiting, self._waiting_until = [], None
+        self._drop_waiting()
         self._cover_lines = 1
         cues: list[Cue] = [Say(Moment.NEED_A_MOMENT, text=line), self._cover_line()]
         if repeatable:
@@ -493,9 +559,30 @@ class ShowRunner:
         covers as for any hold, until the moderator resumes or ends the date. seat: the
         dater whose conduct paused it."""
         self._held_since, self._overdue, self._show_paused_by = now, False, seat
-        self._waiting, self._waiting_until = [], None
+        self._drop_waiting()
         self._cover_lines = 1
         return [Say(Moment.SHOW_PAUSE, text=script.SHOW_PAUSE), self._cover_line()]
+
+    def _drop_waiting(self) -> None:
+        """A pause drops what waited for a dater to finish. An approved audience question
+        goes back to the front of the queue, uncounted, so it's read later, never lost."""
+        for cue in reversed(self._waiting):
+            if isinstance(cue, Say) and cue.moment is Moment.FROM_THE_ROOM and cue.detail:
+                self._questions.appendleft(cue.detail)
+                self._questions_asked -= 1
+        self._waiting, self._waiting_until = [], None
+
+    def _take_waiting_moment(self, now: float) -> list[Cue]:
+        """The pause a dater asked for during another hold, now that it's over."""
+        seat, self._wanting = self._wanting, None
+        if seat is None or not self._can_pause:
+            return []
+        return self._pause(now, seat, script.NEED_A_MOMENT)
+
+    def _end_before_start(self, reason: EndReason) -> list[Cue]:
+        """The date ends before anything aired: no line, nobody named. Whoever runs the
+        show then has nothing more to do for it, and start() says nothing."""
+        return [*self._end_date(reason, None), PlayFallbackSegment(), *self._finish()]
 
     def _wants_to_stop(self, now: float, seat: Seat) -> list[Cue]:
         """The moderator is alerted, and if a pause can start, Nova stops mid-line, drops
@@ -539,16 +626,41 @@ class ShowRunner:
             if self._held_since is not None:
                 cues += self._cover(now)  # the show clock is stopped: Nova covers
                 break
+            if self._announce_unlock and self.segment in ON_AIR:  # unlocked during a hold
+                self._announce_unlock = False
+                unlocked: list[Cue] = [
+                    Say(Moment.LIGHTNING_UNLOCKED, text=script.LIGHTNING_UNLOCKED)
+                ]
+                cues += self._wait_for_speech(now, unlocked)
             shown = self._show_time(now)
             beat_at = self._beats[0].at if self._beats else math.inf
             silence_at = self._silence_due()
             if min(beat_at, silence_at) > shown:
                 break
             if beat_at <= silence_at:
-                cues += self._wait_for_speech(now, self._run(heapq.heappop(self._beats)))
+                beat = heapq.heappop(self._beats)
+                cues += self._wait_for_speech(now, self._attempt(beat, shown))
+                if self._finish_when_said and not self._waiting:
+                    cues += self._finish()
             else:
                 cues += self._nudge(silence_at)
         return cues
+
+    def _attempt(self, beat: _Beat, shown: float) -> list[Cue]:
+        """Runs a beat. One that raises (in production, the room poll or the decision desk
+        behind it) is tried again BEAT_RETRY show seconds later, up to BEAT_RETRIES times,
+        and the console hears each failure: so no beat is lost, and nothing a dater or the
+        moderator does at that moment loses its alert to the exception."""
+        try:
+            return self._run(beat)
+        except Exception:
+            if beat.tries >= BEAT_RETRIES:
+                return [BeatFailed(beat.action, gave_up=True)]
+            again = _Beat(
+                shown + BEAT_RETRY, next(self._order), beat.action, beat.arg, beat.tries + 1
+            )
+            heapq.heappush(self._beats, again)
+            return [BeatFailed(beat.action)]
 
     def _run(self, beat: _Beat) -> list[Cue]:
         at = beat.at
@@ -617,7 +729,7 @@ class ShowRunner:
 
     def _present(self, say: Say) -> list[Cue]:
         """A dater's turn, unless they're away after the moderator resumed without them."""
-        return [] if say.about is not None and say.about is self._absent else [say]
+        return [] if say.about is not None and say.about in self._absent else [say]
 
     def _prompt(self, seat: Seat) -> Say:
         return running_order.first_question(self._pair, seat)
@@ -642,6 +754,7 @@ class ShowRunner:
 
     def _time(self, at: float) -> list[Cue]:
         self._desk.open_window()
+        self._window_open = True
         self._poll_open = True
         return [
             PlaySound(Sound.TIMES_UP),
@@ -658,13 +771,17 @@ class ShowRunner:
         room's verdict comes only now, after both decisions are locked, and only if enough
         people voted."""
         self._desk.close_window()
+        self._window_open = False
         outcome = self._desk.resolve()
         cues = [
             *self._close_poll(),
             *self._enter(Segment.RESULT, at),
             Say(Moment.RESULT, text=script.result_line(outcome)),
         ]
-        tally = self._poll.tally()
+        try:
+            tally = self._poll.tally()
+        except Exception:  # the verdict is optional: the result and the rest still go out
+            tally = PollTally(0, 0)
         if tally.total >= MIN_VOTES_FOR_VERDICT:
             cues.append(ShowVerdict(yes_share=rounded_share(tally.yes, tally.total)))
         # Written before the date, so it can't know or hint at the outcome.
@@ -682,7 +799,9 @@ class ShowRunner:
             cues.append(running_order.next_up(self._next_pair))
         elif after_a_leave:
             cues.append(PlayFallbackSegment())  # the date ended early, and nobody's next
-        return cues + self._finish()
+        # Finished once Next up is out: it may wait for a dater to finish their sentence.
+        self._finish_when_said = True
+        return cues
 
     def _wait_for_speech(self, now: float, cues: list[Cue]) -> list[Cue]:
         """A beat's lines and sounds wait while a dater is speaking (or behind others that
@@ -708,6 +827,8 @@ class ShowRunner:
         if self._speaking and self._waiting_until is not None and now < self._waiting_until:
             return []
         cues, self._waiting, self._waiting_until = self._waiting, [], None
+        if self._finish_when_said:
+            cues += self._finish()
         return cues
 
     def _silence_due(self) -> float:
@@ -722,9 +843,9 @@ class ShowRunner:
         """An open prompt to both daters: nobody is singled out for being quiet. With one
         away after the moderator resumed without them, to the one who's here."""
         self._last_nudge = at
-        if self._absent is not None:
-            return [Say(Moment.SILENCE, about=self._absent.other)]
-        return [Say(Moment.SILENCE)]
+        if not self._absent:
+            return [Say(Moment.SILENCE)]
+        return [Say(Moment.SILENCE, about=seat) for seat in Seat if seat not in self._absent]
 
     def _cover(self, now: float) -> list[Cue]:
         """While the show is held: a line to the room every timing.cover_every seconds, up
@@ -771,7 +892,8 @@ class ShowRunner:
             self._quiet_since = self._show_time(now)
         self._away = None
         self._overdue = False
-        self._report_hold = False
+        self._report_hold, self._reporter = False, None
+        self._welcome_due = False
         self._cover_lines, self._segment_playing = 0, False
         self._show_paused_by = None
         return stop
@@ -793,14 +915,20 @@ class ShowRunner:
         self.outcome = outcome
         self.segment = None
         self._waiting, self._waiting_until = [], None  # never said after the date ends
+        if self._window_open:  # ended early, while deciding: no decision is taken after it
+            self._window_open = False
+            self._desk.close_window()
         return [*self._close_meter(), DateEnded(reason, outcome)]
 
     def _finish(self) -> list[Cue]:
         self.finished = True
         self._beats.clear()
+        self._waiting, self._waiting_until = [], None  # nothing is said after Finished
+        self._finish_when_said = False
         self._held_since, self._away, self._overdue = None, None, False
-        self._report_hold = False
-        self._absent, self._absent_reported = None, False
+        self._report_hold, self._reporter, self._wanting = False, None, None
+        self._welcome_due = False
+        self._absent, self._absent_reported = set(), set()
         self._cover_lines, self._segment_playing = 0, False
         self._show_paused_by = None
         return [Finished()]

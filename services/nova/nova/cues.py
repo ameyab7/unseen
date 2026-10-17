@@ -191,6 +191,16 @@ class QuestionSkipped:
 
 
 @dataclass(frozen=True)
+class BeatFailed:
+    """For the moderator console only: a beat of the running order failed (the room poll or
+    the decision desk behind it raised) and is tried again shortly, or, gave_up, no more:
+    the moderator decides what happens next. The beat's name is a fixed code."""
+
+    beat: str
+    gave_up: bool = False
+
+
+@dataclass(frozen=True)
 class DateEnded:
     reason: EndReason
     outcome: Outcome | None
@@ -225,6 +235,7 @@ type Cue = (
     | LightningMeterClosed
     | AlertModerator
     | QuestionSkipped
+    | BeatFailed
     | DateEnded
     | PlayFallbackSegment
     | StopFallbackSegment

@@ -9,7 +9,7 @@ import pytest
 from nova import script
 from nova.cards import Seat
 from nova.config import Settings
-from nova.cues import AlertModerator, ModeratorAlert, Moment
+from nova.cues import AlertModerator, ModeratorAlert, Moment, Say
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
 from nova.lines import LineWriter, Source
 from nova.rehearsal import (
@@ -734,8 +734,9 @@ async def test_commands_before_the_start_never_raise_and_are_logged(caplog):
     assert caplog.text.count("command command=") == len(COMMANDS) + 3, "one line each"
     assert r.seat is Seat.RIGHT, "choosing who speaks needs no date"
     assert alerts(r) == []
+    assert r.finished, "a leave before the date ends it, and the end is never lost"
     r.start()
-    assert not r.finished, "an end before the date didn't end it"
+    assert r.speaker.texts == [] and all(not isinstance(c, Say) for c in r.cues)
 
 
 async def test_after_the_date_ends_daters_and_commands_never_raise():

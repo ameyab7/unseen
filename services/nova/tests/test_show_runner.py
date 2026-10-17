@@ -9,6 +9,8 @@ from nova import running_order, script
 from nova.cards import Seat
 from nova.cues import (
     AlertModerator,
+    BeatFailed,
+    Conduct,
     DateEnded,
     DecisionWindowOpened,
     EndReason,
@@ -32,7 +34,7 @@ from nova.cues import (
     StopFallbackSegment,
     StopSpeaking,
 )
-from nova.decisions import Choice, InMemoryDecisionDesk, Outcome
+from nova.decisions import Choice, DecisionError, InMemoryDecisionDesk, Outcome
 from nova.distress import Verdict
 from nova.fixtures import MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
 from nova.questions import AudienceQuestion, OffLimits, QuestionStatus
@@ -368,16 +370,26 @@ def test_lightning_round_runs_three_questions_only_when_unlocked():
 
 
 def test_the_runner_asks_as_many_lightning_questions_as_the_running_order_says(monkeypatch):
+    """With a gap that fits them all before the last word."""
     monkeypatch.setattr(running_order, "LIGHTNING_QUESTIONS", 4)
-    show = Show()
+    show = Show(timing=replace_timing(lightning_gap=20.0))
     show.at(200, "unlock_lightning_round")
     show.until(600)
-    assert [(c.number, c.of) for _, c in show.says(Moment.LIGHTNING_QUESTION)] == [
-        (1, 4),
-        (2, 4),
-        (3, 4),
-        (4, 4),
-    ]
+    asked = show.says(Moment.LIGHTNING_QUESTION)
+    assert [(c.number, c.of) for _, c in asked] == [(1, 4), (2, 4), (3, 4), (4, 4)]
+    assert all(t < FULL.last_word for t, _ in asked), "each gets its gap before the last word"
+
+
+def test_lightning_questions_that_dont_fit_before_the_last_word_are_refused(monkeypatch):
+    """A fourth question 30 s apart would land on the last word, and a fifth be dropped."""
+    monkeypatch.setattr(running_order, "LIGHTNING_QUESTIONS", 4)
+    with pytest.raises(ValueError, match="lightning questions"):
+        Show()
+
+
+def test_the_approved_unlock_line_says_how_many_questions_there_are():
+    """The line was signed off for three: changing the count needs a newly approved line."""
+    assert running_order.LIGHTNING_QUESTIONS == 3 and "Three" in script.LIGHTNING_UNLOCKED
 
 
 def test_without_the_unlock_the_lightning_slot_returns_to_free_talk():
@@ -1147,10 +1159,8 @@ ANY_TIME = [
     ("speech_stopped", (LEFT,), []),
     ("need_a_moment", (LEFT,), []),
     ("back", (LEFT,), []),
-    ("dater_left", (LEFT,), []),
     ("moderator_keep_waiting", (), []),
     ("moderator_resume", (), []),
-    ("moderator_end", (), []),
 ]
 
 
@@ -1209,3 +1219,258 @@ def test_starting_twice_is_a_mistake():
 def test_rehearsal_timing_keeps_the_silence_rule_at_full_length():
     assert REHEARSAL.silence_after == FULL.silence_after
     assert REHEARSAL.time == pytest.approx(FULL.time * 0.3)
+
+
+# --- Review of main at bfaed17: holds that overlap, and the edges of a date --------------------
+
+NEED_MOMENT = Say(Moment.NEED_A_MOMENT, text=script.NEED_A_MOMENT)
+
+ENDED_BEFORE = [LightningMeterClosed(), PlayFallbackSegment(), Finished()]
+
+
+@pytest.mark.parametrize(
+    ("method", "args", "reason"),
+    [
+        ("dater_left", (LEFT,), EndReason.DATER_LEFT),
+        ("moderator_end", (), EndReason.MODERATOR_ENDED),
+    ],
+)
+def test_a_leave_or_an_end_before_the_start_ends_the_date_at_once(method, args, reason):
+    """The moderator's end is never lost: a dater who asked to stop during prep is never
+    introduced. Nothing has aired, so Nova says nothing and names nobody."""
+    runner = not_started()
+    cues = getattr(runner, method)(5.0, *args)
+    assert [c for c in cues if not isinstance(c, DateEnded)] == ENDED_BEFORE
+    assert DateEnded(reason, None) in cues and runner.finished
+    assert run(runner) == [], "start() says nothing"
+    assert getattr(runner, method)(10.0, *args) == []
+
+
+@pytest.mark.parametrize(("method", "args"), [("dater_left", (LEFT,)), ("moderator_end", ())])
+def test_after_the_end_a_leave_or_an_end_does_nothing(method, args):
+    assert getattr(finished(), method)(900.0, *args) == []
+
+
+def test_a_report_during_the_other_daters_moment_is_never_forgotten():
+    """The other dater's return doesn't lift it: only the moderator does, and the reporter
+    stays off air."""
+    show = Show()
+    show.until(100)
+    show.at(100, "need_a_moment", RIGHT)
+    assert show.at(105, "dater_reported", LEFT) == [REPORTED]
+    assert show.at(108, "back", RIGHT) == [], "back, but the hold is the report's now"
+    assert show.runner._held_since is not None
+    show.at(125, "moderator_resume")
+    show.until(600)
+    assert not show.says(Moment.WELCOME_BACK)
+    assert [say.about for _, say in show.says(Moment.LAST_WORD)] == [RIGHT]
+
+
+def test_a_report_during_a_conduct_pause_keeps_the_reporter_off_air():
+    show = Show()
+    show.until(100)
+    show.at(100, "dater_conduct", RIGHT, Conduct.UNKIND)
+    show.at(102, "dater_conduct", RIGHT, Conduct.UNKIND)  # the whole date holds
+    show.at(105, "dater_reported", LEFT)
+    show.at(110, "moderator_resume")
+    assert show.at(115, "back", LEFT) == []
+    show.until(600)
+    assert [say.about for _, say in show.says(Moment.LAST_WORD)] == [RIGHT]
+
+
+def test_a_moment_asked_for_during_another_hold_starts_when_that_hold_ends():
+    show = Show()
+    show.until(100)
+    show.at(100, "need_a_moment", LEFT)
+    assert show.at(103, "need_a_moment", RIGHT) == []
+    back = show.at(108, "back", LEFT)
+    assert NEED_MOMENT in back and WELCOME_BACK not in back, "Theo's own pause, not and we're back"
+    assert show.runner._away is RIGHT and show.runner._held_since is not None
+    show.until(108 + FULL.moment_alert_after)
+    alerts = show.cues(AlertModerator, since=108)
+    assert AlertModerator(ModeratorAlert.PAUSE_NOT_BACK, RIGHT) in alerts
+    assert show.at(150, "back", RIGHT)[-1] == WELCOME_BACK
+
+
+def test_a_moment_asked_for_during_a_conduct_pause_starts_when_the_moderator_resumes():
+    show = Show()
+    show.until(100)
+    show.at(100, "dater_conduct", RIGHT, Conduct.UNKIND)
+    show.at(102, "dater_conduct", RIGHT, Conduct.UNKIND)
+    show.at(104, "need_a_moment", LEFT)
+    assert NEED_MOMENT in show.at(110, "moderator_resume")
+    assert show.at(115, "back", LEFT)[-1] == WELCOME_BACK
+
+
+def test_a_dater_who_asked_for_a_moment_and_is_back_before_it_started_gets_none():
+    show = Show()
+    show.until(100)
+    show.at(100, "need_a_moment", LEFT)
+    show.at(103, "need_a_moment", RIGHT)
+    show.at(105, "back", RIGHT)
+    assert show.at(108, "back", LEFT)[-1] == WELCOME_BACK
+
+
+def test_the_lightning_unlock_is_never_announced_over_a_pause():
+    show = Show()
+    show.until(200)
+    show.at(200, "dater_said", LEFT, "I want to stop.")
+    assert show.at(205, "unlock_lightning_round") == [LightningMeterClosed()]
+    assert not show.says(Moment.LIGHTNING_UNLOCKED), "nothing while the dater is away"
+    assert show.at(215, "back", LEFT)[-1] == WELCOME_BACK
+    show.until(216)
+    unlocked = show.says(Moment.LIGHTNING_UNLOCKED)
+    assert [t for t, _ in unlocked] == [215.5], "once the date is on air again"
+    show.until(600)
+    assert show.says(Moment.LIGHTNING_QUESTION)[0][0] == pytest.approx(330 + 15)
+
+
+def test_an_unlock_during_a_hold_is_never_said_if_a_dater_then_leaves():
+    show = Show()
+    show.until(200)
+    show.at(200, "need_a_moment", LEFT)
+    show.at(205, "unlock_lightning_round")
+    show.at(210, "dater_left", LEFT)
+    show.until(600)
+    assert not show.says(Moment.LIGHTNING_UNLOCKED)
+
+
+def test_and_were_back_waits_for_a_hold_that_is_still_running():
+    show = resumed_without_maya()
+    show.at(200, "need_a_moment", RIGHT)
+    assert show.at(205, "back", LEFT) == [], "Theo is still away"
+    assert show.at(210, "back", RIGHT)[-1] == WELCOME_BACK
+    show.until(600)
+    assert len(show.says(Moment.WELCOME_BACK)) == 1
+    assert [say.about for _, say in show.says(Moment.LAST_WORD)] == [LEFT, RIGHT]
+
+
+def test_and_were_back_after_a_conduct_pause_comes_when_the_moderator_resumes():
+    show = resumed_without_maya()
+    show.at(200, "dater_conduct", RIGHT, Conduct.UNKIND)
+    show.at(202, "dater_conduct", RIGHT, Conduct.UNKIND)
+    assert show.at(205, "back", LEFT) == []
+    assert show.at(210, "moderator_resume")[-1] == WELCOME_BACK
+
+
+def test_a_second_resume_keeps_the_first_dater_away():
+    show = resumed_without_maya()
+    show.at(200, "need_a_moment", RIGHT)
+    show.at(230, "moderator_resume")
+    show.until(600)
+    assert show.says(Moment.LAST_WORD) == [], "neither is called on while away"
+    assert all(say.about is not LEFT for _, say in show.says(Moment.SILENCE))
+
+
+def test_with_both_daters_away_nobody_is_prompted_to_fill_a_silence():
+    show = resumed_without_maya()
+    show.at(200, "need_a_moment", RIGHT)
+    show.at(230, "moderator_resume")
+    show.until(320)
+    assert [t for t, _ in show.says(Moment.SILENCE) if t > 230] == []
+
+
+class FailingPoll(FakePoll):
+    def tally(self):
+        raise RuntimeError("the poll service is down")
+
+
+def test_a_poll_that_fails_still_gives_the_result_and_ends_the_date():
+    show = Show(poll=FailingPoll())
+    cues = show.until(600).cues()
+    assert DateEnded(EndReason.COMPLETED, Outcome.NOT_MUTUAL) in cues
+    assert not any(isinstance(c, ShowVerdict) for c in cues) and Finished() in cues
+
+
+class FlakyDesk(InMemoryDecisionDesk):
+    """resolve() fails the first `failures` times."""
+
+    def __init__(self, failures: int) -> None:
+        super().__init__()
+        self.failures = failures
+
+    def resolve(self):
+        if self.failures:
+            self.failures -= 1
+            raise RuntimeError("the database is down")
+        return super().resolve()
+
+
+def test_a_beat_that_fails_is_tried_again_and_never_loses_an_alert():
+    runner = ShowRunner(
+        REHEARSAL_PAIR, desk=FlakyDesk(2), poll=FakePoll(), next_pair=NEXT_PAIR, first_up=LEFT
+    )
+    run(runner, until=FULL.time + FULL.decision_window - 1)
+    result_at = FULL.time + FULL.decision_window
+    cues = runner.distress_check(result_at + 0.2, LEFT, Verdict.MAYBE)
+    assert MAYBE_DISTRESSED in cues and BeatFailed("result") in cues
+    later = [(t, c) for t, c in run_on(runner, result_at + 0.5, result_at + 5)]
+    assert [t for t, c in later if c == Say(Moment.RESULT, text=script.RESULT_NOT_MUTUAL)] == [
+        result_at + 2.5
+    ]
+
+
+def test_a_beat_that_keeps_failing_is_given_up_on_for_the_moderator():
+    runner = ShowRunner(
+        REHEARSAL_PAIR, desk=FlakyDesk(100), poll=FakePoll(), next_pair=NEXT_PAIR, first_up=LEFT
+    )
+    cues = [c for _, c in run(runner, until=FULL.time + FULL.decision_window + 10)]
+    assert not runner.finished, "the moderator decides what happens next"
+    assert cues.count(BeatFailed("result")) == 5 and BeatFailed("result", gave_up=True) in cues
+
+
+def run_on(runner: ShowRunner, start: float, until: float, step: float = 0.5) -> list:
+    """Ticks a date already started: every (time, cue)."""
+    log, now = [], start
+    while now <= until + 1e-9:
+        log += [(now, cue) for cue in runner.tick(now)]
+        now = round(now + step, 6)
+    return log
+
+
+def test_lines_waiting_for_a_dater_are_never_said_after_the_moderator_ends_the_date():
+    result_at = FULL.time + FULL.decision_window
+    show = Show()
+    show.until(result_at - 2)
+    show.at(result_at - 2, "speech_started", LEFT)
+    show.until(result_at)  # the result goes out; the outro and invitation wait for Maya
+    ended = show.at(result_at + 1, "moderator_end")
+    assert ended == [StopSpeaking(), PlayFallbackSegment(), Finished()]
+    assert show.at(result_at + 2, "speech_stopped", LEFT) == []
+
+
+def test_next_up_waits_for_a_dater_and_the_date_finishes_only_once_it_is_out():
+    next_up_at = FULL.time + FULL.decision_window + FULL.next_up_after_result
+    show = Show()
+    show.until(next_up_at - 2)
+    show.at(next_up_at - 2, "speech_started", LEFT)
+    show.until(next_up_at)
+    assert not show.runner.finished, "Next up is waiting for Maya"
+    out = show.at(next_up_at + 2, "speech_stopped", LEFT)
+    assert isinstance(out[-2], Say) and out[-2].moment is Moment.NEXT_UP
+    assert out[-1] == Finished()
+
+
+@pytest.mark.parametrize(("method", "args"), [("dater_left", (LEFT,)), ("moderator_end", ())])
+def test_an_early_end_while_deciding_closes_the_decision_window(method, args):
+    show = Show()
+    show.until(FULL.time + 1)
+    getattr(show.runner, method)(FULL.time + 2, *args)
+    with pytest.raises(DecisionError):
+        show.desk.choose(LEFT, Choice.REVEAL)
+    assert not show.desk.resolved and show.runner.outcome is None
+
+
+def test_an_approved_question_dropped_by_a_pause_is_read_later():
+    show = Show()
+    show.at(1, "queue_question", approved("Mountains or sea?"))
+    show.until(FULL.from_the_room - 1)
+    show.at(FULL.from_the_room - 1, "speech_started", LEFT)
+    show.until(FULL.from_the_room + 1)  # the question waits for Maya
+    show.at(FULL.from_the_room + 1, "need_a_moment", RIGHT)
+    show.at(FULL.from_the_room + 6, "back", RIGHT)
+    show.at(FULL.from_the_room + 6.5, "speech_stopped", LEFT)
+    show.until(600)
+    asked = [c.detail for _, c in show.says(Moment.FROM_THE_ROOM)]
+    assert asked.count("Mountains or sea?") == 1
+    assert show.runner._questions_asked == 1
