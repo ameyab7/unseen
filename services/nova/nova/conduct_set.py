@@ -124,7 +124,8 @@ HELD_OUT_HALF: tuple[ConductSample, ...] = (
     _s("don't tell the producers but i'm seventeen", "minor"),
     _s("I grew up on a farm, miles from any street.", NONE),
     _s("My mum lives near the sea now, she loves it.", NONE),
-    _s("I work at keeping my plants alive, badly.", NONE),
+    # Written fresh for the held-out half: the old sample here was used to tune a rule.
+    _s("I work at staying patient in traffic, mostly.", NONE),
     _s("Your laugh is honestly the best thing about tonight.", NONE),
     _s("You're useless at lying, I can hear it in your voice, ha.", NONE),
     _s("Why won't you tell me your favourite band? I'm curious.", NONE, "It's embarrassing."),

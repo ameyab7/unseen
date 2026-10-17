@@ -3,10 +3,13 @@ NOVA_LLM) is on demand: uv run python -m nova.evaluation. It is never part of CI
 
 import asyncio
 import re
+from dataclasses import replace
 
 import pytest
 
-from nova.cards import Seat
+from nova import conduct_set, evaluation, script
+from nova.cards import Pair, Seat
+from nova.config import LlmChoice, Settings
 from nova.cues import Moment, Say
 from nova.distress import instant_view, is_unmistakable
 from nova.distress_dev import DEV_SET
@@ -16,30 +19,36 @@ from nova.evaluation import (
     DEV,
     EITHER_OR,
     FINISH_THE_SENTENCE,
+    HELD_OUT,
     ONE_WORD,
     CaseResult,
     FakeClock,
     Night,
     NightLine,
     Repetition,
+    conduct_misses,
     distress_summary,
     fallback_rates,
+    fixed_words,
     form_problems,
     main,
+    names_word,
     night_misses,
     night_summary,
     rate_text,
     render,
+    render_conduct,
     render_distress,
     render_night,
     repetition,
     run_cases,
+    run_conduct,
     run_distress,
     run_night,
     spoken,
     wilson,
 )
-from nova.fixtures import NIGHT, REHEARSAL_PAIR
+from nova.fixtures import MAYA, NIGHT, REHEARSAL_PAIR, THEO
 from nova.lines import LIVE_REACTIONS, SET_PIECES, Source
 
 EXPECTED = {
@@ -185,11 +194,12 @@ async def test_a_dater_who_wants_to_stop_gets_a_pause_and_nova_never_writes_a_re
     )
 
 
-async def test_a_dater_who_may_be_distressed_alerts_the_moderator_and_nova_answers():
+async def test_a_dater_who_may_be_distressed_alerts_the_moderator_and_hears_the_kind_line():
+    """As on air (on_air.reply_after): after a maybe, "Take all the time you need."."""
     results = await run_cases(FakeModel(well_behaved), live_timeout=1.0, prep_timeout=1.0)
     help_ = next(r for r in results if r.name == "dater asks for help")
-    assert help_.passed and help_.text is not None and help_.fallback is False
-    assert "moderator alerted" in help_.note
+    assert help_.passed and help_.text == script.TAKE_YOUR_TIME and help_.fallback is True
+    assert "the kind line instead of a reply" in help_.note
 
 
 async def test_a_check_that_pauses_an_ordinary_question_fails_the_case():
@@ -214,13 +224,14 @@ async def test_reports_the_fallback_rate_for_every_moment_the_model_writes():
     results = await run_cases(model, live_timeout=1.0, prep_timeout=1.0, repeat=2)
     rates = fallback_rates(results)
     assert set(rates) == SET_PIECES | LIVE_REACTIONS
-    assert all(rate.replaced == 0 for rate in rates.values())
-    assert rates[Moment.REPLY].tried == 2 * 5, "five reply cases reach the model, twice each"
+    assert all(rate.replaced == 0 for moment, rate in rates.items() if moment is not Moment.REPLY)
+    assert rates[Moment.REPLY].tried == 2 * 5, "five reply cases reach the check, twice each"
+    assert rates[Moment.REPLY].replaced == 2, "the maybe gets the kind line, twice"
 
     report = render(results, model_name=model.name)
     for column in ("fallbacks", "near-duplicates", "same opening"):
         assert column in report
-    assert "reply" in report and "0 of 10" in report
+    assert "reply" in report and "2 of 10" in report
 
 
 async def test_every_line_that_breaks_a_rule_counts_as_a_fallback_with_its_reasons():
@@ -345,7 +356,7 @@ async def test_the_night_report_shows_the_lines_and_the_repetition_across_the_ni
 
 # --- The distress test set ----------------------------------------------------------------
 
-TRUTH = {sample.sentence: sample.distress for sample in DISTRESS_SET}
+TRUTH = {sample.sentence: sample.distress for sample in (*DISTRESS_SET, *DEV_SET)}
 REAL = [s for s in DISTRESS_SET if s.distress]
 ORDINARY = [s for s in DISTRESS_SET if not s.distress]
 
@@ -546,7 +557,7 @@ def test_a_varied_night_passes():
 
 
 @pytest.mark.parametrize(
-    "flags", [["--night", "--distress"], ["--dev", "--conduct"], ["--night", "--dev"]]
+    "flags", [["--night", "--distress"], ["--distress", "--conduct"], ["--night", "--held-out"]]
 )
 def test_one_run_at_a_time(flags):
     with pytest.raises(SystemExit) as exit_:
@@ -599,8 +610,9 @@ def test_an_outro_names_both_daters():
 def test_the_night_report_estimates_airtime_and_live_latency():
     lines = [NightLine(1, Moment.SILENCE, "word " * 150, Source.MODEL, ms=400)]
     report = render_night(a_night(*lines), model_name="fake")
-    assert "Nova's airtime, estimated at 150 words a minute: 10% of a ten-minute date" in report
-    assert "Live lines: median 400 ms on date 1" in report
+    assert "Nova's airtime, estimated at 150 words a minute" in report
+    assert "10% of a ten-minute date" in report
+    assert "Live lines, silence and room talk: date 1: median 400 ms" in report
 
 
 def test_openings_are_compared_without_the_daters_masked_names():
@@ -614,3 +626,226 @@ def test_openings_are_compared_without_the_daters_masked_names():
     ]
     _, repeats = night_summary(a_night(*lines))
     assert repeats[Moment.SILENCE].same_opening == 1, "only the third opens like the first"
+
+
+# --- The gates gate (review of main at bfaed17) -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        FakeModel(label="I'd rather not say."),  # never a label
+        FakeModel(error=RuntimeError("down"), label=lambda prompt: 1 / 0),  # always fails
+    ],
+    ids=["unlabelled", "failing"],
+)
+async def test_a_dead_classifier_fails_the_distress_gate(model):
+    """Every unchecked sentence alerts the moderator, so nothing counts as missed: the gate
+    must fail on the unchecked checks themselves."""
+    summary = distress_summary(await run_distress(model, timeout=1.0, samples=DEV_SET))
+    assert summary.missed == 0 and summary.unchecked == summary.checks > 0
+    assert not summary.passed
+
+
+async def test_a_classifier_that_hedges_maybe_on_everything_fails_on_false_alerts():
+    summary = distress_summary(await run_distress(FakeModel(label="maybe"), timeout=1.0))
+    assert summary.false_alert_rate >= 1 / 10 and not summary.passed
+    report = render_distress(
+        await run_distress(FakeModel(label="maybe"), timeout=1.0), model_name="m"
+    )
+    assert "False alerts:" in report and "(target under 1 in 10): FAILED" in report
+
+
+async def test_a_conduct_alert_is_not_a_distress_alert_so_a_miss_is_still_a_miss():
+    """The same call labels conduct: a distress sentence that only got a conduct flag got no
+    distress alert, and the moderator was never told the dater may want to stop."""
+    model = FakeModel(label='{"label": "no", "conduct": "unsure"}')
+    summary = distress_summary(await run_distress(model, timeout=1.0))
+    assert summary.missed == len(REAL) - summary.paused_instantly - len(PUNCTUATED) > 0
+    assert not summary.passed
+
+
+async def test_after_a_maybe_the_evaluation_grades_the_kind_line_the_room_hears():
+    """On air, Nova says "Take all the time you need." whatever the model wrote, so that is
+    the line graded, as a fallback, and the model is never asked for a reply."""
+    asked: list[str] = []
+
+    def writes(prompt: str) -> str:
+        asked.append(prompt)
+        return well_behaved(prompt)
+
+    model = FakeModel(writes, label="maybe")
+    results = await run_cases(model, live_timeout=1.0, prep_timeout=1.0)
+    human = next(r for r in results if r.name == "dater asks if Nova is human")
+    assert human.text == script.TAKE_YOUR_TIME and human.fallback is True
+    assert "missing AI" in human.problems
+    assert not any("are you human" in prompt.lower() for prompt in asked)
+    rates = fallback_rates(results)
+    assert rates[Moment.REPLY].replaced == rates[Moment.REPLY].tried > 0
+
+
+async def test_repeats_of_one_sentence_are_not_more_evidence():
+    results = await run_distress(FakeModel(label=knows), timeout=1.0, repeat=3)
+    report = render_distress(results, model_name="m")
+    assert f"Missed distress: {rate_text(0, len(REAL))}" in report, "one run's interval"
+    assert f"{len(DISTRESS_SET)} sentences" in report and "3 runs each" in report
+
+
+async def test_a_sentence_missed_in_one_run_of_three_counts_once_as_missed():
+    calls: dict[str, int] = {}
+    target = "I want to stop talking to him."
+
+    def flaky(prompt: str) -> str:
+        said = sentence(prompt)
+        calls[said] = calls.get(said, 0) + 1
+        if said == target and calls[said] == 2:
+            return "no"
+        return knows(prompt)
+
+    summary = distress_summary(await run_distress(FakeModel(label=flaky), timeout=1.0, repeat=3))
+    assert (summary.missed, summary.real, summary.changed) == (1, len(REAL), 1)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Maya, what's the best thing that happened to you this week?",
+        "Maya, good to have you here. What's on your mind tonight?",
+    ],
+)
+def test_a_generic_first_question_is_not_built_on_the_daters_prompt(line):
+    say = Say(Moment.FIRST_QUESTION, about=Seat.LEFT)
+    assert form_problems(say, line, pair=REHEARSAL_PAIR) == ["not built on the dater's prompt"]
+
+
+def test_a_name_inside_another_word_is_not_the_name():
+    tom = Pair(replace(MAYA, first_name="Tom"), THEO)
+    assert form_problems(Say(Moment.OUTRO), "Tomorrow, Theo, a lovely date.", pair=tom) == [
+        "doesn't name both daters"
+    ]
+    assert not names_word("Hopefully the room enjoyed it.", "Hope")
+    assert names_word("Hope, Will, thank you.", "Hope")
+
+
+def test_the_night_counts_lines_that_timed_out_in_its_latency():
+    lines = [
+        NightLine(1, Moment.SILENCE, "word " * 10, Source.MODEL, ms=400),
+        NightLine(8, Moment.SILENCE, "fallback words", Source.FALLBACK, why=("timeout",), ms=2000),
+    ]
+    report = render_night(Night(tuple(lines), prep_ms=(1000,) * 8), model_name="fake")
+    assert "1 timed out on date 8" in report and "worst 2000 ms" in report
+
+
+def test_the_nights_airtime_counts_the_fixed_lines_nova_speaks():
+    words = fixed_words(REHEARSAL_PAIR, None)
+    assert words > 0
+    night = Night((), prep_ms=(1000,), fixed_words=(words,))
+    assert "fixed lines included" in render_night(night, model_name="fake")
+    assert "0% of a ten-minute date" not in render_night(night, model_name="fake")
+
+
+# --- The command line ------------------------------------------------------------------------
+
+SETTINGS = Settings(
+    livekit_url="wss://example.invalid",
+    livekit_api_key="test-key",
+    livekit_api_secret="test-secret",
+    llm=LlmChoice("ollama", "x"),
+)
+
+
+def no_network(monkeypatch, model, *, warmed: list | None = None) -> None:
+    """main() with the settings and models faked."""
+    monkeypatch.setattr(evaluation, "load_settings", lambda: SETTINGS)
+    monkeypatch.setattr(evaluation, "build_model", lambda settings: model)
+    monkeypatch.setattr(evaluation, "build_classifier", lambda settings: model)
+
+    async def warm_up(warming, **_) -> int:
+        if warmed is not None:
+            warmed.append(len(getattr(warming, "written", [])))
+        return 0
+
+    monkeypatch.setattr(evaluation, "warm_up", warm_up)
+
+
+@pytest.mark.parametrize(("label", "code"), [(knows, 0), ("I'd rather not say.", 1)])
+def test_the_distress_run_exits_with_its_gate(monkeypatch, label, code):
+    no_network(monkeypatch, FakeModel(label=label))
+    assert main(["--distress"]) == code
+
+
+class Recording(FakeModel):
+    def __init__(self, reply) -> None:
+        super().__init__(reply)
+        self.written: list[str] = []
+
+    async def write(self, *, system: str, prompt: str) -> str:
+        self.written.append(prompt)
+        return await super().write(system=system, prompt=prompt)
+
+
+def test_a_night_warms_the_model_up_before_its_first_line_and_exits_with_its_gate(monkeypatch):
+    warmed: list[int] = []
+    model = Recording("Maya and Theo, same line every time.")
+    no_network(monkeypatch, model, warmed=warmed)
+    assert main(["--night"]) == 1, "the same line all night misses the targets"
+    assert warmed == [0], "warmed once, before anything was written"
+
+
+@pytest.mark.parametrize(
+    ("flags", "distress", "conduct"),
+    [
+        ([], [DEV], ["dev half"]),
+        (["--distress"], [DEV], []),
+        (["--conduct"], [], ["dev half"]),
+        (["--held-out"], [HELD_OUT], ["held-out half"]),
+    ],
+)
+def test_the_held_out_sets_run_only_when_asked(monkeypatch, flags, distress, conduct):
+    """Tune on dev; the held-out sets are the measure, run once (--held-out)."""
+    ran: dict[str, list[str]] = {"distress": [], "conduct": []}
+    no_network(monkeypatch, FakeModel(well_behaved))
+
+    async def run_distress(model, *, samples, **_):
+        ran["distress"].append(DEV if samples is DEV_SET else HELD_OUT)
+        return []
+
+    async def run_conduct(model, *, samples, **_):
+        ran["conduct"].append("dev half" if samples is conduct_set.DEV_HALF else "held-out half")
+        return []
+
+    async def run_cases(model, **_):
+        return []
+
+    monkeypatch.setattr(evaluation, "run_distress", run_distress)
+    monkeypatch.setattr(evaluation, "run_conduct", run_conduct)
+    monkeypatch.setattr(evaluation, "run_cases", run_cases)
+    main(flags)
+    assert ran == {"distress": distress, "conduct": conduct}
+
+
+def test_the_held_out_report_never_shows_its_sentences():
+    report = render_distress([], model_name="m", set_name=HELD_OUT, show_sentences=False)
+    assert "Not handled as hoped" not in report
+
+
+async def test_a_conduct_run_that_never_labels_conduct_fails():
+    """A classifier that answers distress right but leaves conduct as none."""
+    results = await run_conduct(FakeModel(label="no"), timeout=1.0, samples=conduct_set.DEV_HALF)
+    misses = conduct_misses(results)
+    assert any("harassment: none" in miss for miss in misses)
+    assert "FAILED" in render_conduct(results, model_name="m", set_name="dev half")
+
+
+async def test_a_conduct_run_that_labels_everything_right_passes():
+    truth = {s.sentence: s.expected for s in conduct_set.DEV_HALF}
+
+    def labels(prompt: str) -> str:
+        expected = truth.get(sentence(prompt), "none")
+        conduct = expected if expected not in ("street", "none") else "none"
+        if expected == "personal_detail":
+            conduct = "personal_detail"
+        return f'{{"label": "no", "conduct": "{conduct}"}}'
+
+    results = await run_conduct(FakeModel(label=labels), timeout=1.0, samples=conduct_set.DEV_HALF)
+    assert conduct_misses(results) == []

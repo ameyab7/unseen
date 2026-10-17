@@ -21,9 +21,12 @@ nova/sign_off.py.
   dater, listener or Nova said.
 - Before any model change (a prompt, the model, the guardrails it's measured against), run
   `uv run python -m nova.evaluation` against local Gemma, before and after, and put both
-  summaries in the pull request. `--night` is the number we track and a gate;
-  `--distress` and `--conduct` report dev and held-out sets apart: tune on dev, run
-  held-out once.
+  summaries in the pull request. It covers the cases and the distress and conduct dev sets,
+  each a gate (missed distress, false pauses, false alerts, unchecked checks, conduct
+  recall). `--night` is the number we track and a gate. Tune on dev only; `--held-out`
+  runs the held-out sets once a change is settled, and prints counts, never sentences.
+  Run it with nothing else busy: part of Gemma runs on the CPU, and a test run alongside
+  times the 2 s checks out.
 - Nothing here calls production, and the tests never call LiveKit, Ollama or Claude.
 
 ## Running it on this machine

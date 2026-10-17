@@ -97,7 +97,7 @@ DEV_SET: tuple[Sample, ...] = (
     _real("I'm thinking about my sofa a lot right now, and not in a good way."),
     _real("this was a mistake coming here"),
     _real("I want to be somewhere quiet, away from all this."),
-    _real("Honestly, um, I just want to get home safe."),
+    _real("Honestly, um, I'd feel a lot safer back at my flat."),
     _ordinary("honestly i wish i hadn't come to that party last week, it was dull"),
     _ordinary("I should have stayed in Lisbon longer, I loved it."),
     _ordinary("Part of me just wants to be in bed by ten every night, I'm an old soul."),
@@ -150,10 +150,10 @@ DEV_SET: tuple[Sample, ...] = (
         "That's, um, that's a bold choice.", "I'd pick the mountains over the beach every time."
     ),
     # As speech-to-text gives it: repeated words, fillers, no punctuation.
-    _real("i i want to go home now please"),
+    _real("i i really need to be done now please"),
     _real("like i just i don't feel right about him"),
-    _real("can we can we not"),
-    _real("um he keeps saying weird things and i don't like it"),
+    _real("could we just just not"),
+    _real("um he won't drop the questions about my ex and it's freaking me out"),
     _real("i'm i'm not doing great"),
     _real("uh can someone just check on me"),
     _real("this is this is not fun anymore"),
@@ -167,8 +167,8 @@ DEV_SET: tuple[Sample, ...] = (
     _ordinary("this is this is the best question so far"),
     _ordinary("no no no i don't believe you, that's amazing"),
     # Two finals, the first punctuated by speech-to-text, and more said after it.
-    _split(True, "Can we stop?", "Honestly, I'm done, this isn't for me."),
+    _split(True, "Can we stop?", "Seriously, I've had enough of tonight."),
     _split(True, "I need some air.", "It's getting really hard to breathe in here."),
-    _split(False, "Can we stop,", "just for a sec, and admire how good that question was?"),
+    _split(False, "Can we pause,", "real quick, and clap for that question?"),
     _split(False, "I need some space.", "In my flat, I mean, it's tiny."),
 )

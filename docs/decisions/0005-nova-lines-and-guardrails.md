@@ -180,8 +180,13 @@ Date: 2026-10-13. Status: accepted.
     pause on a fragment ("I want to stop" before "eating sugar") shows up as a false
     pause; in four of them, as Deepgram gives it, the first final ends with a full stop
     (added 2026-10-16, with four in the dev set). Targets: no missed distress (no pause
-    and no alert), and false pauses under 1 in 20 of ordinary talk. The evaluation also reports alerts without a pause, false
-    alerts and the check's time.
+    and no distress alert: a conduct flag from the same check doesn't count), false
+    pauses under 1 in 20 of ordinary talk, false alerts under 1 in 10, and no unchecked
+    checks (since 2026-10-16: before, a classifier that failed every check, or answered
+    maybe to everything, passed, because each unchecked sentence alerted the moderator and
+    so never counted as missed). The evaluation also reports the check's time. With
+    `--repeat`, each sentence counts once, at its worst outcome: repeats of one sentence
+    at temperature 0 are no new evidence, so they never narrow the intervals.
     Second run, 2026-10-15, Gemma (`gemma4:26b`, thinking off, warm), every sentence
     checked, 90 sentences, 45 of each: no false pauses and no false alerts, but 3 missed,
     so the missed-distress target failed. 41 of 45 real distress paused (18 by the
@@ -196,9 +201,15 @@ Date: 2026-10-13. Status: accepted.
     easier than real speech. So the rules are now tuned on a separate dev set
     (`nova/distress_dev.py`: 60 real, 60 ordinary, written fresh, in six kinds of
     indirect distress, some as speech-to-text gives them, eight answering the other
-    dater), and the held-out set above is the measure, run once at the end. `--distress`
-    reports both sets apart, with Wilson 95% intervals (with about 50 sentences a side,
-    zero misses still allows a true miss rate near 7%); `--dev` runs the dev set alone.
+    dater), and the held-out set above is the measure, run once at the end. Since
+    2026-10-16 the default run and `--distress` use the dev set only, and `--held-out`
+    runs the held-out set (and the conduct set's held-out half) once a change is settled,
+    printing counts and Wilson 95% intervals but never the sentences, so its misses can't
+    steer the next change (with about 50 sentences a side, zero misses still allows a true
+    miss rate near 7%). The check's examples and the dev set are kept from paraphrasing a
+    held-out sentence by a test (word similarity under 0.6): the example "Nova, can you
+    help us pick a question?" was one word from a held-out sentence, and four dev
+    sentences were close paraphrases; all were rewritten.
     Third run, 2026-10-16, Gemma (`gemma4:26b`), structured labels and both daters'
     context: on the dev set, the old rules missed 16 of 60 (26.7%, 95% CI 17.1% to
     39.0%) with no false pauses; the tuned rules missed 1 of 60 (1.7%, 0.3% to 8.9%:
