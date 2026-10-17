@@ -906,3 +906,234 @@ async def test_speech_recognition_is_billed_from_when_the_session_started_listen
         assert "speech recognition 4.0 min" in render_report(r)
     finally:
         listening.cancel()
+
+
+# --- Stop means stop -----------------------------------------------------------------------
+
+
+class GatedWriter(FakeModel):
+    """Once gating, writes a line only when the gate opens, which may be never: set pieces
+    are prepared before, so only live lines wait."""
+
+    def __init__(self, gate: asyncio.Event, **options) -> None:
+        super().__init__(**options)
+        self.write_gate = gate
+        self.gating = False
+
+    async def write(self, *, system: str, prompt: str) -> str:
+        if self.gating:
+            await self.write_gate.wait()
+        return await super().write(system=system, prompt=prompt)
+
+
+class StuckOn(FakeSpeaker):
+    """Never finishes saying one line."""
+
+    def __init__(self, clock: Clock, line: str) -> None:
+        super().__init__(clock)
+        self.line = line
+
+    async def speak(self, text: str) -> float | None:
+        if text == self.line:
+            self.texts.append(text)
+            await asyncio.Event().wait()
+        return await super().speak(text)
+
+
+async def nova_waiting_on(
+    r: Rehearsal, clock: Clock, words: str, *, at: float = 40.0
+) -> asyncio.Future:
+    """The dater says words to Nova at a time, and Nova picks the reply up and waits on it."""
+    clock.now = at
+    r.speech_ended()
+    r.transcript(words)
+    close(r, clock)
+    speaking = asyncio.ensure_future(r.speak_queued())
+    await asyncio.sleep(0.05)
+    return speaking
+
+
+@pytest.mark.parametrize(
+    ("command", "moment"),
+    [("end", Moment.MODERATOR_END), ("leave", Moment.DATER_LEFT), ("report", Moment.NEED_A_MOMENT)],
+)
+async def test_a_reply_waiting_for_its_check_is_never_said_after_a_stop(command, moment):
+    """The line Nova has already picked up is stopped too, and the stop's own line comes
+    at once, without waiting for the check."""
+    clock = Clock()
+    check_due = asyncio.Event()
+    r = await started(clock, model=FakeModel(gate=check_due))
+    speaking = await nova_waiting_on(r, clock, "Nova, tea or coffee?")
+    r.command(command)
+    await asyncio.wait_for(speaking, 1.0)
+    await r.speak_queued()
+    assert lines(r, Moment.REPLY) == []
+    assert lines(r, moment), "said while the check still runs"
+    check_due.set()
+    await r.heard()
+    await r.speak_queued()
+    assert lines(r, Moment.REPLY) == [], "not after the check either"
+
+
+async def test_the_kind_line_comes_at_once_while_a_reply_waits_for_its_check():
+    clock = Clock()
+    check_due = asyncio.Event()
+    r = await started(clock, model=FakeModel(gate=check_due))
+    speaking = await nova_waiting_on(r, clock, "Nova, tea or coffee?")
+    await transcripts_now(r, clock, "I want to stop.")
+    await asyncio.wait_for(speaking, 1.0)
+    await r.speak_queued()
+    assert script.DISTRESS_PAUSE in r.speaker.texts
+    assert lines(r, Moment.REPLY) == []
+    check_due.set()
+    await r.heard()
+
+
+async def transcripts_now(r: Rehearsal, clock: Clock, text: str) -> None:
+    """The dater says text and stops, while Nova may be busy: nobody waits for Nova."""
+    clock.now += 1.0
+    r.speech_ended()
+    r.transcript(text)
+    close(r, clock)
+
+
+async def test_a_live_line_still_being_written_is_never_said_after_a_stop():
+    clock = Clock()
+    written = asyncio.Event()
+    model = GatedWriter(written)
+    r = await started(clock, model=model)
+    model.gating = True
+    speaking = await nova_waiting_on(r, clock, "Nova, tea or coffee?")
+    r.command("end")
+    await asyncio.sleep(0.05)
+    assert speaking.done(), "Nova let go of the line at once"
+    await speaking
+    await r.speak_queued()
+    written.set()
+    await asyncio.sleep(0)
+    assert lines(r, Moment.REPLY) == []
+    assert r.speaker.texts[-1] == script.MODERATOR_END
+
+
+async def test_a_second_unkind_remark_said_to_nova_is_never_answered_before_the_pause():
+    """The deterministic case: the check's own conduct label stops the show right after the
+    verdict lets the reply through."""
+    clock = Clock()
+    unkind = '{"label": "no", "conduct": "unkind"}'
+    first, second = "You're boring, honestly.", "Nova, isn't Theo boring?"
+    check_due = asyncio.Event()
+    check_due.set()
+    model = FakeModel(labels={first: unkind, second: unkind}, gate=check_due)
+    r = await started(clock, model=model)
+    await transcripts(r, clock, (40.0, first))
+    assert script.KEEP_IT_KIND in r.speaker.texts
+    check_due.clear()
+    speaking = await nova_waiting_on(r, clock, second, at=45.0)  # Nova picks the reply up
+    check_due.set()
+    await r.heard()
+    await speaking
+    await r.speak_queued()
+    assert lines(r, Moment.REPLY) == []
+    assert script.SHOW_PAUSE in r.speaker.texts
+
+
+async def test_a_line_cut_before_its_first_word_is_not_counted_as_never_played():
+    """Target 1 fails for a line that never played: not for one Nova was told to stop."""
+    clock = Clock()
+
+    class CutSpeaker(FakeSpeaker):
+        async def speak(self, text: str) -> float | None:
+            self.texts.append(text)
+            if len(self.texts) == 1:
+                r.command("end")  # stopped before the line's first audio
+                return None
+            return await super().speak(text)
+
+    r = rehearsal(clock, CutSpeaker(clock))
+    await r.prepare()
+    r.start()
+    await r.speak_queued()
+    assert all(spoken.from_cue_ms is not None for spoken in r.spoken)
+    assert r.speaker.texts[-1] == script.MODERATOR_END
+
+
+@pytest.mark.parametrize("label", ["maybe", "slow"])
+async def test_the_speaking_task_stops_when_cancelled_whatever_it_waits_on(label):
+    """Cancelled while Nova says "Take all the time you need." after a maybe, or while a live
+    line is still written: the task ends, and nothing it was waiting on keeps it alive."""
+    clock = Clock()
+    words = "Nova, he keeps asking where I live."
+    model = FakeModel(labels={words: "maybe"}) if label == "maybe" else GatedWriter(asyncio.Event())
+    r = await started(clock, model=model, speaker=StuckOn(clock, script.TAKE_YOUR_TIME))
+    if isinstance(model, GatedWriter):
+        model.gating = True
+    clock.now = 40.0
+    r.speech_ended()
+    r.transcript(words)
+    close(r, clock)
+    await r.heard()
+    speaking = asyncio.ensure_future(r._speak_forever())
+    await asyncio.sleep(0.05)
+    speaking.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(speaking, 1.0)
+    assert speaking.cancelled()
+
+
+# --- Nova never starts over a dater ---------------------------------------------------------
+
+
+class ReactingRoom(FakeSpeaker):
+    """A dater starts talking while Nova says the result, and stops a moment later."""
+
+    def __init__(self, clock: Clock) -> None:
+        super().__init__(clock)
+        self.events: list[str] = []
+        self.rehearsal: Rehearsal | None = None
+
+    async def speak(self, text: str) -> float | None:
+        self.events.append(text)
+        started = await super().speak(text)
+        if text == script.RESULT_NOT_MUTUAL and self.rehearsal is not None:
+            r = self.rehearsal
+            r.speech_started()
+
+            def stop() -> None:
+                self.events.append("dater stopped")
+                r.speech_ended()
+
+            asyncio.get_running_loop().call_later(0.05, stop)
+        return started
+
+
+async def test_lines_queued_together_wait_for_a_dater_who_starts_talking_between_them():
+    """The result, the outro and the invitation are queued at once while nobody speaks; the
+    outro still waits for a dater who reacts to the result, and is measured from when they
+    finished."""
+    clock = Clock()
+    room = ReactingRoom(clock)
+    r = await started(clock, speaker=room)
+    room.rehearsal = r
+    for t in range(41, 175):
+        clock.now = max(clock.now, float(t))
+        r.tick()
+        await r.speak_queued()
+    result = room.events.index(script.RESULT_NOT_MUTUAL)
+    assert room.events[result + 1] == "dater stopped", "the outro waited for them"
+    outro = lines(r, Moment.OUTRO)[0]
+    assert outro.from_cue_ms is not None and outro.from_cue_ms < 1000
+
+
+async def test_a_line_waiting_for_a_dater_is_dropped_if_nova_is_stopped():
+    clock = Clock()
+    r = await started(clock)
+    clock.now = 40.0
+    r.tick()  # the first question, queued
+    r.speech_started()  # the dater is speaking: the line waits
+    speaking = asyncio.ensure_future(r.speak_queued())
+    await asyncio.sleep(0.05)
+    r.command("end")
+    await asyncio.wait_for(speaking, 1.0)
+    await r.speak_queued()
+    assert lines(r, Moment.FIRST_QUESTION) == []
+    assert r.speaker.texts[-1] == script.MODERATOR_END

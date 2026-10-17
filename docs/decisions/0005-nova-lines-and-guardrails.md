@@ -103,8 +103,11 @@ Date: 2026-10-13. Status: accepted.
     words so far are checked again 3 s after the match (`MATCH_CAP`) and acted on if they
     still match, so a request never waits for the end of a long utterance. The show
     runner alerts the moderator (`dater_distressed`), and if a pause can start, Nova stops
-    mid-line, drops anything it had queued, says "Of course. Let's take a breather." at
-    once and starts a need-a-moment pause for that dater, with the usual rules (back, 30 s
+    mid-line, drops anything it had queued, including the line it had already picked up
+    and was waiting to write or to clear with the distress check, says "Of course. Let's
+    take a breather." at once (a line cut before its first audio frees Nova at once too,
+    rather than after the voice's 10 s start timeout) and starts a need-a-moment pause for
+    that dater, with the usual rules (back, 30 s
     alert, moderator decides). If a pause can't start (another dater is on one, or the
     daters are deciding), Nova says nothing and the moderator acts. No reply is written.
   - **Meaning layer:** every other utterance goes to the language model in
