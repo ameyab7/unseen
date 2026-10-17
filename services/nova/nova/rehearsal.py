@@ -38,6 +38,8 @@ from nova.tonight import Tonight
 # The lines left when the show finishes (the result, the outro, Next up) take well under
 # this. If Nova's voice is stuck mid-line, the date still ends and the report is written.
 FINAL_WAIT = 30.0
+# A final transcript this soon after the voice detector heard a dater stop is still theirs.
+LATE_FINAL = 2.0
 
 
 class Command(StrEnum):
@@ -145,6 +147,7 @@ class Rehearsal:
         self._model, self._classifier = model, classifier
         self.voice, self.stt, self.model_name = voice, stt, model.name
         self.prep_budget = prep_budget
+        self._distress_timeout = distress_timeout
         self.utterance_grace, self.utterance_max_wait = utterance_grace, utterance_max_wait
         self._clock = clock
         self._events = events or EventLog()
@@ -176,11 +179,14 @@ class Rehearsal:
             max_wait=utterance_max_wait,
         )
         self._queue: asyncio.Queue[_Pending] = asyncio.Queue()
+        self._listening_since: float | None = None  # speech recognition ran from here
         self._started_at: float | None = None
         self._ended_at: float | None = None
 
         self.seat = Seat.LEFT
         self._speaking: Seat | None = None  # who the voice detector last heard start
+        # Who the voice detector last heard stop, and when: their late final is theirs.
+        self._ended: tuple[Seat, float] | None = None
         self.cues: list[Cue] = []  # in memory only
         self.spoken: list[Spoken] = []
         self.alerts = 0
@@ -209,12 +215,22 @@ class Rehearsal:
         return self._on_air.closed
 
     @property
-    def listened_seconds(self) -> float:
-        """How long speech recognition ran, for the credit estimate."""
-        if self._started_at is None:
+    def date_seconds(self) -> float:
+        """How long the date ran, from its start: for airtime and rates per minute."""
+        return self._since(self._started_at)
+
+    @property
+    def stt_seconds(self) -> float:
+        """How long speech recognition ran, for the credit estimate: from when the session
+        started listening, through the warm-up and preparation, to the end."""
+        since = self._listening_since
+        return self._since(self._started_at if since is None else since)
+
+    def _since(self, start: float | None) -> float:
+        if start is None:
             return 0.0
         end = self._ended_at if self._ended_at is not None else self._clock()
-        return end - self._started_at
+        return end - start
 
     # --- The date ---------------------------------------------------------------------------
 
@@ -246,11 +262,14 @@ class Rehearsal:
         """Acts on what daters say as soon as each utterance closes, until cancelled.
         nova/agent.py runs it from the start of the session, so a dater is heard on time
         while set pieces are prepared and after the date, when nothing else ticks."""
+        self._listening()
         await self._on_air.listen()
 
     async def run(self, *, every: float = 0.25, final_wait: float = FINAL_WAIT) -> None:
         """Runs the date to the end: ticks the show and speaks every line in order. Once the
-        show has finished, the last lines get up to final_wait seconds to play."""
+        show has finished, the last lines get up to final_wait seconds to play. Then what a
+        dater was still saying is acted on, and the checks in flight get the distress
+        timeout to finish (nova/on_air.py, finish)."""
         self.start()
         speaking = asyncio.create_task(self._speak_forever())
         try:
@@ -261,7 +280,7 @@ class Rehearsal:
                 await asyncio.wait_for(self._queue.join(), final_wait)
         finally:
             speaking.cancel()
-            self._on_air.cancel()
+            await self._on_air.finish(self._distress_timeout + 0.5)
             self._writer.finish()
             self._ended_at = self._clock()
 
@@ -312,6 +331,7 @@ class Rehearsal:
 
     def speech_started(self) -> None:
         """The voice detector heard the dater start speaking."""
+        self._listening()
         self._speaking = self.seat
         self._on_air.speech_started(self.seat)
 
@@ -319,6 +339,7 @@ class Rehearsal:
         """The voice detector heard the dater stop: the end of their sentence. It ends the
         seat that started speaking, even if the chat has chosen the other one since."""
         seat, self._speaking = self._speaking or self.seat, None
+        self._ended = seat, self._clock()
         self._on_air.speech_ended(seat)
 
     def transcript(self, text: str) -> None:
@@ -326,14 +347,32 @@ class Rehearsal:
         their utterance, which the on-air listener (nova/on_air.py) acts on once it closes:
         distress first, and a reply to Nova held until the distress verdict, then dropped if
         the dater wants to stop. Nova's first line after the dater spoke is measured from
-        the end of their sentence, so the grace and a check before a kind line count."""
-        self._on_air.hear(self.seat, text)
+        the end of their sentence, so the grace and a check before a kind line count.
+
+        A final arrives a moment after the voice detector hears its words end, so it belongs
+        to whoever was speaking, or who stopped within LATE_FINAL seconds, even if the chat
+        has chosen the other seat since; otherwise to the seat the chat chose."""
+        self._listening()
+        self._on_air.hear(self._transcript_seat(), text)
 
     async def heard(self) -> None:
         """Waits for every distress check in flight, and what the show does with it."""
         await self._on_air.heard()
 
     # --- Internals --------------------------------------------------------------------------
+
+    def _listening(self) -> None:
+        if self._listening_since is None:
+            self._listening_since = self._clock()
+
+    def _transcript_seat(self) -> Seat:
+        if self._speaking is not None:
+            return self._speaking
+        if self._ended is not None:
+            seat, at = self._ended
+            if self._clock() - at <= LATE_FINAL:
+                return seat
+        return self.seat
 
     def _take(self, on_air: OnAirCues) -> None:
         self._queue_cues(on_air.cues, on_air.sentence_end, on_air.hold, on_air.closed_at)
@@ -524,7 +563,7 @@ def price(prices: dict[str, float], model: str) -> float:
 def render_report(rehearsal: Rehearsal) -> str:
     """Codes and numbers only: never what anyone said, typed or heard."""
     r = rehearsal
-    cost = estimate_cost(r.stt, r.listened_seconds, r.voice, r.characters_spoken)
+    cost = estimate_cost(r.stt, r.stt_seconds, r.voice, r.characters_spoken)
     budget = (
         f" The prep budget ({r.prep_budget:g} s) ran out: every set piece not ready by then "
         "used its fallback."
@@ -563,7 +602,7 @@ def render_report(rehearsal: Rehearsal) -> str:
             "",
             f"Distress checks: {len(ms)} ("
             + ", ".join(f"{v} {verdicts[v]}" for v in Verdict if verdicts[v])
-            + f"), {_per_minute(len(ms), r.listened_seconds)} a minute, median "
+            + f"), {_per_minute(len(ms), r.date_seconds)} a minute, median "
             f"{round(statistics.median(ms))} ms, worst {max(ms)} ms",
         ]
     lines += ["", "Fallback rate per moment"]
@@ -573,7 +612,7 @@ def render_report(rehearsal: Rehearsal) -> str:
     lines += [
         "",
         f"Estimated credit used: ${cost:.3f} (speech recognition "
-        f"{r.listened_seconds / 60:.1f} min, voice {r.characters_spoken} characters)",
+        f"{r.stt_seconds / 60:.1f} min, voice {r.characters_spoken} characters)",
     ]
     return "\n".join(lines)
 
@@ -595,13 +634,13 @@ def _utterance_row(r: Rehearsal) -> str:
     )
     return (
         f"Utterances: {len(r.utterances)} ({instant} by the instant layer), "
-        f"{_per_minute(len(r.utterances), r.listened_seconds)} a minute{waited} {settings}"
+        f"{_per_minute(len(r.utterances), r.date_seconds)} a minute{waited} {settings}"
     )
 
 
 def _airtime_row(r: Rehearsal) -> str:
     """The brand book keeps Nova's share of the date well under a fifth."""
-    total = r.listened_seconds
+    total = r.date_seconds
     share = f"{r.nova_seconds / total:.0%}" if total > 0 else "-"
     return (
         f"Nova's airtime: {r.nova_seconds:.0f} s of a {total:.0f} s date, {share} "

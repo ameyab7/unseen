@@ -8,7 +8,7 @@ import pytest
 
 from nova.cards import Seat
 from nova.cues import Moment, Say
-from nova.distress import is_unmistakable
+from nova.distress import instant_view, is_unmistakable
 from nova.distress_dev import DEV_SET
 from nova.distress_set import DISTRESS_SET
 from nova.evaluation import (
@@ -356,7 +356,13 @@ def knows(prompt: str) -> str:
 
 
 def unmistakable(sample) -> bool:
-    return is_unmistakable(" ".join((*sample.earlier, sample.sentence)))
+    """The instant layer acts on it: what came before and its finals, read as it reads them."""
+    return is_unmistakable(instant_view((*sample.earlier, *sample.finals)))
+
+
+# Real distress whose request speech-to-text punctuated, followed by more: the moderator is
+# alerted at once, and only the meaning layer pauses it.
+PUNCTUATED = [s for s in REAL if s.split and s.finals[0].endswith(".")]
 
 
 async def test_a_check_that_is_always_right_meets_both_targets():
@@ -365,7 +371,7 @@ async def test_a_check_that_is_always_right_meets_both_targets():
     assert summary.missed == 0 and summary.false_pauses == 0 and summary.passed
     assert (summary.plain, summary.plain_paused) == (10, 10)
     report = render_distress(results, model_name="fake/model")
-    assert "Missed distress: 0 of 51, 0.0% (95% CI 0.0% to 7.0%) (target 0): PASSED" in report
+    assert f"Missed distress: {rate_text(0, len(REAL))} (target 0): PASSED" in report
     assert "(target under 1 in 20): PASSED" in report
 
 
@@ -374,7 +380,8 @@ async def test_a_check_that_always_says_no_misses_distress_the_instant_layer_doe
     summary = distress_summary(results)
     instant = sum(unmistakable(s) for s in REAL)
     assert summary.paused_instantly == instant > 0
-    assert summary.missed == len(REAL) - instant
+    assert summary.alerted_only == len(PUNCTUATED) == 2
+    assert summary.missed == len(REAL) - instant - len(PUNCTUATED)
     assert summary.plain_missed == 10, "no plain distress is unmistakable"
     assert not summary.passed
     report = render_distress(results, model_name="fake/model")
@@ -410,18 +417,20 @@ async def test_the_report_gives_the_checks_delay_and_the_plain_distress_on_its_o
 
 
 async def test_split_sentences_are_heard_as_one_utterance_through_the_on_air_listener():
-    """Six real and six ordinary samples come as two finals with a pause between: a check
-    that is always right pauses every real one and none of the ordinary ones, though five
-    ordinary ones start with what sounds like a request to stop."""
+    """Eight real and eight ordinary samples come as two finals with a pause between: a check
+    that is always right pauses every real one and none of the ordinary ones, though seven
+    ordinary ones start with what sounds like a request to stop. The two whose first part
+    speech-to-text punctuated alert the moderator, and are never paused."""
     model = FakeModel(label=knows)
     results = await run_distress(model, timeout=1.0)
     summary = distress_summary(results)
-    assert (summary.split, summary.split_paused) == (6, 6)
-    assert (summary.split_ordinary, summary.split_quiet) == (6, 6)
+    assert (summary.split, summary.split_paused) == (8, 8)
+    assert (summary.split_ordinary, summary.split_quiet) == (8, 6)
+    assert summary.false_pauses == 0
     assert "I want to stop eating sugar." in model.labelled, "checked whole, once"
     assert "I want to stop" not in model.labelled
     report = render_distress(results, model_name="fake/model")
-    assert "Split across two transcripts: 6 of 6 real distress paused, 6 of 6" in report
+    assert "Split across two transcripts: 8 of 8 real distress paused, 6 of 8" in report
 
 
 async def test_a_grace_too_short_for_the_pause_splits_the_utterance_and_shows_in_the_run():
@@ -429,7 +438,7 @@ async def test_a_grace_too_short_for_the_pause_splits_the_utterance_and_shows_in
     instant layer pauses on fragments: the evaluation reports it as false pauses."""
     results = await run_distress(FakeModel(label="no"), timeout=1.0, grace=0.1, max_wait=0.2)
     summary = distress_summary(results)
-    assert summary.split_quiet == 1 and summary.false_pauses == 5
+    assert summary.split_quiet == 1 and summary.false_pauses == 7
     off = render_distress(results, model_name="fake/model")
     assert "false pause [instant]  I want to stop / eating sugar." in off
 
@@ -478,7 +487,7 @@ def test_the_dev_set_is_fresh_balanced_and_never_the_held_out_set():
     held_out = {sample.sentence.lower() for sample in DISTRESS_SET}
     assert not any(sample.sentence.lower() in held_out for sample in DEV_SET)
     real = [s for s in DEV_SET if s.distress]
-    assert len(real) == 60 and len(DEV_SET) == 120
+    assert len(real) == 62 and len(DEV_SET) == 124
     assert sum(bool(s.other) for s in real) == 8, "distress that answers the other dater"
 
 

@@ -15,7 +15,7 @@ from nova.distress import DistressCheck, Verdict
 from nova.evaluation import FakeClock as Clock
 from nova.evaluation import Speech, hear_on_air, spoken
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
-from nova.on_air import MATCH_CAP, OnAirCues, OnAirListener, addresses_nova
+from nova.on_air import MATCH_CAP, MAX_UTTERANCE, OnAirCues, OnAirListener, addresses_nova
 from nova.rehearsal import Rehearsal
 from nova.show_runner import NoVotes, ShowRunner
 from nova.timing import FULL
@@ -24,6 +24,8 @@ LEFT, RIGHT = Seat.LEFT, Seat.RIGHT
 ON_AIR_AT = FULL.free_talk + 20.0  # where hear_on_air puts the date: free talk
 GRACE, MAX_WAIT = 0.6, 1.5  # the defaults
 DISTRESSED = AlertModerator(ModeratorAlert.DATER_DISTRESSED, LEFT)
+POSSIBLE = AlertModerator(ModeratorAlert.POSSIBLE_DISTRESS, LEFT)
+UNCHECKED = AlertModerator(ModeratorAlert.DISTRESS_UNCHECKED, LEFT)
 
 
 class Model:
@@ -278,6 +280,13 @@ async def test_a_split_question_to_nova_gets_one_reply_to_the_whole_utterance():
         (("Nova said we'd get a question.",), False),
         (("Nova’s questions are hard.",), False),  # a curly apostrophe
         (("Did you hear what Nova", "said?"), False),  # directly followed, in the next final
+        # Hesitations and openers before Nova, as speech-to-text keeps them.
+        (("Okay, so, um, Nova, who goes first?",), True),
+        (("um so uh nova what do you think",), True),
+        (("Oh, wait, hey Nova, tea or coffee?",), True),
+        (("Uh, hi, um, Nova, can you repeat the question?",), True),
+        (("so um I think Nova is right",), False),
+        (("Okay so um I really love what Nova does",), False),
     ],
 )
 def test_words_are_to_nova_only_when_nova_is_addressed(finals, to_nova):
@@ -393,15 +402,14 @@ async def test_a_pause_inside_the_grace_keeps_one_utterance():
 
 
 async def test_a_request_to_stop_is_acted_on_after_the_cap_if_the_dater_keeps_talking():
-    """The voice detector never hears them stop: the words so far still end with the
-    request, so Nova acts MATCH_CAP seconds after hearing it, while they speak."""
+    """The voice detector never hears them stop (sobbing, or noise behind them): the words
+    so far still end with the request, so Nova acts MATCH_CAP seconds after hearing it,
+    while they speak."""
     listener, delivered, model, clock = on_air()
     listener.speech_started(LEFT)
     at(listener, clock, clock.now + 1.0)
     listener.hear(LEFT, "I want to stop.")
     heard_at = clock.now
-    at(listener, clock, heard_at + 1.0)
-    listener.hear(LEFT, "Sorry, it's just a lot.")
     at(listener, clock, heard_at + MATCH_CAP - 0.05)
     assert not paused(delivered)
     at(listener, clock, heard_at + MATCH_CAP)
@@ -463,7 +471,7 @@ async def test_next_due_is_when_the_listener_next_has_something_to_do():
     assert listener.next_due is None
     listener.speech_started(LEFT)
     listener.hear(LEFT, "Nova, tea or")
-    assert listener.next_due is None, "still speaking"
+    assert listener.next_due == clock.now + MAX_UTTERANCE, "still speaking: at the cap"
     listener.hear(LEFT, "I need a moment.")
     assert listener.next_due == clock.now + MATCH_CAP
     clock.now += 0.5
@@ -549,3 +557,224 @@ async def test_the_evaluation_can_set_up_what_a_dater_said_before_without_checki
     listener.remember(LEFT, "He keeps commenting on my body.", at=ON_AIR_AT - 2)
     await say(listener, clock, "Can we not do this?")
     assert model.checked == [("He keeps commenting on my body.", "Can we not do this?")]
+
+
+# --- Punctuated fragments -------------------------------------------------------------------
+
+# Speech-to-text punctuates each final, so a fragment usually ends with a full stop.
+PUNCTUATED_FRAGMENTS = [
+    ("I want to stop.", "Eating sugar, I mean."),
+    ("I need a break.", "From work, a holiday is overdue."),
+    ("Can we stop,", "and appreciate that answer?"),
+]
+
+
+@pytest.mark.parametrize("fragments", PUNCTUATED_FRAGMENTS)
+async def test_a_punctuated_fragment_alerts_the_moderator_and_the_meaning_layer_decides(fragments):
+    """Not a pause on a fragment: the moderator hears of a possible request at once, and
+    the model, given every word, says whether the dater wants to stop."""
+    listener, delivered, model, clock = on_air()
+    await say(listener, clock, *fragments)
+    assert not paused(delivered)
+    assert cues(delivered).count(POSSIBLE) == 1
+    assert [sentence for _, sentence in model.checked] == [" ".join(fragments)]
+
+
+async def test_a_punctuated_request_the_model_hears_as_meant_pauses_the_date():
+    words = "I want to stop. Sorry, it's just a lot."
+    listener, delivered, _, clock = on_air({words: "yes"})
+    await say(listener, clock, "I want to stop.", "Sorry, it's just a lot.")
+    alerts = [cue for cue in cues(delivered) if isinstance(cue, AlertModerator)]
+    assert alerts[0] == POSSIBLE, "the moderator first, at once"
+    assert paused(delivered) and DISTRESSED in cues(delivered)
+
+
+async def test_a_maybe_after_a_possible_request_alerts_the_moderator_only_once():
+    words = "I want to stop. Sorry, it's just a lot."
+    listener, delivered, _, clock = on_air({words: "maybe"})
+    await say(listener, clock, "I want to stop.", "Sorry, it's just a lot.")
+    assert cues(delivered).count(POSSIBLE) == 1 and not paused(delivered)
+
+
+async def test_a_punctuated_fragment_said_to_nova_still_gets_its_reply_after_a_no():
+    finals = ("Nova, I want to stop.", "Eating sugar, I mean, any tips?")
+    listener, delivered, _, clock = on_air()
+    await say(listener, clock, *finals)
+    assert not paused(delivered)
+    assert [reply.detail for reply in replies(delivered)] == [" ".join(finals)]
+
+
+async def test_a_possible_request_from_a_dater_who_keeps_talking_alerts_after_the_cap():
+    listener, delivered, _, clock = on_air()
+    listener.speech_started(LEFT)
+    at(listener, clock, clock.now + 1.0)
+    listener.hear(LEFT, "I want to stop.")
+    heard_at = clock.now
+    at(listener, clock, heard_at + 1.0)
+    listener.hear(LEFT, "Sorry, it's")
+    at(listener, clock, heard_at + MATCH_CAP - 0.05)
+    assert POSSIBLE not in cues(delivered)
+    at(listener, clock, heard_at + MATCH_CAP)
+    assert cues(delivered).count(POSSIBLE) == 1 and not paused(delivered)
+    listener.hear(LEFT, "a lot today.")
+    listener.speech_ended(LEFT)
+    at(listener, clock, clock.now + MAX_WAIT + 0.1)
+    await listener.heard()
+    assert cues(delivered).count(POSSIBLE) == 1, "once per utterance"
+
+
+async def test_a_possible_request_from_a_dater_who_stopped_is_due_at_the_close():
+    """Once the dater stops, the close alerts the moderator, so nothing is due at the cap:
+    whoever ticks at next_due must never be handed a time when there's nothing to do."""
+    listener, delivered, _, clock = on_air()
+    listener.speech_started(LEFT)
+    at(listener, clock, clock.now + 1.0)
+    listener.hear(LEFT, "I want to stop.")
+    heard_at = clock.now
+    at(listener, clock, heard_at + 1.0)
+    listener.hear(LEFT, "Sorry, it's")
+    at(listener, clock, heard_at + 2.9)
+    listener.speech_ended(LEFT)
+    assert listener.next_due == pytest.approx(heard_at + 2.9 + GRACE)
+    at(listener, clock, heard_at + 4.0)
+    await listener.heard()
+    assert cues(delivered).count(POSSIBLE) == 1
+
+
+# --- An utterance that never ends ----------------------------------------------------------
+
+
+async def test_an_utterance_the_voice_detector_never_hears_end_is_still_checked():
+    """Noise, or a dater who never pauses, keeps the voice detector hearing speech: the words
+    so far are checked every MAX_UTTERANCE seconds, never answered, and a yes pauses."""
+    finals = [f"part {k}." for k in range(15)]
+    second = " ".join(finals[5:10])
+    listener, delivered, model, clock = on_air({second: "yes"})
+    listener.speech_started(LEFT)
+    start = clock.now
+    for k, final in enumerate(finals):
+        at(listener, clock, start + 2.0 * k)
+        listener.hear(LEFT, final)
+        await asyncio.sleep(0)
+    at(listener, clock, start + 2.0 * 14 + 0.1)
+    await listener.heard()
+    assert [sentence for _, sentence in model.checked] == [" ".join(finals[:5]), second]
+    assert paused(delivered) and DISTRESSED in cues(delivered)
+    assert replies(delivered) == []
+    assert [closed.waited for closed in listener.closed] == [None, None]
+
+
+async def test_words_to_nova_past_the_cap_are_checked_but_not_answered_mid_sentence():
+    listener, delivered, model, clock = on_air()
+    listener.speech_started(LEFT)
+    start = clock.now
+    listener.hear(LEFT, "Nova, so here's the thing")
+    at(listener, clock, start + MAX_UTTERANCE)
+    await listener.heard()
+    assert [sentence for _, sentence in model.checked] == ["Nova, so here's the thing"]
+    assert replies(delivered) == [], "Nova never talks over a dater still speaking"
+
+
+# --- Waiting for the checks, and the end of the date ---------------------------------------
+
+
+class GatedModel(Model):
+    """Answers the distress check only once the gate opens, which may be never."""
+
+    def __init__(self, labels: dict[str, str] | None = None) -> None:
+        super().__init__(labels)
+        self.gate = asyncio.Event()
+
+    async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
+        answer = await super().label(system=system, prompt=prompt, schema=schema)
+        await self.gate.wait()
+        return answer
+
+
+def gated_on_air(labels: dict[str, str] | None = None):
+    runner = ShowRunner(REHEARSAL_PAIR, desk=InMemoryDecisionDesk(), poll=NoVotes(), first_up=LEFT)
+    runner.start(0.0)
+    delivered: list[OnAirCues] = []
+    model = GatedModel(labels)
+    clock = Clock(ON_AIR_AT)
+    listener = OnAirListener(
+        runner, DistressCheck(model, timeout=60.0), deliver=delivered.append, clock=clock
+    )
+    return listener, delivered, model, clock
+
+
+def close_an_utterance(listener: OnAirListener, clock: Clock, words: str) -> None:
+    listener.speech_ended(LEFT)
+    listener.hear(LEFT, words)
+    at(listener, clock, clock.now + GRACE)
+
+
+async def test_waiting_for_checks_that_have_just_finished_never_spins():
+    """Since Python 3.12, awaiting gather() over tasks that are already done doesn't yield,
+    so waiting on them in a loop until their callbacks run would spin forever."""
+    listener, _, model, clock = on_air()
+    close_an_utterance(listener, clock, "Tea, honestly.")
+    for _ in range(5):
+        await asyncio.sleep(0)
+    await asyncio.wait_for(listener.heard(), 1.0)
+    assert len(model.checked) == 1
+
+
+async def test_waiting_after_the_checks_were_stopped_returns():
+    listener, _, _, clock = gated_on_air()
+    close_an_utterance(listener, clock, "Tea, honestly.")
+    await asyncio.sleep(0)
+    listener.cancel()
+    await asyncio.wait_for(listener.heard(), 1.0)
+
+
+@pytest.mark.parametrize("started", [True, False], ids=["mid-check", "before-it-started"])
+async def test_a_check_stopped_at_the_end_of_the_date_alerts_the_moderator_as_unchecked(started):
+    listener, delivered, _, clock = gated_on_air()
+    close_an_utterance(listener, clock, "Nova, is this almost over?")
+    hold = next(d.hold for d in delivered if d.hold is not None)
+    if started:
+        await asyncio.sleep(0)
+    listener.cancel()
+    assert hold.result() is Verdict.UNCHECKED
+    await asyncio.sleep(0)
+    assert cues(delivered).count(UNCHECKED) == 1
+
+
+async def test_what_a_dater_is_still_saying_when_the_date_ends_is_heard():
+    words = "is this almost over"
+    listener, delivered, model, clock = on_air({words: "yes"})
+    listener.speech_ended(LEFT)
+    listener.hear(LEFT, words)  # still inside the grace
+    await listener.finish(1.0)
+    assert [sentence for _, sentence in model.checked] == [words]
+    assert DISTRESSED in cues(delivered)
+
+
+async def test_a_check_still_running_when_the_date_ends_alerts_after_the_timeout():
+    listener, delivered, _, _ = gated_on_air()
+    listener.speech_ended(LEFT)
+    listener.hear(LEFT, "is this almost over")
+    await listener.finish(0.05)
+    assert cues(delivered).count(UNCHECKED) == 1
+
+
+# --- What daters said stays in memory 15 seconds, then goes ---------------------------------
+
+
+async def test_a_daters_words_are_let_go_after_fifteen_seconds_even_in_silence():
+    listener, _, _, clock = on_air()
+    await say(listener, clock, "My street is lovely in spring.")
+    assert listener._listener._recent
+    at(listener, clock, clock.now + 16.0)
+    listener.tick()
+    assert listener._listener._recent == []
+
+
+async def test_nothing_a_dater_said_is_kept_once_the_date_is_over():
+    listener, _, _, _ = on_air()
+    listener.speech_started(LEFT)
+    listener.hear(LEFT, "I work at Northwind Bank")
+    listener.cancel()
+    assert listener._listener._recent == []
+    assert all(dater.utterance is None for dater in listener._daters.values())

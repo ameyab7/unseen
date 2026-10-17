@@ -11,21 +11,34 @@ starts the next utterance.
 The instant layer (nova/distress.py) hears each final as it arrives, joined with the
 dater's last few seconds, but acts only once the utterance closes, and only if the whole
 utterance still ends with the request: "I want to stop" then "eating sugar" is no request.
-If a dater who said one keeps talking, the words so far are checked again after
-MATCH_CAP seconds and acted on if they still end with it. An unmistakable request goes to
-the show runner and is never answered. Every other utterance goes to the meaning check
-once; if it was said to Nova, the reply cue is asked for at the same time and handed on
-with a hold, which resolves to the verdict once the verdict's own cues have been handed
+Speech-to-text punctuates each final, so the instant layer reads past the punctuation that
+ends a final ("I want to stop." then "eating sugar." is no request either). A request
+heard only with that punctuation might be a fragment or might be meant: the moderator is
+alerted at once (possible distress), and the meaning layer decides whether the date
+pauses. If a dater who said a request keeps talking, the words so far are checked again
+after MATCH_CAP seconds and acted on if they still end with it. An unmistakable request
+goes to the show runner and is never answered. Every other utterance goes to the meaning
+check once; if it was said to Nova, the reply cue is asked for at the same time and handed
+on with a hold, which resolves to the verdict once the verdict's own cues have been handed
 on. Whoever speaks the reply waits for the hold and drops the reply on a yes.
 
+An utterance also closes MAX_UTTERANCE seconds after its first final while the dater is
+still speaking, so a long story, or noise that keeps the voice detector hearing speech, is
+still checked: the words so far go to both layers, with no reply, since the dater hasn't
+finished. What they say next is the next utterance.
+
 Utterances close in tick(), which whoever runs the show calls as time passes, or in
-listen(), which does it until cancelled; anything a dater does also closes what's due.
+listen(), which does it until cancelled; anything a dater does also closes what's due. At
+the end of the date, finish() closes whatever is still open and waits for the checks in
+flight; a check that can't finish in time alerts the moderator as unchecked.
 
 What daters say stays in memory: an utterance until it closes, and the Listener 15
-seconds of it. Nothing here logs or stores it.
+seconds of it, pruned as time passes and cleared when the date is over. Nothing here logs
+or stores it.
 """
 
 import asyncio
+import contextlib
 import re
 import time
 from bisect import bisect_left
@@ -43,12 +56,20 @@ from nova.text import straight_quotes
 # A request the instant layer heard waits this long for the dater to stop speaking, then
 # the words so far are checked again.
 MATCH_CAP = 3.0
+# An utterance closes this long after its first final even if the dater is still speaking,
+# so the meaning layer always hears them.
+MAX_UTTERANCE = 10.0
 # A sentence end older than this isn't the one a transcript belongs to.
 SENTENCE_END_MAX_AGE = 5.0
 # Words to Nova name Nova in the first few words of a sentence or a final transcript
 # ("Nova, ...", "Hey Nova ...", "OK so Nova ...") or as its last word ("..., Nova?").
+# Hesitations and openers before those words don't count ("Okay, so, um, Nova, ...").
 # Anywhere else, Nova is talked about.
 ADDRESS_WORDS = 3
+OPENERS = frozenset(
+    {"um", "umm", "uh", "uhh", "er", "erm", "hmm", "hm", "oh", "okay", "ok", "so", "well"}
+    | {"wait", "hey", "hi", "like", "right", "yeah", "alright"}
+)
 # Nova directly followed by one of these is talked about, wherever it comes ("Nova said",
 # "Nova is so funny"); with a comma between, Nova is asked ("Nova, is it my turn?").
 # "Nova's" is one word, so never Nova.
@@ -74,12 +95,19 @@ def addresses_nova(*finals: str) -> bool:
         """The words that start between two places in text."""
         return range(bisect_left(starts, begin), bisect_left(starts, end))
 
+    def opening(part: range) -> range:
+        """The first few words of a part, after any hesitations and openers."""
+        skip = 0
+        while skip < len(part) and words[part[skip]].group() in OPENERS:
+            skip += 1
+        return part[skip : skip + ADDRESS_WORDS]
+
     parts = [between(sentence.start(), sentence.end()) for sentence in _SENTENCE.finditer(text)]
     begin = 0
     for final in finals:
         parts.append(between(begin, begin + len(final)))
         begin += len(final) + 1
-    named = {k for part in parts for k in (*part[:ADDRESS_WORDS], *part[-1:])}
+    named = {k for part in parts for k in (*opening(part), *part[-1:])}
     return any(_asked(text, words, k) for k in named)
 
 
@@ -125,6 +153,10 @@ class _Utterance:
     last_final: float
     words: list[str] = field(default_factory=list)
     matched: float | None = None  # when the instant layer heard a request in it
+    # When the instant layer first heard a request that, once more was said, it hears only
+    # with speech-to-text's punctuation; and whether the moderator has heard of it.
+    loose: float | None = None
+    alerted: bool = False
 
     @property
     def text(self) -> str:
@@ -155,7 +187,11 @@ class OnAirListener:
         self._clock = clock
         self.grace, self.max_wait = grace, max_wait
         self._daters = {seat: _Dater() for seat in Seat}
-        self._checks: set[asyncio.Task[None]] = set()
+        # Each meaning check in flight: what acts on it, with the dater, the hold it resolves
+        # and the model call itself.
+        self._checks: dict[
+            asyncio.Task[None], tuple[Seat, asyncio.Future[Verdict], asyncio.Task[Checked]]
+        ] = {}
         self.checks: list[Checked] = []  # distress checks: verdict and time only
         self.closed: list[Closed] = []  # utterances: layer and wait only
 
@@ -194,15 +230,18 @@ class OnAirListener:
         utterance.words.append(text)
         utterance.last_final = now
         self._listener.remember(now, seat, text)
-        if self._listener.unmistakable(now, seat, utterance.text) is None:
-            utterance.matched = None
+        if self._listener.unmistakable(now, seat, utterance.words) is None:
+            self._unmatched(now, seat, utterance)
         elif utterance.matched is None:
             utterance.matched = now
 
     def tick(self) -> None:
-        """Acts on every utterance that has closed by now, and on any request that has waited
-        MATCH_CAP for a dater who keeps talking."""
-        self._close_due(self._clock())
+        """Acts on every utterance that has closed by now, on any request that has waited
+        MATCH_CAP for a dater who keeps talking, and on anything a dater has been saying for
+        MAX_UTTERANCE without a break. Lets go of words older than the Listener keeps."""
+        now = self._clock()
+        self._close_due(now)
+        self._listener.prune(now)
 
     @property
     def next_due(self) -> float | None:
@@ -216,6 +255,11 @@ class OnAirListener:
                 due.append(self._closes_at(dater, utterance))
             if utterance.matched is not None:
                 due.append(utterance.matched + MATCH_CAP)
+            elif dater.speaking:
+                due.append(utterance.started + MAX_UTTERANCE)
+            # Only while they speak, as in _close_due: once they stop, the close alerts.
+            if dater.speaking and utterance.loose is not None and not utterance.alerted:
+                due.append(utterance.loose + MATCH_CAP)
         return min(due, default=None)
 
     async def listen(self, *, every: float = 0.1) -> None:
@@ -232,14 +276,55 @@ class OnAirListener:
         self._listener.remember(at, seat, text)
 
     async def heard(self) -> None:
-        """Waits for every distress check in flight, and what the show does with it."""
-        while self._checks:
-            await asyncio.gather(*self._checks)
+        """Waits for every distress check in flight, and what the show does with it. It never
+        waits on a check that is already done (since Python 3.12, awaiting gather() over
+        finished tasks doesn't yield, so the loop would spin), and it re-raises a check that
+        failed, so a bug shows."""
+        while True:
+            done = [task for task in self._checks if task.done()]
+            for task in done:
+                del self._checks[task]
+            for task in done:
+                error = None if task.cancelled() else task.exception()
+                if error is not None:
+                    raise error
+            if not self._checks:
+                return
+            await asyncio.wait(set(self._checks))
+
+    def flush(self) -> None:
+        """Closes every utterance still open, at once: the date is over, so nobody waits for
+        the rest of a sentence."""
+        now = self._clock()
+        for seat, dater in self._daters.items():
+            if dater.utterance is not None:
+                self._close(now, seat, dater, dater.utterance)
+
+    async def finish(self, timeout: float) -> None:
+        """The date is over: whatever a dater was still saying is acted on, the checks in
+        flight get up to timeout seconds, and any still running then alerts the moderator as
+        unchecked (cancel)."""
+        self.flush()
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self.heard(), timeout)
+        self.cancel()
 
     def cancel(self) -> None:
-        """Stops the distress checks still in flight: the date is over."""
-        for task in self._checks:
+        """Stops the distress checks still in flight, and lets go of what daters said: the
+        date is over. Each check stopped this way resolves its hold as unchecked and alerts
+        the moderator, as a check that failed does."""
+        for task, (seat, hold, check) in list(self._checks.items()):
+            if task.done():
+                continue
             task.cancel()
+            check.cancel()  # in case the task never started, and so never awaited it
+            if not hold.done():
+                hold.set_result(Verdict.UNCHECKED)
+                self._send(self._runner.distress_check(self._clock(), seat, Verdict.UNCHECKED))
+        self._checks.clear()
+        self._listener.clear()
+        for dater in self._daters.values():
+            dater.utterance, dater.ended = None, None
 
     # --- Internals --------------------------------------------------------------------------
 
@@ -256,43 +341,66 @@ class OnAirListener:
                 self._close(now, seat, dater, utterance)
             elif utterance.matched is not None and now >= utterance.matched + MATCH_CAP:
                 self._recheck(now, seat, dater, utterance)
+            elif dater.speaking:
+                if (
+                    utterance.loose is not None
+                    and not utterance.alerted
+                    and now >= utterance.loose + MATCH_CAP
+                ):
+                    self._possible_request(now, seat, utterance)
+                if utterance.matched is None and now >= utterance.started + MAX_UTTERANCE:
+                    self._close(now, seat, dater, utterance, capped=True)
 
-    def _close(self, now: float, seat: Seat, dater: _Dater, utterance: _Utterance) -> None:
+    def _close(
+        self, now: float, seat: Seat, dater: _Dater, utterance: _Utterance, *, capped: bool = False
+    ) -> None:
         """The utterance is over: the instant layer on all of it, or else the meaning layer,
         and a reply if it was said to Nova. Beats already due are handed on first, so
-        they're never taken for the reply."""
+        they're never taken for the reply. capped: the dater is still speaking, past
+        MAX_UTTERANCE, so their words are checked but not answered yet."""
         ended = dater.ended if dater.ended is not None else utterance.last_final
         dater.utterance, dater.ended = None, None
         runner, words = self._runner, utterance.text
         if runner.started:
             self._send(runner.tick(now))
-        hearing = self._listener.utterance(now, seat, words, since=utterance.started)
+        hearing = self._listener.utterance(now, seat, utterance.words, since=utterance.started)
         instant = hearing.unmistakable is not None
-        self.closed.append(Closed(seat, instant=instant, waited=now - ended))
+        self.closed.append(Closed(seat, instant=instant, waited=None if capped else now - ended))
         slipped = personal_detail(words)  # conduct's instant layer (decision 0006)
         if slipped is not None:
             self._send(runner.dater_conduct(now, seat, slipped.conduct, street=slipped.street))
         if hearing.unmistakable is not None:
             self._wants_to_stop(now, seat, hearing.unmistakable, utterance, ended)
             return
+        if self._listener.unmistakable(now, seat, utterance.words, loose=True) is not None:
+            self._possible_request(now, seat, utterance)
         hold: asyncio.Future[Verdict] | None = None
         if hearing.check is not None:
             hold = asyncio.get_running_loop().create_future()
             task = asyncio.ensure_future(
-                self._act_on(hearing.check, seat, ended, now, hold, heard_detail=bool(slipped))
+                self._act_on(
+                    hearing.check,
+                    seat,
+                    ended,
+                    now,
+                    hold,
+                    heard_detail=bool(slipped),
+                    alerted=utterance.alerted,
+                )
             )
-            self._checks.add(task)
-            task.add_done_callback(self._checks.discard)
-        if addresses_nova(*utterance.words):  # one reply, to the whole utterance
-            self._send(runner.dater_asked_nova(now, seat, words), ended, hold, now)
+            self._checks[task] = (seat, hold, hearing.check)
+            task.add_done_callback(self._done)
+        if not capped and addresses_nova(*utterance.words):  # one reply, to the whole utterance
+            asked = runner.dater_asked_nova(now, seat, words, wants_to_stop=False)
+            self._send(asked, ended, hold, now)
 
     def _recheck(self, now: float, seat: Seat, dater: _Dater, utterance: _Utterance) -> None:
         """A request has waited MATCH_CAP while the dater kept talking: if the words so far
         still end with it, it's acted on now and the utterance is over; if not, it waits for
         the next one or the close."""
-        heard = self._listener.unmistakable(now, seat, utterance.text)
+        heard = self._listener.unmistakable(now, seat, utterance.words)
         if heard is None:
-            utterance.matched = None
+            self._unmatched(now, seat, utterance)
             return
         stopped = not dater.speaking and dater.ended is not None
         ended = dater.ended if stopped else utterance.matched
@@ -304,12 +412,33 @@ class OnAirListener:
         self.closed.append(Closed(seat, instant=True, waited=now - ended if stopped else None))
         self._wants_to_stop(now, seat, heard, utterance, ended)
 
+    def _unmatched(self, now: float, seat: Seat, utterance: _Utterance) -> None:
+        """The instant layer no longer hears a request in the utterance. If it still does with
+        speech-to-text's punctuation, the request may be meant: from when it was first heard,
+        it gets the moderator's attention after MATCH_CAP, or when the utterance closes."""
+        loose = self._listener.unmistakable(now, seat, utterance.words, loose=True)
+        if utterance.loose is None and loose is not None:
+            utterance.loose = utterance.matched if utterance.matched is not None else now
+        utterance.matched = None
+
+    def _possible_request(self, now: float, seat: Seat, utterance: _Utterance) -> None:
+        """A request heard only with speech-to-text's punctuation ("I want to stop." then more
+        words): the moderator is alerted at once, as possible distress, and the meaning layer
+        decides whether the date pauses. Once per utterance."""
+        if utterance.alerted:
+            return
+        utterance.alerted = True
+        self._send(self._runner.distress_check(now, seat, Verdict.MAYBE))
+
     def _wants_to_stop(
         self, now: float, seat: Seat, heard: str, utterance: _Utterance, ended: float
     ) -> None:
         runner = self._runner
         said = runner.dater_asked_nova if addresses_nova(*utterance.words) else runner.dater_said
-        self._send(said(now, seat, heard), ended, closed_at=now)
+        self._send(said(now, seat, heard, wants_to_stop=True), ended, closed_at=now)
+
+    def _done(self, task: asyncio.Task[None]) -> None:
+        self._checks.pop(task, None)
 
     async def _act_on(
         self,
@@ -320,18 +449,21 @@ class OnAirListener:
         hold: asyncio.Future[Verdict],
         *,
         heard_detail: bool = False,
+        alerted: bool = False,
     ) -> None:
         """The verdict's cues are handed on first, then the hold resolves; then the conduct
         label from the same call, unless it's a personal detail the instant layer already
-        heard."""
+        heard. alerted: the moderator already heard of this utterance as possible distress,
+        so a maybe isn't sent twice."""
         verdict = Verdict.UNCHECKED
         conduct: Conduct | None = None
         try:
             checked = await check
             verdict, conduct = checked.verdict, checked.conduct
             self.checks.append(checked)
-            cues = self._runner.distress_check(self._clock(), seat, verdict)
-            self._send(cues, sentence_end, closed_at=closed_at)
+            if not (alerted and verdict is Verdict.MAYBE):
+                cues = self._runner.distress_check(self._clock(), seat, verdict)
+                self._send(cues, sentence_end, closed_at=closed_at)
         finally:
             if not hold.done():
                 hold.set_result(verdict)
