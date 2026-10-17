@@ -70,7 +70,8 @@ STREET_CAPITALISED = re.compile(
 )
 # Cues that give an address: what follows is one.
 ADDRESS_CUE = re.compile(
-    r"\bmy\s+(?:street|address|postcode|zip code)\s+is\b|\b(?:address|postcode|zip code)\s+is\b",
+    r"\bmy\s+(?:street|address|postcode|zip code)(?:\s+is|'s)\b"  # "my postcode's e8 3pq"
+    r"|\b(?:address|postcode|zip code)(?:\s+is|'s)\b",
     re.IGNORECASE,
 )
 # Cues that say where someone lives. What follows is an address only with a number or a

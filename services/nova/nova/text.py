@@ -2,6 +2,7 @@
 listener and tonight's memory, so each rule is written once."""
 
 import re
+import unicodedata
 from collections.abc import Collection, Iterable, Iterator
 
 # Curly quotes from models and speech-to-text, made straight.
@@ -17,6 +18,17 @@ def any_of(*patterns: str, flags: int = re.IGNORECASE) -> re.Pattern[str]:
 
 def straight_quotes(text: str) -> str:
     return text.translate(STRAIGHT_QUOTES)
+
+
+def nfkc(text: str) -> str:
+    """Lookalike characters as the plain ones they stand for: a full-width ｗ or a bold 𝐰 is
+    w. The model reads its data this way (nova/prompts.py), so the checks read it so too."""
+    return unicodedata.normalize("NFKC", text)
+
+
+def without_possessive(word: str) -> str:
+    """A word without a possessive ending: "D'Andre's" is "D'Andre", "James'" is "James"."""
+    return word.removesuffix("'s").removesuffix("'")
 
 
 def plain(text: str) -> str:
@@ -40,8 +52,10 @@ def starts_sentence(text: str, index: int) -> bool:
 def capitalised_mid_sentence(text: str, skip: Collection[str] = ()) -> Iterator[str]:
     """Capitalised words in the middle of a sentence, up to any apostrophe: likely names,
     places, workplaces or schools. A word capitalised only because it starts a sentence is
-    not, and nor is any word in skip."""
+    not, and nor is any word in skip, whole or without its possessive ("D'Andre's")."""
     for match in WORD.finditer(text):
+        if without_possessive(match.group(0)) in skip:
+            continue
         base = match.group(0).split("'")[0]
         if base[:1].isupper() and base not in skip and not starts_sentence(text, match.start()):
             yield base

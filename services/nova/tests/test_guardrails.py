@@ -3,6 +3,7 @@ model's output (or a prompt injection that fooled it) and the room."""
 
 import pytest
 
+from nova.conduct import personal_detail
 from nova.guardrails import (
     Violation,
     card_words,
@@ -228,6 +229,18 @@ OFF_LIMITS = [
     "What does Theo's hair look like?",
     "What's your job, Maya?",
     "Where does Theo live?",
+    # Narrowed too far before (review of main at bfaed17): held back again.
+    "What school did you go to?",
+    "What's Theo's job?",
+    "What job do you do, Maya?",
+    "Can I get Theo's number?",
+    "What colour are Theo's eyes?",
+    "What's Theo's height?",
+    "Theo, what does Maya do for a living?",
+    "Where does Maya’s sister live?",  # iOS types a curly apostrophe
+    "What’s Theo’s job?",
+    "Shall we swap numbers after the show, Theo?",
+    "What's your eye colour, Maya?",
 ]
 
 
@@ -255,6 +268,13 @@ APPROVED_HARMLESS = [
     "Have you ever been face to face with a wild animal?",
     "What was your favourite subject at school?",
     "What's a job you'd do for free?",
+    "What's your dream job?",
+    "What's Theo's dream job?",
+    "What's number one on your bucket list?",
+    "What was school like for you?",
+    "What job would you do if money didn't matter?",
+    "What's Theo's lucky number?",
+    "What's your favourite colour?",
 ]
 
 
@@ -566,3 +586,239 @@ def test_nationalities_languages_and_cuisines_stay_blocked(line):
 
 def test_a_slash_is_still_formatting_because_the_voice_reads_it_aloud():
     assert V.FORMATTING in found("Maya, Theo: coffee/tea, which one?")
+
+
+# --- Review of main at bfaed17: personal details stay off air --------------------------------
+
+
+@pytest.mark.parametrize(
+    ("said", "expected"),
+    [
+        ("i work at boeing", {"boeing"}),
+        ("i work at sterling bank", {"sterling", "bank"}),
+        ("my surname is harding", {"harding"}),
+        ("we live near ealing", {"ealing"}),
+        ("i study at reading", {"reading"}),
+        ("i work at um northwind bank", {"northwind", "bank"}),
+        ("Nova, I work at, um, Northwind Bank.", {"northwind", "bank"}),
+        ("i work at like brightloop", {"brightloop"}),
+        ("i work at uh tilly bakes", {"tilly", "bakes"}),
+        ("my surname's lopez", {"lopez"}),
+        ("my last name's lopez", {"lopez"}),
+        ("my surname’s lopez", {"lopez"}),
+        ("Nova, my surname's Lopez, by the way.", {"lopez"}),
+        ("my insta's maya dot bakes", {"dot", "bakes"}),
+    ],
+)
+def test_slot_words_take_ing_names_hesitations_and_contractions(said, expected):
+    """An -ing word is a place or a surname unless it's effort ("being", "keeping");
+    speech-to-text keeps hesitations and writes "'s"."""
+    assert slot_words([said], NAMES) == expected
+    assert personal_detail(said) is not None
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "I work at being a better listener.",
+        "i work at keeping my plants alive",
+        "The place I work at, the managers are lovely.",
+        "The people I work for, honestly, are great.",
+    ],
+)
+def test_effort_and_a_clause_that_ends_are_still_no_slot(said):
+    assert slot_words([said], NAMES) == set()
+    assert personal_detail(said) is None
+
+
+@pytest.mark.parametrize(
+    ("said", "line"),
+    [
+        ("i work at boeing", "Boeing sounds busy, Maya."),
+        ("i work at sterling bank", "Sterling sounds busy, Maya."),
+        ("my surname is harding", "Harding, Maya? Lovely."),
+        ("Nova, I work at, um, Northwind Bank.", "Northwind sounds busy, Maya."),
+        ("i work at northwind", "Northwind-style hours, Maya?"),
+        ("I work at Northwind.", "Northwind-style hours, Maya?"),
+        ("i work at brightloop", "Brightloop-level focus, Theo?"),
+        ("We love the Northwind-Bank crowd.", "Northwind sounds fun, Maya."),
+    ],
+)
+def test_nova_never_echoes_them_even_hyphenated(said, line):
+    assert V.PERSONAL_DETAIL in check(line, names=NAMES, echo_from=[said])
+
+
+def test_a_hyphenated_ordinary_word_is_still_fine():
+    assert check("A well-known story, Maya? Back to you both.", names=NAMES) == ()
+
+
+def test_my_postcodes_is_an_address_and_my_names_is_not_a_detail():
+    slipped = personal_detail("my postcode's e8 3pq")
+    assert slipped is not None and slipped.street
+    assert personal_detail("My name's Maya, by the way.") is None
+
+
+# Lookalike letters: the model reads them as plain ones, so the checks do too.
+@pytest.mark.parametrize("question", ["Where do you ｗork, Theo?", "Where do you 𝐰ork, Theo?"])
+def test_lookalike_letters_never_slip_a_question_past_the_screen(question):
+    assert screen_question(question) == (OffLimits.PERSONAL_DETAIL,)
+
+
+def test_a_lookalike_workplace_is_still_echoed():
+    said = ["I work at Ｎorthwind."]
+    assert V.PERSONAL_DETAIL in check("Northwind sounds busy, Theo.", names=NAMES, echo_from=said)
+
+
+def test_a_lookalike_card_place_is_a_card_word():
+    assert card_words(["Ask me about getting lost in Ｌisbon."]) == {"Lisbon"}
+
+
+# --- The show's name --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Maya: Unseen.",
+        "Theo: Unseen, I reckon.",
+        "Maya... Unseen?",
+        "Theo… Unseen?",
+        "Unseen, Maya?",
+        "Unseen's the safe call for Theo.",
+        "Unseen is the safe bet for Theo.",
+        "Unseen tonight, Maya?",
+        "Theo leans to Unseen.",
+        "Maya is on Unseen, room.",
+        "My read: Unseen for Theo.",
+    ],
+)
+def test_the_show_name_never_hides_a_guess_at_a_choice(line):
+    assert V.DECISION in found(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "You're listening to Unseen, room.",
+        "Good evening and welcome back to Unseen.",
+        "Thanks for tuning in to Unseen.",
+        "Unseen continues after this.",
+        "Tonight on Unseen, Maya and Theo.",
+    ],
+)
+def test_the_show_name_still_passes_wherever_it_names_the_show(line):
+    assert found(line) == set()
+
+
+# --- The rose gift -------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Room, a red rose for Theo?",
+        "A single rose for Maya, room?",
+        "Send your best rose, room.",
+        "Rose for Maya, anyone?",
+        "One more rose for Theo?",
+        "Who's sending a rose tonight?",
+    ],
+)
+def test_the_paid_rose_is_caught_however_it_is_put(line):
+    assert V.SPENDING in found(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["Theo rose to the challenge there.", "Who rose earliest this morning, Maya?"],
+)
+def test_rose_the_verb_is_still_fine(line):
+    assert V.SPENDING not in found(line)
+
+
+def test_a_dater_called_rose_still_cant_hear_nova_ask_for_a_red_rose():
+    names = frozenset({"Rose", "Theo", "Nova"})
+    assert V.SPENDING in check("Theo, a red rose for Rose?", names=names)
+    assert check("Rose, Theo, who rose earliest this morning?", names=names) == ()
+
+
+# --- Names with apostrophes, and places from the cards ---------------------------------------
+
+DANDRE = frozenset({"D'Andre", "Theo", "Nova"})
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "On my left, D'Andre, 27, who once got lost in a maze. Theo, over to you.",
+        "D'Andre's turn. Theo, hold that thought.",
+        "Theo, that was D'Andre's best story yet.",
+    ],
+)
+def test_a_first_name_with_an_apostrophe_is_a_name(line):
+    assert check(line, names=DANDRE) == ()
+    assert check(line, names=DANDRE, echo_from=["I'm D'Andre, nice to meet you."]) == ()
+
+
+def test_other_apostrophe_names_and_surnames_are_still_caught():
+    assert V.UNKNOWN_NAME in check("Theo, what about O'Brien?", names=DANDRE)
+    assert V.PERSONAL_DETAIL in check("Theo, meet D'Andre Lopez.", names=DANDRE)
+    said = ["We went to O'Malley's after."]
+    assert V.PERSONAL_DETAIL in check("O'Malley's sounds fun, Theo.", names=DANDRE, echo_from=said)
+
+
+@pytest.mark.parametrize(
+    ("card", "line"),
+    [
+        ("Ask me about the summer I got lost in New York.", "Sam, getting lost in New York?"),
+        ("Ask me about a summer in Hong Kong.", "Sam, a summer in Hong Kong, really?"),
+    ],
+)
+def test_a_multi_word_place_from_the_card_may_be_said(card, line):
+    assert check(line, names=SAM_NAMES, card_words=card_words([card])) == ()
+
+
+def test_a_card_word_after_a_first_name_is_still_a_surname():
+    words = card_words(["My friend Lopez lives in York."])
+    for line in ("Sam Lopez, tell us more.", "Sam York, tell us more."):
+        assert V.PERSONAL_DETAIL in check(line, names=SAM_NAMES, card_words=words)
+
+
+# --- Streets ---------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "The way you tell it, Maya, I believe you.",
+        "Great place to start, Theo.",
+        "Pretty close, Maya.",
+        "My way or the highway, Theo?",
+        "Good way to put it, Maya.",
+        "Good place for a story, Theo.",
+    ],
+)
+def test_common_openers_with_a_street_word_are_not_addresses(line):
+    assert V.PERSONAL_DETAIL not in found(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Harbour Street, Maya?",
+        "Maya, Elm Road sounds lovely.",
+        "Market Place, room.",
+        "Church St, Maya?",
+        "Maya, Maple Drive?",
+    ],
+)
+def test_named_streets_are_still_addresses(line):
+    assert V.PERSONAL_DETAIL in found(line)
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["Great place for a first date, Theo?", "The way you laugh, Maya, where's it from?"],
+)
+def test_a_question_that_opens_like_a_street_is_not_held_back(question):
+    assert screen_question(question) == ()

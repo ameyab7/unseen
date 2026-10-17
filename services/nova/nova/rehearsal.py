@@ -5,8 +5,10 @@ every line against the targets in docs/spike-results.md. Nothing here talks to L
 nova/agent.py connects Nova's voice (a Speaker) and passes in what happens in the room.
 
 One browser plays both daters, so the chat box picks the seat that's speaking and stands in
-for the app and the moderator console (Command). What daters say or type stays in memory;
-the log and the report hold codes and numbers only.
+for the app and the moderator console (Command). What daters say stays in memory only as
+long as the on-air listener needs it (nova/on_air.py); the cues the rehearsal keeps carry
+none of it. The log and the report hold codes and numbers only, and never a dater's
+private decision.
 """
 
 import asyncio
@@ -15,7 +17,7 @@ import statistics
 import time
 from collections import Counter
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Protocol
 
@@ -193,7 +195,9 @@ class Rehearsal:
         self._speaking: Seat | None = None  # who the voice detector last heard start
         # Who the voice detector last heard stop, and when: their late final is theirs.
         self._ended: tuple[Seat, float] | None = None
-        self.cues: list[Cue] = []  # in memory only
+        # Every cue the date gave, for the report and the tests, without the words in them:
+        # what a dater said to Nova and the audience's questions go to the line writer only.
+        self.cues: list[Cue] = []
         self.spoken: list[Spoken] = []
         self.alerts = 0
         self.characters_spoken = 0
@@ -332,7 +336,11 @@ class Rehearsal:
                 self._queue_cues(runner.dater_left(now, seat))
             case Command.REPORT:
                 self._queue_cues(runner.dater_reported(now, seat))
-        self._events.emit(Event.COMMAND, command=command, seat=self.seat)
+        if command in (Command.REVEAL, Command.UNSEEN):
+            # The command is the decision itself: no seat's choice is ever in the log.
+            self._events.emit(Event.COMMAND, command=None, seat=None)
+        else:
+            self._events.emit(Event.COMMAND, command=command, seat=self.seat)
         return command
 
     def speech_started(self) -> None:
@@ -403,7 +411,7 @@ class Rehearsal:
         now = self._clock()
         reply_due = sentence_end is not None
         for cue in cues:
-            self.cues.append(cue)
+            self.cues.append(replace(cue, detail=None) if isinstance(cue, Say) else cue)
             if isinstance(cue, StopSpeaking):
                 self._stop()
             if isinstance(cue, AlertModerator):

@@ -1,6 +1,7 @@
 """Seats and blind cards: what Nova knows about the two daters on air."""
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -9,8 +10,12 @@ from enum import StrEnum
 FIRST_NAME = re.compile(r"[^\W\d_]+(?:[ '-][^\W\d_]+)*")  # letters; single spaces, - or '
 MAX_FIRST_NAME = 30
 # The host's names: on audio the room couldn't tell host from dater, and the guardrails
-# treat "Nova" as the host.
+# treat "Nova" as the host. A name is reserved whole ("Ai"), and "Nova" as a first part too
+# ("Nova Lee"); "Ai Lin" is fine.
 RESERVED_NAMES = frozenset({"nova", "ai"})
+# A part of a name in capitals is spelled out by the voice ("MAYA"); two letters are often
+# meant to be (AJ, TJ).
+MAX_CAPITALS = 2
 MIN_AGE, MAX_AGE = 18, 99
 PROMPTS = 2  # a card has exactly two
 MAX_QUESTION = 60  # the app's fixed prompt questions
@@ -58,15 +63,22 @@ class BlindCard:
     approved_for_air: bool = False
 
     def __post_init__(self) -> None:
+        # Composed, as the model reads it: a decomposed "Zoë" would fail the guardrails.
+        object.__setattr__(self, "first_name", unicodedata.normalize("NFC", self.first_name))
         name = self.first_name
         if len(name) > MAX_FIRST_NAME or not FIRST_NAME.fullmatch(name):
             raise InvalidCard(
                 f"first_name must be letters, with single spaces, hyphens or apostrophes "
                 f"between them, at most {MAX_FIRST_NAME} characters"
             )
-        if not name[0].isupper():
+        if unicodedata.normalize("NFKC", name) != name:
+            raise InvalidCard("first_name must be written in ordinary letters, not lookalikes")
+        if name[0].islower():  # names in scripts without capitals are fine
             raise InvalidCard("first_name must start with a capital letter")
-        if name.lower() in RESERVED_NAMES:
+        if any(part.isupper() and len(part) > MAX_CAPITALS for part in re.split(r"[ '-]", name)):
+            raise InvalidCard("first_name must not be written in capitals")
+        first_part = re.split(r"[ '-]", name)[0].lower()
+        if name.lower() in RESERVED_NAMES or first_part == "nova":
             raise InvalidCard("first_name can't be the host's name (Nova or AI)")
         if type(self.age) is not int or not MIN_AGE <= self.age <= MAX_AGE:
             raise InvalidCard(f"age must be a whole number from {MIN_AGE} to {MAX_AGE}")
@@ -79,11 +91,11 @@ class BlindCard:
             )
         if len(self.prompts) != PROMPTS:
             raise InvalidCard(f"prompts must hold exactly {PROMPTS} prompts")
-        for prompt in self.prompts:
-            question, answer = prompt.question.strip(), prompt.answer.strip()
-            if not question or len(question) > MAX_QUESTION:
+        for prompt in self.prompts:  # as kept and sent to the model: spaces count
+            question, answer = prompt.question, prompt.answer
+            if not question.strip() or len(question) > MAX_QUESTION:
                 raise InvalidCard(f"a prompt's question must be 1 to {MAX_QUESTION} characters")
-            if not answer or len(answer) > MAX_ANSWER:
+            if not answer.strip() or len(answer) > MAX_ANSWER:
                 raise InvalidCard(f"a prompt's answer must be 1 to {MAX_ANSWER} characters")
 
     @property
@@ -98,8 +110,9 @@ class Pair:
     right: BlindCard
 
     def __post_init__(self) -> None:
-        # On audio, "Alex and Alex are deciding, privately" means nothing.
-        if self.left.first_name.lower() == self.right.first_name.lower():
+        # On audio, "Alex and Alex are deciding, privately" means nothing, and nor does
+        # "Zoë and Zoe": names that sound the same, whatever their case or accents.
+        if _sounds(self.left.first_name) == _sounds(self.right.first_name):
             raise InvalidCard(
                 "the two daters on a date need different first names: cast another pair, or "
                 "ask one of them for a name to use on air"
@@ -111,3 +124,9 @@ class Pair:
     @property
     def label(self) -> str:
         return f"{self.left.label} and {self.right.label}"
+
+
+def _sounds(name: str) -> str:
+    """A name as it sounds on audio, near enough: no accents, no case."""
+    decomposed = unicodedata.normalize("NFKD", name)
+    return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()

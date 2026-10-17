@@ -18,7 +18,10 @@ from nova.text import (
     any_of,
     capitalised_mid_sentence,
     mask_names,
+    nfkc,
     starts_sentence,
+    straight_quotes,
+    without_possessive,
 )
 
 
@@ -106,9 +109,12 @@ SPENDING = any_of(
     r"\bmembership\b",
     r"\bsubscri\w*",
     r"\bencores?\b",
-    # Roses as a gift, not the verb ("who rose earliest", for a dater called Rose too).
+    # A rose is the 25-coin gift, however it's put ("a red rose for Theo", "Rose for Maya?").
+    # Not the verb: after a subject ("who rose earliest", "the room rose to its feet", a
+    # dater's masked name), and a dater called Rose is masked before this runs.
     r"\broses\b",
-    r"\b(?:a|one|send|sent|give|gave|throw|threw)\s+(?:them\s+|her\s+|him\s+)?(?:a\s+)?rose\b",
+    r"(?<!\bwho )(?<!\bshe )(?<!\bhe )(?<!\bthey )(?<!\bwe )(?<!\bi )(?<!\byou )(?<!\bit )"
+    r"(?<!\bName )(?<!\broom )(?<!\bcrowd )(?<!\bsun )\brose\b",
 )
 
 # Teasing is fine; humiliation is not.
@@ -185,14 +191,22 @@ SLOT_CUE = any_of(
     r"\bemployed\s+by\b",
     r"\bmy\s+(?:job|boss|office)(?:\s+is)?\s+at\b",
     r"\b(?:live|lives|lived|living)\s+(?:on|at|near)\b",  # not "in": a city is fine
-    r"\bmy\s+(?:street|address|school|postcode)\s+is\b",
+    r"\bmy\s+(?:street|address|school|postcode)(?:\s+is|'s)\b",  # speech-to-text writes 's
     r"\b(?:study|studied|studying)\s+at\b",
-    r"\bmy\s+(?:insta|instagram|handle|snap|number|email|surname|last name)\s+is\b",
+    r"\bmy\s+(?:insta|instagram|handle|snap|number|email|surname|last name)(?:\s+is|'s)\b",
     r"\bmy\s+(?:company|business|shop|school|street|building)(?:'s|\s+is)?\s+(?:called|named)\b",
 )
 SLOT_WORDS = 3
 SLOT_TOKEN = re.compile(r"[^\W_]+(?:'[^\W_]+)*|[^\w\s]")  # a word, or one punctuation mark
 SLOT_SKIPPED = frozenset({"the", "a", "an"})  # before the slot: "at the northwind bank"
+# Hesitations before the slot, which speech-to-text keeps: "i work at, um, northwind bank".
+HESITATIONS = frozenset({"um", "umm", "uh", "uhh", "er", "erm", "hmm", "like"})
+# Effort, not a place: "i work at being a better listener", "i work at keeping fit". A list,
+# not every word ending in -ing, which would miss Sterling, Boeing, Ealing or Harding.
+EFFORT_WORDS = frozenset(
+    {"being", "getting", "keeping", "making", "trying", "staying", "becoming", "learning"}
+    | {"improving", "doing"}
+)
 FUNCTION_WORDS = frozenset((
     "the", "a", "an", "and", "or", "but", "so", "because", "if", "then", "than", "as",
     "with", "without", "to", "in", "on", "at", "for", "of", "by", "from", "near", "into",
@@ -209,33 +223,45 @@ FUNCTION_WORDS = frozenset((
 
 # A street: a capitalised word or a number, then a street word ("Harbour Street", "42 Elm Road").
 # Words that can't name a street don't count, so "Either way", "So close", "a Sunday drive"
-# and "First place" aren't addresses.
+# and "First place" aren't addresses. Drive, Way, Place, Court, Close and Square are
+# everyday words too, so they count only capitalised: "Maple Drive", not "Great place to
+# start" or "The way you tell it".
 NOT_A_STREET_NAME = (
     "Either", "Neither", "No", "Any", "One", "Some", "That", "This", "Which", "Each", "Every",
     "Same", "First", "Last", "Next", "So", "Too", "Half", "All", "Long",
+    "The", "A", "An", "My", "Your", "Our", "Their", "His", "Her", "Its",
     "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
 )  # fmt: skip
 STREET = re.compile(
     rf"\b(?:\d+|(?!(?:{'|'.join(NOT_A_STREET_NAME)})\b)[A-Z][a-z]+)\s+"
-    r"(?i:street|st|road|rd|avenue|ave|lane|ln|boulevard|blvd|drive|way|place|court|terrace"
-    r"|crescent|close|square)\b"
+    r"(?:(?i:street|st|road|rd|avenue|ave|lane|ln|boulevard|blvd|terrace|crescent)"
+    r"|Drive|Way|Place|Court|Close|Square)\b"
 )
 
 # Audience questions the screen holds back. Moderator approval is the main gate (decision
 # 0005), so these are narrow enough to let harmless approved questions through: "your lucky
-# number", "a job you'd do for free", "favourite subject at school", "face to face".
+# number", "your dream job", "favourite subject at school", "face to face".
+# Someone's own: "your", "his", "her", "their" or a name's ("Theo's"), not "what's".
+_SOMEONES = (
+    r"\b(?:(?!(?:what|that|it|there|here|who|where|how|let|he|she)'s\b)[\w-]+'s"
+    r"|your|his|her|their)"
+)
 QUESTION_PERSONAL_DETAIL = any_of(
     *_CONTACT_AND_HOME,
     # "where do you work", "where does Theo live", "where did Maya's sister grow up"
     r"\bwhere\s+(?:do|does|did)\s+(?:[\w']+\s+){1,2}?(?:work|live|study|stay|grow up"
     r"|go to school)\b",
-    r"\bwhat\s+(?:do|does)\s+(?:you|he|she|they)\s+do for (?:a living|work)\b",
-    r"\b(?:your|his|her|their)\s+(?:job|company|boss)\b",  # someone's own, not "a job"
+    r"\bwhat\s+(?:do|does)\s+\w+\s+do for (?:a living|work)\b",
+    # Someone's job, company, boss or number to call: not "a job" or "your lucky number".
+    rf"{_SOMEONES}\s+(?:phone\s+)?(?:number|job|company|boss|employer)\b",
+    r"\bwhat\s+(?:kind of\s+|sort of\s+)?(?:job|company|work)\s+(?:do|does|did)\s+\w+\s+"
+    r"(?:do|have|work)\b",
+    r"\b(?:swap|exchange|share|trade)\w*\s+(?:phone\s+)?numbers\b",
     r"\b(?:street|address|neighbou?rhood|postcode|zip)\b",
     r"\b(?:phone|digits|e-?mail|handle|username|socials?)\b",
-    r"\byour\s+number\b",  # to call, not "your lucky number"
-    # School only with which, where or the name of: not "a subject at school".
+    # School with which, where, what or the name of: not "what was school like".
     r"\b(?:which|where|name of)\b.{0,30}\b(?:school|uni|university|college)\b",
+    r"\bwhat\s+(?:\w+\s+)?(?:school|uni|university|college)\s+(?:did|do|does|are|is|was|were)\b",
     # A favourite place only near home: not "your favourite place to travel".
     rf"\blocal\s+{_SPOT}\b",
     rf"\bfavou?rite\s+{_SPOT}\b.{{0,30}}\b(?:near|nearby|in town|around here|in the city)\b",
@@ -245,9 +271,12 @@ QUESTION_LOOKS = any_of(
     r"\bwhat\s+(?:do|does)\s+\w+(?:\s+\w+)?\s+look\b",
     r"\b(?:attractive|hot|cute|pretty|handsome|beautiful|gorgeous|sexy|ugly)\b",
     r"\b(?:tall|weight)\b",
-    # Face, body, eyes, hair and height only next to a looks word: not "face to face".
+    # Face, body, eyes, hair and height next to a looks word or someone's: not "face to face".
     r"\b(?:look|looks|attractive|describe)\b.{0,30}\b(?:face|body|eyes|hair|height)\b",
     r"\b(?:face|body|eyes|hair|height)\b.{0,30}\b(?:look|looks|attractive|describe)\b",
+    rf"{_SOMEONES}\s+(?:height|weight|eyes|hair|face|body)\b",
+    r"\b(?:colou?r|shade)\b.{0,20}\b(?:eyes|hair)\b",
+    r"\b(?:eyes?|hair)\s+colou?r\b",
 )
 
 # Audience questions that try to give Nova instructions: the screen holds them back.
@@ -263,7 +292,21 @@ INSTRUCTING_NOVA = any_of(
 )
 
 SHOW_NAME = "Unseen"  # where it names the show; "keep it Unseen" is decision talk
-SHOW_NAME_BEFORE = re.compile(r"\b(?:on|to|of|at|from|this is|welcome to)\s+$", re.IGNORECASE)
+# Words before the show's name that name the show ("welcome to Unseen", "tonight on
+# Unseen"). Not a bare "to" or "on": "Theo leans to Unseen".
+SHOW_NAME_BEFORE = re.compile(
+    r"\b(?:of|at|from|this is|welcome to|back to|back on|listening to|tuning in to|tune in to"
+    r"|tonight on|here on|live on)\s+$",
+    re.IGNORECASE,
+)
+# The show's possessive: "Unseen's next date", not "Unseen's the safe call".
+SHOW_NAME_POSSESSIVE = re.compile(
+    r"['’]s\s+(?!(?:the|a|an|my|your|our|their|his|her|its|so|too|very|probably|definitely)\b)",
+    re.IGNORECASE,
+)
+# Starting a sentence, only as the subject of the show going on: "Unseen continues after
+# this", not "Unseen, Maya?" or "Unseen is the safe bet".
+SHOW_NAME_GOES_ON = re.compile(r"\s+(?:is live|is back|is on|is here|returns|continues)\b")
 ALWAYS_ALLOWED = frozenset({"I", "AI", "OK", SHOW_NAME})
 # Holidays aren't unknown names. Nationalities, languages and cuisines stay blocked: they
 # can single out someone's background.
@@ -322,8 +365,14 @@ def check(
         return (Violation.EMPTY,)
     found: set[Violation] = set()
     known = _allowed_words(names)  # names and fixed words, never anything a dater wrote
-    said = list(echo_from)
-    echoes = _proper_nouns(said, known) | slot_words(said, known)
+    said = [nfkc(text) for text in echo_from]  # as the model read it
+    # Each part of a hyphenated word on its own: "Northwind-Bank" said, "Northwind" echoed.
+    echoes = {
+        part
+        for word in _proper_nouns(said, known) | slot_words(said, known)
+        for part in word.split("-")
+        if part
+    }
     allowed = known | set(card_words)
 
     if len(text) > max_chars or len(SENTENCE_END.findall(text)) > max_sentences:
@@ -341,7 +390,7 @@ def check(
     if any(word not in ALWAYS_ALLOWED and word != "Nova" for word in claimed):
         found.add(Violation.INSTRUCTIONS)
 
-    if any(m.group(0).split("'")[0].lower() in echoes for m in WORD.finditer(text)):
+    if any(_echoes(m.group(0), echoes, known) for m in WORD.finditer(text)):
         found.add(Violation.PERSONAL_DETAIL)
 
     # Word checks run with the daters' own names masked, so a dater called Rose or Hope
@@ -368,7 +417,10 @@ def screen_question(question: str) -> tuple[OffLimits, ...]:
     """Why the screen would hold this audience question back, if it would: where someone
     works, lives or studies, a surname or contact details; anyone's looks; or an attempt to
     give Nova instructions. The console shows these to the moderator before they approve;
-    on air, the show runner skips a question it catches, silently. Empty: nothing found."""
+    on air, the show runner skips a question it catches, silently. Empty: nothing found.
+    It reads the question as the model would (lookalike letters made plain, nova/prompts.py)
+    with straight quotes, since iOS types "Theo’s"."""
+    question = straight_quotes(nfkc(question))
     found = {
         OffLimits.PERSONAL_DETAIL: bool(
             QUESTION_PERSONAL_DETAIL.search(question) or STREET.search(question)
@@ -391,10 +443,18 @@ def card_words(cards: Iterable[str]) -> frozenset[str]:
     sayable."""
     return frozenset(
         word
-        for card in cards
+        for card in map(nfkc, cards)
         if not INSTRUCTING_NOVA.search(card)
         for word in capitalised_mid_sentence(card, ALWAYS_ALLOWED)
     )
+
+
+def _echoes(word: str, echoes: set[str], known: set[str]) -> bool:
+    """A word of Nova's line, or any hyphenated part of it, repeats something said. A
+    dater's name with a possessive ("D'Andre's") never does."""
+    if without_possessive(word) in known:
+        return False
+    return any(part in echoes for part in word.split("'")[0].lower().split("-"))
 
 
 def _opens_with_both_names(text: str, names: Collection[str]) -> bool:
@@ -413,19 +473,30 @@ def _has_formatting(text: str) -> bool:
 
 
 def _mask_show_name(text: str) -> str:
-    """ "Unseen" becomes "Show" only where it names the show: starting a sentence, after on,
-    to, of, at or from, after "this is" or "welcome to", or before 's. Anywhere else ("keep
-    it Unseen", "stay Unseen") it stays, for the decision check to catch."""
+    """ "Unseen" becomes "Show" only where it names the show: after the words that name it
+    (SHOW_NAME_BEFORE), as a possessive ("Unseen's next date"), or starting a sentence as
+    the show going on ("Unseen continues after this"). Anywhere else it stays, for the
+    decision check to catch: "keep it Unseen", "Maya: Unseen.", "Unseen, Theo?", "Unseen's
+    the safe call". A colon or an ellipsis never starts a sentence here."""
 
     def masked(match: re.Match[str]) -> str:
+        start, end = match.span()
         names_the_show = (
-            starts_sentence(text, match.start())
-            or SHOW_NAME_BEFORE.search(text, 0, match.start()) is not None
-            or text.startswith(("'s", "’s"), match.end())
+            SHOW_NAME_BEFORE.search(text, 0, start) is not None
+            or SHOW_NAME_POSSESSIVE.match(text, end) is not None
+            or (_starts_sentence_strictly(text, start) and SHOW_NAME_GOES_ON.match(text, end))
         )
         return "Show" if names_the_show else match.group(0)
 
     return re.sub(rf"\b{SHOW_NAME}\b", masked, text)
+
+
+def _starts_sentence_strictly(text: str, index: int) -> bool:
+    """The start of the text, or after a full stop, question mark or exclamation mark that
+    isn't part of an ellipsis: never after a colon or "...", which text.starts_sentence
+    counts (the framed audience question, "From the room: What...", needs it)."""
+    before = text[:index].rstrip(" \"'(")
+    return not before or (before[-1] in ".?!" and not before.endswith(".."))
 
 
 def _allowed_words(names: Collection[str]) -> set[str]:
@@ -444,25 +515,36 @@ def slot_words(texts: Iterable[str], known: Collection[str] = ()) -> set[str]:
     skip = {word.lower() for word in known}
     found: set[str] = set()
     for text in texts:
-        plain = text.translate(STRAIGHT_QUOTES)
+        plain = nfkc(text).translate(STRAIGHT_QUOTES)
         for cue in SLOT_CUE.finditer(plain):
+            tokens = [token.group(0).lower() for token in SLOT_TOKEN.finditer(plain, cue.end())]
             taken = 0
-            for token in SLOT_TOKEN.finditer(plain, cue.end()):
-                word = token.group(0).lower()
+            for k, word in enumerate(tokens):
+                if taken == 0 and _hesitation(tokens, k):
+                    continue  # "at, um, northwind": the slot hasn't started
                 if not word[0].isalnum():
                     break  # punctuation ends the slot
                 if word in FUNCTION_WORDS:
                     if taken == 0 and word in SLOT_SKIPPED:
                         continue
                     break
-                if taken == 0 and len(word) > 4 and word.endswith("ing"):
-                    break  # "i work at being a better listener": effort, not a place
+                if taken == 0 and word in EFFORT_WORDS:
+                    break
                 if word not in skip:
                     found.add(word.split("'")[0])
                 taken += 1
                 if taken == SLOT_WORDS:
                     break
     return found
+
+
+def _hesitation(tokens: list[str], k: int) -> bool:
+    """A hesitation, or a comma next to one: "at, um, northwind". A comma that ends a
+    clause still ends the slot ("the place I work at, the managers are lovely")."""
+    if tokens[k] in HESITATIONS:
+        return True
+    near = tokens[max(k - 1, 0) : k] + tokens[k + 1 : k + 2]
+    return tokens[k] == "," and any(word in HESITATIONS for word in near)
 
 
 def _proper_nouns(texts: Iterable[str], allowed: set[str]) -> set[str]:
@@ -477,8 +559,10 @@ def _name_problems(
     """Only the daters' first names (and Nova) may appear: any other capitalised word in
     the middle of a sentence is treated as a possible surname, place, workplace or school.
     allowed adds words from the cards; right after a first name, only known words (names
-    and fixed words) may follow, so a card word is never said as a surname."""
+    and fixed words) may follow, so a card word is never said as a surname, while a card's
+    own "New York" stays sayable. A first name with an apostrophe ("D'Andre") is one word."""
     problems: set[Violation] = set()
+    first_names = {part for name in names for part in name.split()}
 
     # A name in the wrong case: the voice may spell out MAYA, and captions show names as
     # written. All lowercase it's an ordinary word, which sounds the same either way, so a
@@ -493,7 +577,8 @@ def _name_problems(
     tokens = list(WORD.finditer(text))
     for i, match in enumerate(tokens):
         word = match.group(0)
-        base = word.split("'")[0]
+        whole = without_possessive(word)
+        base = whole if whole in allowed else word.split("'")[0]
         if not base[:1].isupper():
             continue
         if any(start <= match.start() < end for start, end in holidays):
@@ -501,12 +586,14 @@ def _name_problems(
         if base in allowed:
             following = tokens[i + 1] if i + 1 < len(tokens) else None
             between = text[match.end() : following.start()] if following else ""
+            may_follow = known if base in first_names else allowed
             if (
                 base not in ALWAYS_ALLOWED
                 and following is not None
                 and between == " "
                 and following.group(0)[:1].isupper()
-                and following.group(0).split("'")[0] not in known
+                and without_possessive(following.group(0)) not in may_follow
+                and following.group(0).split("'")[0] not in may_follow
             ):
                 problems.add(Violation.PERSONAL_DETAIL)  # "Maya Lopez": a surname
             continue
