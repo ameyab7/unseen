@@ -98,7 +98,8 @@ TURN_BEATS = frozenset(
         "time",
     }
 )
-# A turn line never reported played (a lost line) holds the next turn at most this long.
+# A turn waits at most this long, whatever holds it: a line never reported played, a dater
+# who keeps talking (a TV in the room). Wall seconds, during which the show clock is stopped.
 TURN_WAIT_CAP = 20.0
 # Conduct the moderator hears about at once, with nothing said on air (decision 0006).
 FLAGGED = frozenset(
@@ -230,7 +231,11 @@ class ShowRunner:
         self._waiting_until: float | None = None  # wall time they go out whatever happens
         self._paced = paced
         self._turns_unfinished = 0  # turn lines cued that Nova hasn't finished saying
-        self._turn_done_at: float | None = None  # show time Nova last finished asking one
+        self._turn_done_at: float | None = None  # wall time Nova last finished asking one
+        # Wall time the show clock stopped for a turn that waits (_turn_waits), like a hold:
+        # everything after it moves too, so the decision window is never cut short.
+        self._turn_paused_since: float | None = None
+        self._turn_wait_from: float | None = None  # wall time the due turn began waiting
 
         self.segment: Segment | None = None
         self.end_reason: EndReason | None = None
@@ -290,7 +295,7 @@ class ShowRunner:
         if not self._paced or say.moment not in TURN_MOMENTS or not self.started:
             return
         self._turns_unfinished = max(0, self._turns_unfinished - 1)
-        self._turn_done_at = self._show_time(now)
+        self._turn_done_at = now
 
     # --- Things that happen in the room ---------------------------------------------------
     # Daters, the moderator and the room can do these at any time, so none of them raises
@@ -588,6 +593,7 @@ class ShowRunner:
         """Nova says the line and covers with talk to the room; the show clock holds until
         the same dater is back. Anything still waiting for a dater to finish is dropped.
         repeatable: counts towards the repeated-pause alert."""
+        self._end_turn_pause(now)
         self._away, self._held_since, self._overdue = seat, now, False
         self._drop_waiting()
         self._cover_lines = 1
@@ -602,6 +608,7 @@ class ShowRunner:
         """The whole date holds, for both daters: "We're taking a short pause.", then Nova
         covers as for any hold, until the moderator resumes or ends the date. seat: the
         dater whose conduct paused it."""
+        self._end_turn_pause(now)
         self._held_since, self._overdue, self._show_paused_by = now, False, seat
         self._drop_waiting()
         self._cover_lines = 1
@@ -654,7 +661,11 @@ class ShowRunner:
     def _show_time(self, now: float) -> float:
         if self._started_at is None:
             raise RuntimeError("Call start() first")
-        stopped_at = self._held_since if self._held_since is not None else now
+        stopped_at = now
+        if self._held_since is not None:
+            stopped_at = self._held_since
+        elif self._turn_paused_since is not None:
+            stopped_at = self._turn_paused_since
         return stopped_at - self._started_at - self._held
 
     def _schedule(self, at: float, action: str, arg: object = None) -> None:
@@ -678,15 +689,25 @@ class ShowRunner:
                     Say(Moment.LIGHTNING_UNLOCKED, text=script.LIGHTNING_UNLOCKED)
                 ]
                 cues += self._wait_for_speech(now, unlocked)
+            if self._turn_paused_since is not None:
+                head = self._beats[0] if self._beats else None
+                if head is None or not self._turn_waits(head, now):
+                    self._end_turn_pause(now)
             shown = self._show_time(now)
             beat_at = self._beats[0].at if self._beats else math.inf
             silence_at = self._silence_due()
             if min(beat_at, silence_at) > shown:
                 break
             if beat_at <= silence_at:
-                if self._turn_waits(self._beats[0], shown):
-                    break  # the running order waits, in order, and the date runs long
+                if self._turn_waits(self._beats[0], now):
+                    if self._turn_wait_from is None:
+                        self._turn_wait_from = now
+                    if self._turn_paused_since is None:
+                        self._turn_paused_since = now  # the show clock waits with the turn
+                    break
                 beat = heapq.heappop(self._beats)
+                if beat.action in TURN_BEATS:
+                    self._turn_wait_from = None
                 ran = self._attempt(beat, shown)
                 if self._paced:
                     self._turns_unfinished += sum(_is_turn(cue) for cue in ran)
@@ -697,15 +718,25 @@ class ShowRunner:
                 cues += self._nudge(silence_at)
         return cues
 
-    def _turn_waits(self, beat: _Beat, shown: float) -> bool:
+    def _turn_waits(self, beat: _Beat, now: float) -> bool:
         """Paced, a turn waits while Nova is still asking the dater before (or has the line
-        queued), and then for timing.answer_window, but never past TURN_WAIT_CAP."""
-        if not self._paced or beat.action not in TURN_BEATS or shown >= beat.at + TURN_WAIT_CAP:
+        queued), then for timing.answer_window, and while a dater is still speaking; never
+        longer than TURN_WAIT_CAP in all."""
+        if not self._paced or beat.action not in TURN_BEATS:
             return False
-        if self._turns_unfinished:
+        since = self._turn_wait_from
+        if since is not None and now - since >= TURN_WAIT_CAP:
+            return False
+        if self._turns_unfinished or self._speaking:
             return True
         done = self._turn_done_at
-        return done is not None and shown < done + self._timing.answer_window
+        return done is not None and now < done + self._timing.answer_window
+
+    def _end_turn_pause(self, now: float) -> None:
+        """The show clock goes on after a turn's wait (or before a hold takes over)."""
+        if self._turn_paused_since is not None:
+            self._held += now - self._turn_paused_since
+            self._turn_paused_since = None
 
     def _attempt(self, beat: _Beat, shown: float) -> list[Cue]:
         """Runs a beat. One that raises (in production, the room poll or the decision desk

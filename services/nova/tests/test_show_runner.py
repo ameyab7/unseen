@@ -1533,6 +1533,8 @@ def test_paced_the_second_dater_waits_until_the_first_had_time_to_answer():
     assert first_question_times(show) == [45.0], "the answer window is 6 s"
     show.until(86)
     assert first_question_times(show) == [45.0, 86.0]
+    show.until(120)
+    assert (108.5, Segment.FREE_TALK) in show.segments(), "the running order moved 18.5 s"
 
 
 def test_paced_a_turn_is_on_time_when_nova_is():
@@ -1570,6 +1572,21 @@ def test_paced_thats_time_never_cuts_off_the_last_dater():
                 show.runner.line_done(show.now, say)
                 reported.add(i)
     assert show.times(Say, moment=Moment.TIME) == [484.0]
+    show.until(560)
+    assert show.times(Say, moment=Moment.RESULT) == [544.0], "the full decision window"
+
+
+def test_paced_a_turn_waits_while_a_dater_is_still_answering():
+    """Before, the next line went out over a dater after the 5 s talk-over grace: Nova cut
+    Theo off five seconds into an eight-second answer (the LiveKit run)."""
+    show = Show(paced=True)
+    show.until(50)
+    show.runner.line_done(50, MAYAS_QUESTION)
+    show.at(66, "speech_started", LEFT)  # Maya is still answering when Theo's turn is due
+    show.until(74.5)
+    assert first_question_times(show) == [45.0]
+    show.at(75, "speech_stopped", LEFT)
+    assert first_question_times(show) == [45.0, 75.0], "the moment she stops"
 
 
 def test_paced_a_turn_dropped_by_a_pause_holds_nothing():

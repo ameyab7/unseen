@@ -83,11 +83,16 @@ Date: 2026-10-13. Status: accepted.
   dropped too). A beat that starts a dater's turn (the first questions, the audience
   questions, the lightning questions, the last words) or ends them ("That's time.") then
   waits until Nova has finished asking the dater before and they've had
-  `answer_window` (6 s, not scaled for rehearsals) to start answering. The running order
-  waits in order, so a late date runs a few seconds long, never skips a turn; a turn line
-  never reported holds the next turn at most 20 s. The schedule gives far more time in a
-  full date, so this matters when Nova runs late and in rehearsals. Unpaced (the
-  evaluation, the runner's own tests), every beat goes by the clock as before.
+  `answer_window` (6 s, not scaled for rehearsals) to start answering, and while a dater
+  is still speaking: before, the next line went out over them after the 5 s talk-over
+  grace, cutting a dater off five seconds into an eight-second answer. While a turn waits
+  the show clock stops, as in a hold, so everything after it moves too: a late date runs
+  a few seconds long, never skips a turn, and the decision window is never cut short (a
+  first version moved only the turn, and a late "That's time." left the daters 1.8 s to
+  decide). A turn waits at most 20 s in all (a line never reported played, a TV that keeps
+  the voice detector hearing speech). The schedule gives far more time in a full date, so
+  this matters when Nova runs late and in rehearsals. Unpaced (the evaluation, the
+  runner's own tests), every beat goes by the clock as before.
 - **A report pauses the date** until the moderator resumes or ends it (the prototype's
   report sheet: "Nova pauses the date and a live moderator listens in", "Pause and
   report"). The moderator is alerted first (`dater_reported`); then, if a pause can start,
