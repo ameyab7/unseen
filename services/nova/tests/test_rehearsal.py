@@ -861,9 +861,20 @@ async def test_a_dater_who_starts_as_nova_does_goes_first_and_nova_says_it_again
     await asyncio.sleep(0.05)
     assert speaker.texts.count(script.LIGHTNING_UNLOCKED) == 1, "not over her"
     clock.now = 34.0
+    r.speech_ended()  # a pause between her sentences
+    await asyncio.sleep(0.1)
+    clock.now = 34.5
+    r.speech_started()
+    clock.now = 37.0
     r.speech_ended()
+    await asyncio.sleep(0.1)
+    clock.now = 38.0
+    await asyncio.sleep(0.1)
+    assert speaker.texts.count(script.LIGHTNING_UNLOCKED) == 1, "not in her pause, nor yet"
+    clock.now = 38.5  # 1.5 s of quiet
     await asyncio.wait_for(speaking, 1.0)
     assert speaker.texts.count(script.LIGHTNING_UNLOCKED) == 2, "said again once she's done"
+    assert speaker.stops == 1, "a dater who starts again isn't a second collision"
     assert len(lines(r, Moment.LIGHTNING_UNLOCKED)) == 1
 
 

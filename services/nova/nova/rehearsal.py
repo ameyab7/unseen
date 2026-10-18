@@ -33,7 +33,7 @@ from nova.measure import ms
 from nova.models import WARM_UP_TIMEOUT, LineModel, Warmed, warm_up
 from nova.on_air import Closed, OnAirCues, OnAirListener, ReplyAction
 from nova.questions import AudienceQuestion, QuestionStatus
-from nova.show_runner import NoVotes, ShowRunner, waits_for_speech
+from nova.show_runner import SPEECH_CAP, NoVotes, ShowRunner, waits_for_speech
 from nova.timing import REHEARSAL, Timing
 from nova.tonight import Tonight
 
@@ -173,6 +173,7 @@ class Rehearsal:
             first_up=first_up,
             paced=True,  # every line is reported as it finishes (_speak, _stop)
         )
+        self._turn_gap = timing.turn_gap
         self._writer = LineWriter(
             model,
             pair,
@@ -425,6 +426,17 @@ class Rehearsal:
         item.yielded = True
         self.speaker.stop()
 
+    async def _after_the_dater(self, item: _Pending) -> None:
+        """After a yield: until nobody has spoken for the turn gap (a pause between a dater's
+        sentences isn't the end of what they're saying: Nova came back in on one), or Nova is
+        told to stop; at most SPEECH_CAP."""
+        deadline = self._clock() + SPEECH_CAP
+        while not item.stopped.is_set() and self._clock() < deadline:
+            ended = self._ended[1] if self._ended is not None else None
+            if self._quiet.is_set() and (ended is None or self._clock() - ended >= self._turn_gap):
+                return
+            await asyncio.sleep(0.05)
+
     def _heard_who_speaks(self) -> None:
         if self._runner.speaking:
             self._quiet.clear()
@@ -587,7 +599,7 @@ class Rehearsal:
                 if item.yielded and not item.stopped.is_set():
                     # Both began at once: the dater goes first, then Nova says it again.
                     self._events.emit(Event.YIELDED, moment=line.moment)
-                    await self._polite(item)
+                    await self._after_the_dater(item)
                     if item.stopped.is_set():
                         return
                     started = await self.speaker.speak(line.text)

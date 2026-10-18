@@ -103,8 +103,9 @@ Date: 2026-10-13. Status: accepted.
   TV the voice detector hears, is talked over. When a dater and Nova take the floor at
   the same moment after a silence (Nova's voice takes about 0.5 s to start and the voice
   detector as long to hear the dater, so neither knew), a dater who starts within 1.5 s of
-  Nova handing a line to its voice goes first: Nova stops, lets them finish, and says the
-  line again, once (`yielded` in the log). Only lines that wait for a dater anyway, never
+  Nova handing a line to its voice goes first: Nova stops, lets them finish (the turn gap
+  of quiet, not their first pause: a first version came back in between two of Theo's
+  sentences), and says the line again, once (`yielded` in the log). Only lines that wait for a dater anyway, never
   a reply, a safety line or the result. The rehearsal logs each start and stop
   the voice detector hears (`speech`, the seat only), to check turn-taking afterwards. The schedule gives far more time in a full date, so
   this matters when Nova runs late and in rehearsals. Unpaced (the evaluation, the
