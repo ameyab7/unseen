@@ -42,6 +42,11 @@ from nova.tonight import Tonight
 FINAL_WAIT = 30.0
 # A final transcript this soon after the voice detector heard a dater stop is still theirs.
 LATE_FINAL = 2.0
+# A dater who starts speaking this soon after Nova handed a line to its voice began at the
+# same moment as Nova (after a silence, both took the floor): Nova stops, lets them finish
+# and says the line again, once. Its voice takes about half a second to start, and the
+# voice detector as long to hear the dater, so neither could have known.
+YIELD_WINDOW = 1.5
 
 
 class Command(StrEnum):
@@ -123,6 +128,8 @@ class _Pending:
     closed_at: float | None = None  # replies: when Nova acted on what the dater said
     # Set when Nova is told to stop while this is the line being spoken or waited for.
     stopped: asyncio.Event = field(default_factory=asyncio.Event)
+    voiced_at: float | None = None  # when the line went to Nova's voice, while it plays
+    yielded: bool = False  # Nova stopped it for a dater who began at the same moment
 
 
 class Rehearsal:
@@ -366,6 +373,7 @@ class Rehearsal:
         self._events.emit(Event.SPEECH, seat=self.seat, started=True)
         self._on_air.speech_started(self.seat)
         self._heard_who_speaks()
+        self._yield_if_both_began()
 
     def speech_ended(self) -> None:
         """The voice detector heard the dater stop: the end of their sentence. It ends the
@@ -398,6 +406,24 @@ class Rehearsal:
     def _listening(self) -> None:
         if self._listening_since is None:
             self._listening_since = self._clock()
+
+    def _yield_if_both_began(self) -> None:
+        """A dater began as Nova did: Nova stops at once, never talking over them, and says
+        the line once they've finished (_speak). Only a line that waits for a dater anyway
+        (show_runner.waits_for_speech), never a reply, a safety line or the result, and only
+        once per line."""
+        item = self._current
+        if (
+            item is None
+            or item.voiced_at is None
+            or item.yielded
+            or item.kind is Kind.REPLY
+            or not waits_for_speech(item.say)
+            or self._clock() - item.voiced_at > YIELD_WINDOW
+        ):
+            return
+        item.yielded = True
+        self.speaker.stop()
 
     def _heard_who_speaks(self) -> None:
         if self._runner.speaking:
@@ -555,7 +581,16 @@ class Rehearsal:
             if waited is not None:  # measured from when the dater finished, as the runner does
                 cue_at = picked = max(cue_at, waited)
             try:
+                item.voiced_at = self._clock()
                 started = await self.speaker.speak(line.text)
+                item.voiced_at = None
+                if item.yielded and not item.stopped.is_set():
+                    # Both began at once: the dater goes first, then Nova says it again.
+                    self._events.emit(Event.YIELDED, moment=line.moment)
+                    await self._polite(item)
+                    if item.stopped.is_set():
+                        return
+                    started = await self.speaker.speak(line.text)
                 if started is not None:
                     self.nova_seconds += max(0.0, self._clock() - started)
             except Exception:  # the voice failed: this line never played, the date goes on

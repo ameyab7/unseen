@@ -843,6 +843,46 @@ async def test_a_dater_back_while_nova_talks_to_the_room_is_welcomed_at_once():
     assert speaker.stops == 2, "for the moment, then for the end of the hold"
 
 
+async def test_a_dater_who_starts_as_nova_does_goes_first_and_nova_says_it_again():
+    """After a silence, Maya and Nova took the floor at the same moment and Nova talked over
+    her (the LiveKit run with listening daters): now Nova stops and lets her go first."""
+    clock = Clock()
+    speaker = PlaysUntilStopped(clock, script.LIGHTNING_UNLOCKED)
+    r = await started(clock, speaker=speaker)
+    speaker.armed = True
+    clock.now = 30.0
+    r.command("unlock")
+    speaking = asyncio.ensure_future(r.speak_queued())
+    await asyncio.sleep(0.05)  # Nova has just started the line
+    clock.now = 30.6
+    r.speech_started()  # and so has Maya
+    assert speaker.stops == 1, "Nova stops at once"
+    speaker.armed = False
+    await asyncio.sleep(0.05)
+    assert speaker.texts.count(script.LIGHTNING_UNLOCKED) == 1, "not over her"
+    clock.now = 34.0
+    r.speech_ended()
+    await asyncio.wait_for(speaking, 1.0)
+    assert speaker.texts.count(script.LIGHTNING_UNLOCKED) == 2, "said again once she's done"
+    assert len(lines(r, Moment.LIGHTNING_UNLOCKED)) == 1
+
+
+async def test_a_dater_who_starts_well_into_novas_line_is_not_a_collision():
+    clock = Clock()
+    speaker = PlaysUntilStopped(clock, script.LIGHTNING_UNLOCKED)
+    r = await started(clock, speaker=speaker)
+    speaker.armed = True
+    clock.now = 30.0
+    r.command("unlock")
+    speaking = asyncio.ensure_future(r.speak_queued())
+    await asyncio.sleep(0.05)
+    clock.now = 32.0  # two seconds into Nova's line: the dater talks over Nova, not the reverse
+    r.speech_started()
+    assert speaker.stops == 0
+    speaking.cancel()
+    await asyncio.gather(speaking, return_exceptions=True)
+
+
 async def test_a_dater_who_needs_a_moment_cuts_nova_off_mid_line():
     """Before, Nova finished an eight-second question to both daters first (the scenario
     run). Now it stops at once, as for a report or a distress pause."""

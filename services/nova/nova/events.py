@@ -20,6 +20,7 @@ class Event(StrEnum):
     QUESTION_SKIPPED = "question_skipped"  # an approved question the screen caught: its code
     COMMAND = "command"  # a rehearsal chat command (the command only, never its text)
     SPEECH = "speech"  # the voice detector heard a dater start or stop: the seat only
+    YIELDED = "yielded"  # Nova stopped a line for a dater who began at the same moment
 
 
 def _allowed(value: object) -> bool:
