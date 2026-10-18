@@ -1629,7 +1629,7 @@ def paced_date(show: Show, until: float, events=(), *, finish_after: float = 3.0
     """Runs a paced date: Nova finishes each turn line finish_after seconds after its cue,
     and the daters start and stop speaking at the given times."""
     pending = sorted(events)
-    reported: set[int] = set()
+    reported: set[int] = show.__dict__.setdefault("reported", set())  # kept across calls
     while show.now < until:
         while pending and pending[0][0] <= show.now + 0.5:
             t, event, seat = pending.pop(0)
@@ -1702,3 +1702,18 @@ def test_paced_an_audience_question_waits_for_a_lull_not_a_gap():
         ],
     )
     assert audience_question_times(show) == [245.5]
+
+
+def test_paced_the_cap_counts_from_when_nova_finished_asking():
+    """Before, it counted from when the next turn came due, while Nova was still asking the
+    question before: the cap ran out before Theo had answered, and Nova moved on over him."""
+    show = Show(paced=True, timing=replace_timing(second_question_after=8.0))
+    show.at(10, "queue_question", approved("What's the best meal you've ever had?"))
+    show.at(10, "queue_question", approved("Mountains or sea?"))
+    paced_date(show, 239)
+    show.until(262)  # Nova is slow to finish the first question: the next has waited 14 s
+    first = next(i for i, (_, say) in enumerate(show.says()) if say.moment is Moment.FROM_THE_ROOM)
+    show.runner.line_done(262, show.says()[first][1])
+    show.reported.add(first)
+    paced_date(show, 300, [(263, "speech_started", LEFT), (270, "speech_stopped", LEFT)])
+    assert audience_question_times(show) == [240.0, 276.0], "6 s after Maya, Theo's chance"

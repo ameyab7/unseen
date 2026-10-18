@@ -97,8 +97,9 @@ Date: 2026-10-13. Status: accepted.
   a few seconds long, never skips a turn, and the decision window is never cut short (a
   first version moved only the turn, and a late "That's time." left the daters 1.8 s to
   decide). After 20 s of waiting (a line never reported played, daters who never pause
-  long) a turn stops waiting for the lull and the answers but still needs the turn gap,
-  so it never cuts a dater off (a first cap ran out while Theo was mid-answer, a second
+  long), counted from when Nova finished asking (counted from when the turn came due, it
+  ran out before Theo had answered), a turn stops waiting for the lull and the answers but
+  still needs the turn gap, so it never cuts a dater off (a first cap ran out while Theo was mid-answer, a second
   went the instant Maya stopped, as Theo began); only 30 s of speech without a break, a
   TV the voice detector hears, is talked over. When a dater and Nova take the floor at
   the same moment after a silence (Nova's voice takes about 0.5 s to start and the voice

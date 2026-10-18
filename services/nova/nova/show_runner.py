@@ -753,6 +753,8 @@ class ShowRunner:
             return started is None or now - started < SPEECH_CAP
         ended = self._speech_ended_at
         since = self._turn_wait_from
+        if since is not None and self._turn_done_at is not None:
+            since = max(since, self._turn_done_at)  # from when Nova finished asking
         if since is not None and now - since >= TURN_WAIT_CAP:
             return ended is not None and now < ended + self._timing.turn_gap
         if self._turns_unfinished:
