@@ -98,6 +98,8 @@ TURN_BEATS = frozenset(
         "time",
     }
 )
+# Turns that break into the daters' own conversation: they wait for timing.lull.
+LULL_BEATS = frozenset({"from_the_room", "audience_question"})
 # A turn waits at most this long, whatever holds it: a line never reported played, a dater
 # who keeps talking (a TV in the room). Wall seconds, during which the show clock is stopped.
 TURN_WAIT_CAP = 20.0
@@ -237,6 +239,8 @@ class ShowRunner:
         self._turn_paused_since: float | None = None
         self._turn_wait_from: float | None = None  # wall time the due turn began waiting
         self._speech_ended_at: float | None = None  # wall time a dater last stopped
+        # The daters the last turn asked who haven't started answering yet.
+        self._awaiting: set[Seat] = set()
 
         self.segment: Segment | None = None
         self.end_reason: EndReason | None = None
@@ -307,6 +311,7 @@ class ShowRunner:
         and sounds wait (up to timing.talk_over_grace), and no silence prompt comes."""
         cues = self._due(now)
         self._speaking.add(seat)
+        self._awaiting.discard(seat)  # they've started answering: now they're speaking
         if self._live and self._held_since is None:
             self._quiet_since = self._show_time(now)
         return cues
@@ -713,6 +718,9 @@ class ShowRunner:
                 ran = self._attempt(beat, shown)
                 if self._paced:
                     self._turns_unfinished += sum(_is_turn(cue) for cue in ran)
+                    for cue in ran:
+                        if isinstance(cue, Say) and cue.moment in TURN_MOMENTS:
+                            self._awaiting = self._asked(cue)
                 cues += self._wait_for_speech(now, ran)
                 if self._finish_when_said and not self._waiting:
                     cues += self._finish()
@@ -721,10 +729,12 @@ class ShowRunner:
         return cues
 
     def _turn_waits(self, beat: _Beat, now: float) -> bool:
-        """Paced, a turn waits while Nova is still asking the dater before (or has the line
-        queued), then for timing.answer_window, while a dater is still speaking, and for
-        timing.turn_gap after one stops (a pause between their sentences isn't the end of
-        their answer); never longer than TURN_WAIT_CAP in all."""
+        """Paced, a turn waits while Nova is still asking the daters before (or has the line
+        queued), while a dater is speaking, for timing.turn_gap after one stops (a pause
+        between their sentences isn't the end of their answer; timing.lull before an audience
+        question, which breaks into their conversation), and until everyone it asked has
+        started answering: one who hasn't within timing.answer_window of the last person to
+        speak (or of Nova finishing) is passed over. Never longer than TURN_WAIT_CAP."""
         if not self._paced or beat.action not in TURN_BEATS:
             return False
         since = self._turn_wait_from
@@ -733,10 +743,20 @@ class ShowRunner:
         if self._turns_unfinished or self._speaking:
             return True
         ended = self._speech_ended_at
-        if ended is not None and now < ended + self._timing.turn_gap:
+        gap = self._timing.lull if beat.action in LULL_BEATS else self._timing.turn_gap
+        if ended is not None and now < ended + gap:
             return True
         done = self._turn_done_at
-        return done is not None and now < done + self._timing.answer_window
+        if done is None or not self._awaiting:
+            return False
+        last = max(done, ended) if ended is not None else done
+        return now < last + self._timing.answer_window
+
+    def _asked(self, say: Say) -> set[Seat]:
+        """Who a turn line asks: the dater it's about, or everyone on air."""
+        if say.about is not None:
+            return {say.about}
+        return {seat for seat in Seat if seat not in self._absent}
 
     def _end_turn_pause(self, now: float) -> None:
         """The show clock goes on after a turn's wait (or before a hold takes over)."""

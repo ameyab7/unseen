@@ -53,6 +53,9 @@ class Timing:
     # ... and until nobody has spoken for this long: people pause between sentences,
     # and the voice detector hears each pause as the end of their speech.
     turn_gap: float = 1.5
+    # An audience question breaks into the daters' own conversation: it waits for a
+    # real lull, not a gap between two sentences.
+    lull: float = 2.5
 
     def __post_init__(self) -> None:
         starts = [
@@ -76,6 +79,7 @@ class Timing:
             "talk_over_grace",
             "answer_window",
             "turn_gap",
+            "lull",
             "cover_lines",
         }
         return replace(

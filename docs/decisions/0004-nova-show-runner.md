@@ -87,7 +87,12 @@ Date: 2026-10-13. Status: accepted.
   is still speaking, and until nobody has spoken for `turn_gap` (1.5 s, not scaled):
   before, the next line went out over them after the 5 s talk-over grace, cutting a
   dater off five seconds into an eight-second answer, and the voice detector hears the
-  half-second pause between two sentences as the end of an answer. While a turn waits
+  half-second pause between two sentences as the end of an answer. It also waits until
+  everyone the turn before asked has started answering (the dater named, or both for an
+  audience or lightning question): Nova asked the next question 1.5 s after the first
+  dater finished, as the second began. One who hasn't started within `answer_window` of
+  the last person to speak is passed over. An audience question, which breaks into the
+  daters' own conversation, waits for `lull` (2.5 s of quiet) instead of `turn_gap`. While a turn waits
   the show clock stops, as in a hold, so everything after it moves too: a late date runs
   a few seconds long, never skips a turn, and the decision window is never cut short (a
   first version moved only the turn, and a late "That's time." left the daters 1.8 s to
