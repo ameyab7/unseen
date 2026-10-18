@@ -66,8 +66,10 @@ Date: 2026-10-13. Status: accepted.
   finished an eight-second question to both daters before "Let's take a short
   breather." Talk to the room and "Bear with us" that cover a hold and haven't been said
   when it ends (the dater is back, the moderator resumes or ends the date) are never
-  said, even if Nova had already picked one up and the model was still writing it:
-  before, they played after the resume, for twenty seconds of a date that had moved on.
+  said, even if Nova had already picked one up and the model was still writing it, and
+  one that's playing stops mid-line, so "And we're back." comes at once: before, they
+  played after the resume, for twenty seconds of a date that had moved on, and a line
+  already playing held the welcome back about five seconds.
   While a dater is away after a resume, the other dater's first question and last word,
   written before the date for both, are checked again as for the dater who's here; one
   that names the absent dater gives way to its approved fallback

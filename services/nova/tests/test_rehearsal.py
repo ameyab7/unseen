@@ -771,6 +771,48 @@ async def test_talk_to_the_room_still_being_written_when_the_hold_ends_is_never_
     assert r.speaker.texts[-2:] == [script.NEED_A_MOMENT, script.WELCOME_BACK]
 
 
+class PlaysUntilStopped(FakeSpeaker):
+    """Once armed, plays one line until Nova is told to stop."""
+
+    def __init__(self, clock: Clock, line: str) -> None:
+        super().__init__(clock)
+        self.line, self.armed = line, False
+        self._stopped = asyncio.Event()
+
+    async def speak(self, text: str) -> float | None:
+        if not (self.armed and text == self.line):
+            return await super().speak(text)
+        self.texts.append(text)
+        self._stopped.clear()
+        started = self.clock.now
+        await self._stopped.wait()
+        return started
+
+    def stop(self) -> None:
+        super().stop()
+        self._stopped.set()
+
+
+async def test_a_dater_back_while_nova_talks_to_the_room_is_welcomed_at_once():
+    """Before, the line covering the hold played to its end first, so "And we're back."
+    came about 5 s after the dater was (the scenario run)."""
+    clock = Clock()
+    talk = "Thanks for waiting, room."
+    speaker = PlaysUntilStopped(clock, talk)
+    r = await started(clock, speaker=speaker, reply=talk)
+    speaker.armed = True
+    clock.now = 30.0
+    r.command("moment")
+    speaking = asyncio.ensure_future(r.speak_queued())
+    await asyncio.sleep(0.05)  # the moment's line is said; Nova is mid-way through the talk
+    assert speaker.texts[-2:] == [script.NEED_A_MOMENT, talk]
+    r.command("back")
+    await asyncio.wait_for(speaking, 1.0)
+    await r.speak_queued()
+    assert speaker.texts[-2:] == [talk, script.WELCOME_BACK]
+    assert speaker.stops == 2, "for the moment, then for the end of the hold"
+
+
 async def test_a_dater_who_needs_a_moment_cuts_nova_off_mid_line():
     """Before, Nova finished an eight-second question to both daters first (the scenario
     run). Now it stops at once, as for a report or a distress pause."""
