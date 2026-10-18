@@ -449,6 +449,13 @@ class Rehearsal:
             closed = closed_at if kind is Kind.REPLY else None
             held = hold if cue.moment is Moment.REPLY else None
             self._queue.put_nowait(_Pending(cue, kind, now, ends, line, held, closed))
+        current = self._current
+        if current is not None and self._after_its_hold(current):
+            # The hold ended while Nova covered it: stopped mid-line, so "And we're back."
+            # or the date's next line comes at once, never after a line about waiting.
+            current.stopped.set()
+            current.line.cancel()
+            self.speaker.stop()
 
     def _stop(self) -> None:
         """Nova stops mid-line, and nothing already queued is said: not the line the
@@ -461,6 +468,17 @@ class Rehearsal:
             self._current.stopped.set()
             self._current.line.cancel()
         self.speaker.stop()
+
+    def _after_its_hold(self, item: _Pending) -> bool:
+        """A line that covers a hold (talk to the room while held, "Bear with us"), once
+        the hold is over: the dater is back, or the moderator resumed or ended the date.
+        It's never said, or stopped mid-line if it's playing; the date goes on (decision
+        0004)."""
+        say = item.say
+        covers = say.moment is Moment.BEAR_WITH_US or (
+            say.moment is Moment.ROOM_TALK and say.number is not None
+        )
+        return covers and not self._runner.held
 
     async def _speak_forever(self) -> None:
         while True:
@@ -508,6 +526,9 @@ class Rehearsal:
                 action = await self._unless_stopped(item, item.hold)
             if action is None or item.stopped.is_set():
                 return
+            if self._after_its_hold(item):
+                item.line.cancel()
+                return
             if action is ReplyAction.DROP:
                 item.line.cancel()  # never answered (nova/on_air.py, reply_after)
                 return
@@ -517,7 +538,7 @@ class Rehearsal:
                 line = Line(script.TAKE_YOUR_TIME, Source.FALLBACK, Moment.REPLY)
             else:
                 written = await self._unless_stopped(item, item.line)
-                if written is None:
+                if written is None or self._after_its_hold(item):
                     return
                 line = written
             if not line.text:  # Nova says nothing for this cue

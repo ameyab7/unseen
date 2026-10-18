@@ -285,6 +285,12 @@ class LineWriter:
             return Line(say.text, Source.FIXED, say.moment)
         if say.moment in SET_PIECES:
             prepared = self._prepared.get(_key(say))
+            if prepared is not None and say.away is not None:
+                # Written before the date, for both daters; one is away now. Checked again
+                # as for the one who's here, so it never names the other.
+                found = self._check(say, prepared.text) if prepared.text else ()
+                if found:
+                    return self._fallback(say, Attempt(prepared.text, found, prepared.ms, None))
             if prepared is not None:
                 return prepared
             return self._fallback(say, Attempt(None, (), 0, ErrorKind.NOT_PREPARED))

@@ -489,6 +489,7 @@ def cover_line(n: int) -> Say:
 
 
 COVER = [Say(Moment.NEED_A_MOMENT, text=script.NEED_A_MOMENT), PAUSE_TALK]
+MOMENT = [StopSpeaking(), *COVER]  # a dater's own moment: Nova stops mid-line first
 WELCOME_BACK = Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK)
 BEAR_WITH_US = Say(Moment.BEAR_WITH_US, text=script.BEAR_WITH_US)
 NOT_BACK = [AlertModerator(ModeratorAlert.PAUSE_NOT_BACK, LEFT), BEAR_WITH_US]
@@ -504,7 +505,7 @@ def paused_and_not_back() -> Show:
 
 def test_need_a_moment_nova_covers_and_the_clock_holds_until_the_dater_is_back():
     show = Show()
-    assert show.at(100, "need_a_moment", LEFT) == COVER
+    assert show.at(100, "need_a_moment", LEFT) == MOMENT
     assert "Maya" not in script.NEED_A_MOMENT and "Theo" not in script.NEED_A_MOMENT
 
     show.until(114.5)
@@ -577,6 +578,22 @@ def test_while_a_dater_is_away_their_first_question_is_skipped():
     show.at(40, "moderator_resume")
     show.until(120)
     assert [(t, c.about) for t, c in show.says(Moment.FIRST_QUESTION)] == [(97.5, RIGHT)]
+    assert [c.away for _, c in show.says(Moment.FIRST_QUESTION)] == [LEFT]
+
+
+def test_while_a_dater_is_away_the_others_last_word_is_marked_so_it_never_names_them():
+    """Before, Theo's last word, written before the date, asked what he hoped Maya would
+    discover about him while she was away (the scenario run)."""
+    show = resumed_without_maya()
+    show.until(600)
+    assert [(c.about, c.away) for _, c in show.says(Moment.LAST_WORD)] == [(RIGHT, LEFT)]
+
+
+def test_with_both_daters_on_air_no_turn_is_marked():
+    show = Show()
+    show.until(600)
+    turns = [*show.says(Moment.FIRST_QUESTION), *show.says(Moment.LAST_WORD)]
+    assert len(turns) == 4 and all(c.away is None for _, c in turns)
 
 
 def test_while_a_dater_is_away_a_long_silence_brings_a_prompt_for_the_one_whos_here():
@@ -651,9 +668,9 @@ def test_a_second_pause_by_the_same_dater_alerts_the_moderator_and_there_is_no_l
     show = Show()
     show.at(100, "need_a_moment", LEFT)
     show.at(105, "back", LEFT)
-    assert show.at(150, "need_a_moment", RIGHT) == COVER, "Theo's first pause: no alert"
+    assert show.at(150, "need_a_moment", RIGHT) == MOMENT, "Theo's first pause: no alert"
     show.at(155, "back", RIGHT)
-    second = [*COVER, AlertModerator(ModeratorAlert.REPEATED_PAUSE, LEFT)]
+    second = [*MOMENT, AlertModerator(ModeratorAlert.REPEATED_PAUSE, LEFT)]
     assert show.at(200, "need_a_moment", LEFT) == second, "Maya's second pause"
     show.at(205, "back", LEFT)
     assert show.at(220, "need_a_moment", LEFT) == second, "and her third"
@@ -1098,11 +1115,11 @@ def test_a_report_never_counts_as_a_repeated_pause():
     show = Show()
     show.at(100, "dater_reported", LEFT)
     show.at(110, "moderator_resume")
-    assert show.at(150, "need_a_moment", LEFT) == COVER, "the dater's first own pause"
+    assert show.at(150, "need_a_moment", LEFT) == MOMENT, "the dater's first own pause"
     show.at(160, "back", LEFT)
     show.at(200, "dater_reported", LEFT)
     show.at(210, "moderator_resume")
-    assert show.at(230, "need_a_moment", LEFT) == [*COVER, REPEATED], "their second own pause"
+    assert show.at(230, "need_a_moment", LEFT) == [*MOMENT, REPEATED], "their second own pause"
     assert show.cues(AlertModerator).count(REPEATED) == 1
 
 

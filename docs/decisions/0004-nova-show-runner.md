@@ -60,6 +60,21 @@ Date: 2026-10-13. Status: accepted.
   brings an absent dater back on air, and with both away nobody gets a silence prompt.
   A lightning unlock that comes in during a hold is announced once the date is on air
   again, never over the pause.
+- **A hold starts and ends cleanly** (2026-10-17, from scripted dates run against the real
+  model on main at 9edcb48). A dater's own moment stops Nova mid-line, as a report and a
+  distress pause already did, and what was queued is dropped as for those: before, Nova
+  finished an eight-second question to both daters before "Let's take a short
+  breather." Talk to the room and "Bear with us" that cover a hold and haven't been said
+  when it ends (the dater is back, the moderator resumes or ends the date) are never
+  said, even if Nova had already picked one up and the model was still writing it, and
+  one that's playing stops mid-line, so "And we're back." comes at once: before, they
+  played after the resume, for twenty seconds of a date that had moved on, and a line
+  already playing held the welcome back about five seconds.
+  While a dater is away after a resume, the other dater's first question and last word,
+  written before the date for both, are checked again as for the dater who's here; one
+  that names the absent dater gives way to its approved fallback
+  ("Theo, the last word is yours."), which names only the dater on air. Before, Theo was
+  asked what he hoped Maya would discover about him while she was away.
 - **A report pauses the date** until the moderator resumes or ends it (the prototype's
   report sheet: "Nova pauses the date and a live moderator listens in", "Pause and
   report"). The moderator is alerted first (`dater_reported`); then, if a pause can start,
