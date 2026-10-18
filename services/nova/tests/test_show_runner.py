@@ -1551,6 +1551,26 @@ def test_paced_a_turn_line_never_reported_holds_the_next_turn_at_most_twenty_sec
     assert first_question_times(show) == [45.0, 87.5]
 
 
+def test_paced_after_the_cap_a_turn_still_never_cuts_a_dater_off():
+    """Before, the 20 s cap ran out while Theo was mid-answer, and Nova spoke over him."""
+    show = Show(paced=True)
+    show.until(80)  # Theo's turn has waited since 67.5 s for Maya's line to be reported
+    show.at(80, "speech_started", RIGHT)
+    show.until(90)
+    assert first_question_times(show) == [45.0], "the cap ran out at 87.5 s, but Theo is talking"
+    show.at(92, "speech_stopped", RIGHT)
+    assert first_question_times(show) == [45.0, 92.0], "the first moment nobody is speaking"
+
+
+def test_paced_only_half_a_minute_of_speech_without_a_break_is_talked_over():
+    show = Show(paced=True)
+    show.at(60, "speech_started", LEFT)  # a TV the voice detector hears, from 60 s
+    show.until(94.5)
+    assert first_question_times(show) == [45.0], "30 s, then the usual 5 s talk-over grace"
+    show.until(95)
+    assert first_question_times(show) == [45.0, 95.0]
+
+
 def test_unpaced_turns_go_by_the_clock():
     show = Show()
     show.until(100)

@@ -100,9 +100,12 @@ TURN_BEATS = frozenset(
 )
 # Turns that break into the daters' own conversation: they wait for timing.lull.
 LULL_BEATS = frozenset({"from_the_room", "audience_question"})
-# A turn waits at most this long, whatever holds it: a line never reported played, a dater
-# who keeps talking (a TV in the room). Wall seconds, during which the show clock is stopped.
+# After a turn has waited this long (a line never reported played, daters who never pause
+# for long), it takes the first moment nobody is speaking: it never cuts a dater off.
+# Wall seconds, during which the show clock is stopped.
 TURN_WAIT_CAP = 20.0
+# Only speech this long without a break is talked over: a TV the voice detector hears.
+SPEECH_CAP = 30.0
 # Conduct the moderator hears about at once, with nothing said on air (decision 0006).
 FLAGGED = frozenset(
     {
@@ -239,6 +242,7 @@ class ShowRunner:
         self._turn_paused_since: float | None = None
         self._turn_wait_from: float | None = None  # wall time the due turn began waiting
         self._speech_ended_at: float | None = None  # wall time a dater last stopped
+        self._speech_since: float | None = None  # wall time the current speech began
         # The daters the last turn asked who haven't started answering yet.
         self._awaiting: set[Seat] = set()
 
@@ -310,6 +314,8 @@ class ShowRunner:
         """The voice detector hears a dater start speaking. Until they stop, a beat's lines
         and sounds wait (up to timing.talk_over_grace), and no silence prompt comes."""
         cues = self._due(now)
+        if not self._speaking:
+            self._speech_since = now
         self._speaking.add(seat)
         self._awaiting.discard(seat)  # they've started answering: now they're speaking
         if self._live and self._held_since is None:
@@ -321,6 +327,8 @@ class ShowRunner:
         once nobody is speaking, anything that waited goes out, in order."""
         self._speaking.discard(seat)
         self._speech_ended_at = now
+        if not self._speaking:
+            self._speech_since = None
         if self._live and self._held_since is None:
             self._quiet_since = self._show_time(now)
         return self._due(now)
@@ -734,13 +742,18 @@ class ShowRunner:
         between their sentences isn't the end of their answer; timing.lull before an audience
         question, which breaks into their conversation), and until everyone it asked has
         started answering: one who hasn't within timing.answer_window of the last person to
-        speak (or of Nova finishing) is passed over. Never longer than TURN_WAIT_CAP."""
+        speak (or of Nova finishing) is passed over. After TURN_WAIT_CAP it goes the first
+        moment nobody is speaking; only SPEECH_CAP of speech without a break is talked
+        over (before, the cap ran out while Theo was mid-answer, and Nova spoke over him)."""
         if not self._paced or beat.action not in TURN_BEATS:
             return False
+        if self._speaking:
+            started = self._speech_since
+            return started is None or now - started < SPEECH_CAP
         since = self._turn_wait_from
         if since is not None and now - since >= TURN_WAIT_CAP:
             return False
-        if self._turns_unfinished or self._speaking:
+        if self._turns_unfinished:
             return True
         ended = self._speech_ended_at
         gap = self._timing.lull if beat.action in LULL_BEATS else self._timing.turn_gap

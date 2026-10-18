@@ -96,8 +96,10 @@ Date: 2026-10-13. Status: accepted.
   the show clock stops, as in a hold, so everything after it moves too: a late date runs
   a few seconds long, never skips a turn, and the decision window is never cut short (a
   first version moved only the turn, and a late "That's time." left the daters 1.8 s to
-  decide). A turn waits at most 20 s in all (a line never reported played, a TV that keeps
-  the voice detector hearing speech). The schedule gives far more time in a full date, so
+  decide). After 20 s of waiting (a line never reported played, daters who never pause
+  long) a turn takes the first moment nobody is speaking, so it never cuts a dater off
+  (a first cap ran out while Theo was mid-answer); only 30 s of speech without a break,
+  a TV the voice detector hears, is talked over. The schedule gives far more time in a full date, so
   this matters when Nova runs late and in rehearsals. Unpaced (the evaluation, the
   runner's own tests), every beat goes by the clock as before.
 - **A report pauses the date** until the moderator resumes or ends it (the prototype's
