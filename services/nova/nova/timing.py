@@ -50,6 +50,9 @@ class Timing:
     # Only when Nova's lines are reported played (ShowRunner paced); the schedule gives far
     # more in a full date, so this matters when Nova runs late or in a rehearsal.
     answer_window: float = 6.0
+    # ... and until nobody has spoken for this long: people pause between sentences,
+    # and the voice detector hears each pause as the end of their speech.
+    turn_gap: float = 1.5
 
     def __post_init__(self) -> None:
         starts = [
@@ -72,6 +75,7 @@ class Timing:
             "silence_cooldown",
             "talk_over_grace",
             "answer_window",
+            "turn_gap",
             "cover_lines",
         }
         return replace(

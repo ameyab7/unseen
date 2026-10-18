@@ -1586,7 +1586,10 @@ def test_paced_a_turn_waits_while_a_dater_is_still_answering():
     show.until(74.5)
     assert first_question_times(show) == [45.0]
     show.at(75, "speech_stopped", LEFT)
-    assert first_question_times(show) == [45.0, 75.0], "the moment she stops"
+    show.until(76)
+    assert first_question_times(show) == [45.0], "a pause between sentences, maybe"
+    show.until(76.5)
+    assert first_question_times(show) == [45.0, 76.5], "1.5 s after she stops"
 
 
 def test_paced_a_turn_dropped_by_a_pause_holds_nothing():

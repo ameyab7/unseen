@@ -679,6 +679,9 @@ async def test_the_first_question_waits_for_the_dater_to_finish_their_sentence()
     assert first_questions() == [], "Maya is mid-sentence"
     clock.now = 15.0
     r.speech_ended()
+    assert first_questions() == [], "a pause between her sentences, maybe"
+    clock.now = 16.5  # the turn gap: 1.5 s of quiet
+    r.tick()
     assert len(first_questions()) == 1
 
 

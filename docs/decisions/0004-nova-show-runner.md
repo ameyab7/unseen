@@ -84,8 +84,10 @@ Date: 2026-10-13. Status: accepted.
   questions, the lightning questions, the last words) or ends them ("That's time.") then
   waits until Nova has finished asking the dater before and they've had
   `answer_window` (6 s, not scaled for rehearsals) to start answering, and while a dater
-  is still speaking: before, the next line went out over them after the 5 s talk-over
-  grace, cutting a dater off five seconds into an eight-second answer. While a turn waits
+  is still speaking, and until nobody has spoken for `turn_gap` (1.5 s, not scaled):
+  before, the next line went out over them after the 5 s talk-over grace, cutting a
+  dater off five seconds into an eight-second answer, and the voice detector hears the
+  half-second pause between two sentences as the end of an answer. While a turn waits
   the show clock stops, as in a hold, so everything after it moves too: a late date runs
   a few seconds long, never skips a turn, and the decision window is never cut short (a
   first version moved only the turn, and a late "That's time." left the daters 1.8 s to

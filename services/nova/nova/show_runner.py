@@ -236,6 +236,7 @@ class ShowRunner:
         # everything after it moves too, so the decision window is never cut short.
         self._turn_paused_since: float | None = None
         self._turn_wait_from: float | None = None  # wall time the due turn began waiting
+        self._speech_ended_at: float | None = None  # wall time a dater last stopped
 
         self.segment: Segment | None = None
         self.end_reason: EndReason | None = None
@@ -314,6 +315,7 @@ class ShowRunner:
         """The voice detector hears a dater stop. The silence clock counts from now, and
         once nobody is speaking, anything that waited goes out, in order."""
         self._speaking.discard(seat)
+        self._speech_ended_at = now
         if self._live and self._held_since is None:
             self._quiet_since = self._show_time(now)
         return self._due(now)
@@ -720,14 +722,18 @@ class ShowRunner:
 
     def _turn_waits(self, beat: _Beat, now: float) -> bool:
         """Paced, a turn waits while Nova is still asking the dater before (or has the line
-        queued), then for timing.answer_window, and while a dater is still speaking; never
-        longer than TURN_WAIT_CAP in all."""
+        queued), then for timing.answer_window, while a dater is still speaking, and for
+        timing.turn_gap after one stops (a pause between their sentences isn't the end of
+        their answer); never longer than TURN_WAIT_CAP in all."""
         if not self._paced or beat.action not in TURN_BEATS:
             return False
         since = self._turn_wait_from
         if since is not None and now - since >= TURN_WAIT_CAP:
             return False
         if self._turns_unfinished or self._speaking:
+            return True
+        ended = self._speech_ended_at
+        if ended is not None and now < ended + self._timing.turn_gap:
             return True
         done = self._turn_done_at
         return done is not None and now < done + self._timing.answer_window
