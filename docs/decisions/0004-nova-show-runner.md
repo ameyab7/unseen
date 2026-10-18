@@ -99,9 +99,9 @@ Date: 2026-10-13. Status: accepted.
   decide). After 20 s of waiting (a line never reported played, daters who never pause
   long), counted from when Nova finished asking (counted from when the turn came due, it
   ran out before Theo had answered), a turn stops waiting for the lull and the answers but
-  still needs the turn gap, so it never cuts a dater off (a first cap ran out while Theo was mid-answer, a second
-  went the instant Maya stopped, as Theo began); only 30 s of speech without a break, a
-  TV the voice detector hears, is talked over. When a dater and Nova take the floor at
+  still needs the turn gap, so it never cuts a dater off (a first cap ran out while Theo
+  was mid-answer, a second went the instant Maya stopped, as Theo began); only 30 s of
+  speech without a break, a TV the voice detector hears, is talked over. When a dater and Nova take the floor at
   the same moment after a silence (Nova's voice takes about 0.5 s to start and the voice
   detector as long to hear the dater, so neither knew), a dater who starts within 1.5 s of
   Nova handing a line to its voice goes first: Nova stops, lets them finish (the turn gap
