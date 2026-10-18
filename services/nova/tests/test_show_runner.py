@@ -1511,3 +1511,72 @@ def test_with_both_daters_away_no_audience_question_is_read():
     show.at(230, "moderator_resume")
     show.until(400)
     assert show.says(Moment.FROM_THE_ROOM) == []
+
+
+# --- Paced turns: each dater has time to answer --------------------------------------------
+
+MAYAS_QUESTION = Say(Moment.FIRST_QUESTION, about=LEFT, detail=MAYA.prompts[0].text)
+
+
+def first_question_times(show: Show) -> list[float]:
+    return [t for t, _ in show.says(Moment.FIRST_QUESTION)]
+
+
+def test_paced_the_second_dater_waits_until_the_first_had_time_to_answer():
+    """Before, the second dater's question went by the clock alone: in the LiveKit listen run
+    Nova ran late, asked Theo, then asked Maya 0.2 s later, before Theo could say a word."""
+    show = Show(paced=True)
+    show.until(80)  # Nova is still asking Maya at 80 s: running late
+    assert first_question_times(show) == [45.0]
+    show.runner.line_done(80, MAYAS_QUESTION)
+    show.until(85.5)
+    assert first_question_times(show) == [45.0], "the answer window is 6 s"
+    show.until(86)
+    assert first_question_times(show) == [45.0, 86.0]
+
+
+def test_paced_a_turn_is_on_time_when_nova_is():
+    show = Show(paced=True)
+    show.until(50)
+    show.runner.line_done(50, MAYAS_QUESTION)
+    show.until(100)
+    assert first_question_times(show) == [45.0, 67.5]
+
+
+def test_paced_a_turn_line_never_reported_holds_the_next_turn_at_most_twenty_seconds():
+    show = Show(paced=True)
+    show.until(120)
+    assert first_question_times(show) == [45.0, 87.5]
+
+
+def test_unpaced_turns_go_by_the_clock():
+    show = Show()
+    show.until(100)
+    assert first_question_times(show) == [45.0, 67.5]
+
+
+def test_paced_thats_time_never_cuts_off_the_last_dater():
+    """Each turn line finishes 3 s after its cue, but Nova only finishes asking Theo for his
+    last word at 7:58: "That's time." waits until he has had his answer window."""
+    show = Show(paced=True)
+    reported: set[int] = set()
+    while show.now < 490:
+        show.until(show.now + 0.5)
+        for i, (t, say) in enumerate(show.says()):
+            if i in reported or say.moment not in (Moment.FIRST_QUESTION, Moment.LAST_WORD):
+                continue
+            theos_last_word = say.moment is Moment.LAST_WORD and say.about is RIGHT
+            if show.now >= (478.0 if theos_last_word else t + 3.0):
+                show.runner.line_done(show.now, say)
+                reported.add(i)
+    assert show.times(Say, moment=Moment.TIME) == [484.0]
+
+
+def test_paced_a_turn_dropped_by_a_pause_holds_nothing():
+    show = Show(paced=True)
+    show.until(50)
+    show.runner.line_done(50, MAYAS_QUESTION)
+    show.at(67, "speech_started", RIGHT)
+    show.until(67.5)  # Theo's question waits for him to finish speaking
+    show.at(68, "need_a_moment", RIGHT)  # and the pause drops it
+    assert show.runner._turns_unfinished == 0

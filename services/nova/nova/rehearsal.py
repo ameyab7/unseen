@@ -164,6 +164,7 @@ class Rehearsal:
             timing=timing,
             next_pair=next_pair,
             first_up=first_up,
+            paced=True,  # every line is reported as it finishes (_speak, _stop)
         )
         self._writer = LineWriter(
             model,
@@ -462,7 +463,9 @@ class Rehearsal:
         speaking task has already picked up either, whether it's playing, waiting for the
         model or waiting for a distress verdict. What comes after the stop is said at once."""
         while not self._queue.empty():
-            self._queue.get_nowait().line.cancel()
+            dropped = self._queue.get_nowait()
+            dropped.line.cancel()
+            self._runner.line_done(self._clock(), dropped.say)
             self._queue.task_done()
         if self._current is not None:
             self._current.stopped.set()
@@ -588,6 +591,7 @@ class Rehearsal:
             raise
         finally:
             self._current = None
+            self._runner.line_done(self._clock(), item.say)  # the next dater's turn waits
             self._queue.task_done()
 
 

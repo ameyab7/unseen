@@ -166,6 +166,17 @@ def close(r: Rehearsal, clock: Clock) -> None:
     r.tick()
 
 
+async def past_the_first_questions(r: Rehearsal, clock: Clock, at: float = 40.0) -> None:
+    """Both first questions and the silence prompt after them: the second dater's question
+    comes once the first had their answer window (the rehearsal is paced)."""
+    clock.now = at
+    r.tick()
+    await r.speak_queued()
+    clock.now = at + REHEARSAL.answer_window + 1.0
+    r.tick()
+    await r.speak_queued()
+
+
 def lines(r: Rehearsal, moment: Moment) -> list[Spoken]:
     return [s for s in r.spoken if s.moment is moment]
 
@@ -232,9 +243,7 @@ async def test_a_prepared_line_is_measured_from_its_cue():
 async def test_a_reply_is_measured_from_the_end_of_the_daters_sentence():
     clock = Clock()
     r = await started(clock)
-    clock.now = 40.0
-    r.tick()
-    await r.speak_queued()  # the first questions and a silence prompt
+    await past_the_first_questions(r, clock)
     clock.now = 50.0
     r.speech_started()
     clock.now = 51.0
@@ -257,9 +266,7 @@ async def test_a_reply_is_measured_from_the_end_of_the_daters_sentence():
 async def test_a_question_split_across_transcripts_gets_one_reply_to_the_whole_of_it():
     clock = Clock()
     r = await started(clock)
-    clock.now = 40.0
-    r.tick()
-    await r.speak_queued()
+    await past_the_first_questions(r, clock)
     clock.now = 50.0
     r.speech_started()
     clock.now = 50.5
@@ -743,6 +750,26 @@ async def test_talk_that_covered_a_hold_is_never_said_once_the_hold_is_over(comm
     await r.speak_queued()
     assert lines(r, Moment.BEAR_WITH_US) == [] and lines(r, Moment.ROOM_TALK) == []
     assert script.NEED_A_MOMENT in r.speaker.texts
+
+
+async def test_the_second_dater_is_asked_only_once_the_first_had_time_to_answer():
+    """Nova runs late: Maya's question plays until 19.9 s, and Theo's is due by the clock at
+    20.25 s. It waits for Maya's answer window instead."""
+    clock = Clock()
+    r = await started(clock, speaker=FakeSpeaker(clock, length=6.0))
+
+    def asked() -> list[Seat | None]:
+        return [c.about for c in r.cues if getattr(c, "moment", None) is Moment.FIRST_QUESTION]
+
+    clock.now = 13.6
+    r.tick()
+    await r.speak_queued()
+    clock.now = 20.3
+    r.tick()
+    assert asked() == [Seat.LEFT]
+    clock.now = 26.0
+    r.tick()
+    assert asked() == [Seat.LEFT, Seat.RIGHT]
 
 
 async def test_talk_that_covers_a_hold_is_said_while_the_hold_lasts():

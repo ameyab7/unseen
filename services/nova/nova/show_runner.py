@@ -79,6 +79,27 @@ NEVER_HELD = frozenset(
         Moment.SHOW_PAUSE,
     }
 )
+# A dater's turn: Nova asks one dater something and waits for their answer.
+TURN_MOMENTS = frozenset(
+    {Moment.FIRST_QUESTION, Moment.FROM_THE_ROOM, Moment.LIGHTNING_QUESTION, Moment.LAST_WORD}
+)
+# Beats that start a turn, or end the turns ("That's time"): when paced, each waits until
+# the dater asked before had timing.answer_window after Nova finished asking them.
+TURN_BEATS = frozenset(
+    {
+        "first_question",
+        "second_prompt",
+        "from_the_room",
+        "audience_question",
+        "lightning",
+        "lightning_question",
+        "last_word",
+        "second_last_word",
+        "time",
+    }
+)
+# A turn line never reported played (a lost line) holds the next turn at most this long.
+TURN_WAIT_CAP = 20.0
 # Conduct the moderator hears about at once, with nothing said on air (decision 0006).
 FLAGGED = frozenset(
     {
@@ -145,7 +166,11 @@ class ShowRunner:
         invitation_given_tonight: bool = False,
         first_up: Seat | None = None,
         rng: random.Random | None = None,
+        paced: bool = False,
     ) -> None:
+        """paced: whoever plays the cues reports each of Nova's lines as it finishes
+        (line_done), so a dater's turn waits for the dater asked before to have had time to
+        answer (TURN_BEATS). Unpaced, every beat goes by the clock alone."""
         # Each lightning question gets a full gap before the last word.
         questions = running_order.LIGHTNING_QUESTIONS
         if timing.lightning + questions * timing.lightning_gap > timing.last_word:
@@ -203,6 +228,9 @@ class ShowRunner:
         self._speaking: set[Seat] = set()  # daters the voice detector hears right now
         self._waiting: list[Cue] = []  # a beat's lines and sounds, held while one speaks
         self._waiting_until: float | None = None  # wall time they go out whatever happens
+        self._paced = paced
+        self._turns_unfinished = 0  # turn lines cued that Nova hasn't finished saying
+        self._turn_done_at: float | None = None  # show time Nova last finished asking one
 
         self.segment: Segment | None = None
         self.end_reason: EndReason | None = None
@@ -255,6 +283,14 @@ class ShowRunner:
     def held(self) -> bool:
         """The show is held: a dater's moment, a distress or conduct pause, or a report."""
         return self._held_since is not None
+
+    def line_done(self, now: float, say: Say) -> None:
+        """Nova finished a line, or it never played (cut off, dropped, nothing to say).
+        Paced, the dater asked in a turn line gets their answer window from now."""
+        if not self._paced or say.moment not in TURN_MOMENTS or not self.started:
+            return
+        self._turns_unfinished = max(0, self._turns_unfinished - 1)
+        self._turn_done_at = self._show_time(now)
 
     # --- Things that happen in the room ---------------------------------------------------
     # Daters, the moderator and the room can do these at any time, so none of them raises
@@ -578,6 +614,8 @@ class ShowRunner:
             if isinstance(cue, Say) and cue.moment is Moment.FROM_THE_ROOM and cue.detail:
                 self._questions.appendleft(cue.detail)
                 self._questions_asked -= 1
+            if self._paced and _is_turn(cue):  # never asked, so nobody waits to answer it
+                self._turns_unfinished = max(0, self._turns_unfinished - 1)
         self._waiting, self._waiting_until = [], None
 
     def _take_waiting_moment(self, now: float) -> list[Cue]:
@@ -646,13 +684,28 @@ class ShowRunner:
             if min(beat_at, silence_at) > shown:
                 break
             if beat_at <= silence_at:
+                if self._turn_waits(self._beats[0], shown):
+                    break  # the running order waits, in order, and the date runs long
                 beat = heapq.heappop(self._beats)
-                cues += self._wait_for_speech(now, self._attempt(beat, shown))
+                ran = self._attempt(beat, shown)
+                if self._paced:
+                    self._turns_unfinished += sum(_is_turn(cue) for cue in ran)
+                cues += self._wait_for_speech(now, ran)
                 if self._finish_when_said and not self._waiting:
                     cues += self._finish()
             else:
                 cues += self._nudge(silence_at)
         return cues
+
+    def _turn_waits(self, beat: _Beat, shown: float) -> bool:
+        """Paced, a turn waits while Nova is still asking the dater before (or has the line
+        queued), and then for timing.answer_window, but never past TURN_WAIT_CAP."""
+        if not self._paced or beat.action not in TURN_BEATS or shown >= beat.at + TURN_WAIT_CAP:
+            return False
+        if self._turns_unfinished:
+            return True
+        done = self._turn_done_at
+        return done is not None and shown < done + self._timing.answer_window
 
     def _attempt(self, beat: _Beat, shown: float) -> list[Cue]:
         """Runs a beat. One that raises (in production, the room poll or the decision desk
@@ -958,6 +1011,10 @@ def rounded_share(yes: int, total: int) -> float:
     numbers, so no float error rounds a half the wrong way."""
     steps = (20 * yes + total) // (2 * total)  # tenths, rounded half up
     return round(steps * VERDICT_STEP, 1)
+
+
+def _is_turn(cue: Cue) -> bool:
+    return isinstance(cue, Say) and cue.moment in TURN_MOMENTS
 
 
 def waits_for_speech(cue: Cue) -> bool:

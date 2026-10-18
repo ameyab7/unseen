@@ -75,6 +75,19 @@ Date: 2026-10-13. Status: accepted.
   that names the absent dater gives way to its approved fallback
   ("Theo, the last word is yours."), which names only the dater on air. Before, Theo was
   asked what he hoped Maya would discover about him while she was away.
+- **Each dater has time to answer** (2026-10-18, from a LiveKit rehearsal heard live). Turns
+  went by the clock alone: when Nova ran late (the lightning-unlocked line queued behind the
+  doors intro), it asked Theo his first question and asked Maya hers 0.2 s later, before
+  Theo could say a word. Now whoever plays the cues reports each of Nova's lines as it
+  finishes (`ShowRunner(paced=True)`, `line_done`; the rehearsal does, for lines cut off or
+  dropped too). A beat that starts a dater's turn (the first questions, the audience
+  questions, the lightning questions, the last words) or ends them ("That's time.") then
+  waits until Nova has finished asking the dater before and they've had
+  `answer_window` (6 s, not scaled for rehearsals) to start answering. The running order
+  waits in order, so a late date runs a few seconds long, never skips a turn; a turn line
+  never reported holds the next turn at most 20 s. The schedule gives far more time in a
+  full date, so this matters when Nova runs late and in rehearsals. Unpaced (the
+  evaluation, the runner's own tests), every beat goes by the clock as before.
 - **A report pauses the date** until the moderator resumes or ends it (the prototype's
   report sheet: "Nova pauses the date and a live moderator listens in", "Pause and
   report"). The moderator is alerted first (`dater_reported`); then, if a pause can start,
