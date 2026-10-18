@@ -75,6 +75,42 @@ Date: 2026-10-13. Status: accepted.
   that names the absent dater gives way to its approved fallback
   ("Theo, the last word is yours."), which names only the dater on air. Before, Theo was
   asked what he hoped Maya would discover about him while she was away.
+- **Each dater has time to answer** (2026-10-18, from a LiveKit rehearsal heard live). Turns
+  went by the clock alone: when Nova ran late (the lightning-unlocked line queued behind the
+  doors intro), it asked Theo his first question and asked Maya hers 0.2 s later, before
+  Theo could say a word. Now whoever plays the cues reports each of Nova's lines as it
+  finishes (`ShowRunner(paced=True)`, `line_done`; the rehearsal does, for lines cut off or
+  dropped too). A beat that starts a dater's turn (the first questions, the audience
+  questions, the lightning questions, the last words) or ends them ("That's time.") then
+  waits until Nova has finished asking the dater before and they've had
+  `answer_window` (6 s, not scaled for rehearsals) to start answering, and while a dater
+  is still speaking, and until nobody has spoken for `turn_gap` (1.5 s, not scaled):
+  before, the next line went out over them after the 5 s talk-over grace, cutting a
+  dater off five seconds into an eight-second answer, and the voice detector hears the
+  half-second pause between two sentences as the end of an answer. It also waits until
+  everyone the turn before asked has started answering (the dater named, or both for an
+  audience or lightning question): Nova asked the next question 1.5 s after the first
+  dater finished, as the second began. One who hasn't started within `answer_window` of
+  the last person to speak is passed over. An audience question, which breaks into the
+  daters' own conversation, waits for `lull` (2.5 s of quiet) instead of `turn_gap`. While a turn waits
+  the show clock stops, as in a hold, so everything after it moves too: a late date runs
+  a few seconds long, never skips a turn, and the decision window is never cut short (a
+  first version moved only the turn, and a late "That's time." left the daters 1.8 s to
+  decide). After 20 s of waiting (a line never reported played, daters who never pause
+  long), counted from when Nova finished asking (counted from when the turn came due, it
+  ran out before Theo had answered), a turn stops waiting for the lull and the answers but
+  still needs the turn gap, so it never cuts a dater off (a first cap ran out while Theo
+  was mid-answer, a second went the instant Maya stopped, as Theo began); only 30 s of
+  speech without a break, a TV the voice detector hears, is talked over. When a dater and Nova take the floor at
+  the same moment after a silence (Nova's voice takes about 0.5 s to start and the voice
+  detector as long to hear the dater, so neither knew), a dater who starts within 1.5 s of
+  Nova handing a line to its voice goes first: Nova stops, lets them finish (the turn gap
+  of quiet, not their first pause: a first version came back in between two of Theo's
+  sentences), and says the line again, once (`yielded` in the log). Only lines that wait for a dater anyway, never
+  a reply, a safety line or the result. The rehearsal logs each start and stop
+  the voice detector hears (`speech`, the seat only), to check turn-taking afterwards. The schedule gives far more time in a full date, so
+  this matters when Nova runs late and in rehearsals. Unpaced (the evaluation, the
+  runner's own tests), every beat goes by the clock as before.
 - **A report pauses the date** until the moderator resumes or ends it (the prototype's
   report sheet: "Nova pauses the date and a live moderator listens in", "Pause and
   report"). The moderator is alerted first (`dater_reported`); then, if a pause can start,

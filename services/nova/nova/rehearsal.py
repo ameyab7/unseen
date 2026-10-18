@@ -33,7 +33,7 @@ from nova.measure import ms
 from nova.models import WARM_UP_TIMEOUT, LineModel, Warmed, warm_up
 from nova.on_air import Closed, OnAirCues, OnAirListener, ReplyAction
 from nova.questions import AudienceQuestion, QuestionStatus
-from nova.show_runner import NoVotes, ShowRunner, waits_for_speech
+from nova.show_runner import SPEECH_CAP, NoVotes, ShowRunner, waits_for_speech
 from nova.timing import REHEARSAL, Timing
 from nova.tonight import Tonight
 
@@ -42,6 +42,11 @@ from nova.tonight import Tonight
 FINAL_WAIT = 30.0
 # A final transcript this soon after the voice detector heard a dater stop is still theirs.
 LATE_FINAL = 2.0
+# A dater who starts speaking this soon after Nova handed a line to its voice began at the
+# same moment as Nova (after a silence, both took the floor): Nova stops, lets them finish
+# and says the line again, once. Its voice takes about half a second to start, and the
+# voice detector as long to hear the dater, so neither could have known.
+YIELD_WINDOW = 1.5
 
 
 class Command(StrEnum):
@@ -123,6 +128,8 @@ class _Pending:
     closed_at: float | None = None  # replies: when Nova acted on what the dater said
     # Set when Nova is told to stop while this is the line being spoken or waited for.
     stopped: asyncio.Event = field(default_factory=asyncio.Event)
+    voiced_at: float | None = None  # when the line went to Nova's voice, while it plays
+    yielded: bool = False  # Nova stopped it for a dater who began at the same moment
 
 
 class Rehearsal:
@@ -164,7 +171,9 @@ class Rehearsal:
             timing=timing,
             next_pair=next_pair,
             first_up=first_up,
+            paced=True,  # every line is reported as it finishes (_speak, _stop)
         )
+        self._turn_gap = timing.turn_gap
         self._writer = LineWriter(
             model,
             pair,
@@ -362,14 +371,17 @@ class Rehearsal:
         """The voice detector heard the dater start speaking."""
         self._listening()
         self._speaking = self.seat
+        self._events.emit(Event.SPEECH, seat=self.seat, started=True)
         self._on_air.speech_started(self.seat)
         self._heard_who_speaks()
+        self._yield_if_both_began()
 
     def speech_ended(self) -> None:
         """The voice detector heard the dater stop: the end of their sentence. It ends the
         seat that started speaking, even if the chat has chosen the other one since."""
         seat, self._speaking = self._speaking or self.seat, None
         self._ended = seat, self._clock()
+        self._events.emit(Event.SPEECH, seat=seat, started=False)
         self._on_air.speech_ended(seat)
         self._heard_who_speaks()
 
@@ -395,6 +407,35 @@ class Rehearsal:
     def _listening(self) -> None:
         if self._listening_since is None:
             self._listening_since = self._clock()
+
+    def _yield_if_both_began(self) -> None:
+        """A dater began as Nova did: Nova stops at once, never talking over them, and says
+        the line once they've finished (_speak). Only a line that waits for a dater anyway
+        (show_runner.waits_for_speech), never a reply, a safety line or the result, and only
+        once per line."""
+        item = self._current
+        if (
+            item is None
+            or item.voiced_at is None
+            or item.yielded
+            or item.kind is Kind.REPLY
+            or not waits_for_speech(item.say)
+            or self._clock() - item.voiced_at > YIELD_WINDOW
+        ):
+            return
+        item.yielded = True
+        self.speaker.stop()
+
+    async def _after_the_dater(self, item: _Pending) -> None:
+        """After a yield: until nobody has spoken for the turn gap (a pause between a dater's
+        sentences isn't the end of what they're saying: Nova came back in on one), or Nova is
+        told to stop; at most SPEECH_CAP."""
+        deadline = self._clock() + SPEECH_CAP
+        while not item.stopped.is_set() and self._clock() < deadline:
+            ended = self._ended[1] if self._ended is not None else None
+            if self._quiet.is_set() and (ended is None or self._clock() - ended >= self._turn_gap):
+                return
+            await asyncio.sleep(0.05)
 
     def _heard_who_speaks(self) -> None:
         if self._runner.speaking:
@@ -462,7 +503,9 @@ class Rehearsal:
         speaking task has already picked up either, whether it's playing, waiting for the
         model or waiting for a distress verdict. What comes after the stop is said at once."""
         while not self._queue.empty():
-            self._queue.get_nowait().line.cancel()
+            dropped = self._queue.get_nowait()
+            dropped.line.cancel()
+            self._runner.line_done(self._clock(), dropped.say)
             self._queue.task_done()
         if self._current is not None:
             self._current.stopped.set()
@@ -550,7 +593,16 @@ class Rehearsal:
             if waited is not None:  # measured from when the dater finished, as the runner does
                 cue_at = picked = max(cue_at, waited)
             try:
+                item.voiced_at = self._clock()
                 started = await self.speaker.speak(line.text)
+                item.voiced_at = None
+                if item.yielded and not item.stopped.is_set():
+                    # Both began at once: the dater goes first, then Nova says it again.
+                    self._events.emit(Event.YIELDED, moment=line.moment)
+                    await self._after_the_dater(item)
+                    if item.stopped.is_set():
+                        return
+                    started = await self.speaker.speak(line.text)
                 if started is not None:
                     self.nova_seconds += max(0.0, self._clock() - started)
             except Exception:  # the voice failed: this line never played, the date goes on
@@ -588,6 +640,7 @@ class Rehearsal:
             raise
         finally:
             self._current = None
+            self._runner.line_done(self._clock(), item.say)  # the next dater's turn waits
             self._queue.task_done()
 
 

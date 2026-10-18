@@ -38,7 +38,7 @@ from nova.decisions import Choice, DecisionError, InMemoryDecisionDesk, Outcome
 from nova.distress import Verdict
 from nova.fixtures import MAYA, NEXT_PAIR, REHEARSAL_PAIR, THEO
 from nova.questions import AudienceQuestion, OffLimits, QuestionStatus
-from nova.show_runner import PollTally, ShowRunner, rounded_share
+from nova.show_runner import TURN_MOMENTS, PollTally, ShowRunner, rounded_share
 from nova.timing import FULL, REHEARSAL, Timing
 
 LEFT, RIGHT = Seat.LEFT, Seat.RIGHT
@@ -1511,3 +1511,209 @@ def test_with_both_daters_away_no_audience_question_is_read():
     show.at(230, "moderator_resume")
     show.until(400)
     assert show.says(Moment.FROM_THE_ROOM) == []
+
+
+# --- Paced turns: each dater has time to answer --------------------------------------------
+
+MAYAS_QUESTION = Say(Moment.FIRST_QUESTION, about=LEFT, detail=MAYA.prompts[0].text)
+
+
+def first_question_times(show: Show) -> list[float]:
+    return [t for t, _ in show.says(Moment.FIRST_QUESTION)]
+
+
+def test_paced_the_second_dater_waits_until_the_first_had_time_to_answer():
+    """Before, the second dater's question went by the clock alone: in the LiveKit listen run
+    Nova ran late, asked Theo, then asked Maya 0.2 s later, before Theo could say a word."""
+    show = Show(paced=True)
+    show.until(80)  # Nova is still asking Maya at 80 s: running late
+    assert first_question_times(show) == [45.0]
+    show.runner.line_done(80, MAYAS_QUESTION)
+    show.until(85.5)
+    assert first_question_times(show) == [45.0], "the answer window is 6 s"
+    show.until(86)
+    assert first_question_times(show) == [45.0, 86.0]
+    show.until(120)
+    assert (108.5, Segment.FREE_TALK) in show.segments(), "the running order moved 18.5 s"
+
+
+def test_paced_a_turn_is_on_time_when_nova_is():
+    show = Show(paced=True)
+    show.until(50)
+    show.runner.line_done(50, MAYAS_QUESTION)
+    show.until(100)
+    assert first_question_times(show) == [45.0, 67.5]
+
+
+def test_paced_a_turn_line_never_reported_holds_the_next_turn_at_most_twenty_seconds():
+    show = Show(paced=True)
+    show.until(120)
+    assert first_question_times(show) == [45.0, 87.5]
+
+
+def test_paced_after_the_cap_a_turn_still_never_cuts_a_dater_off():
+    """Before, the 20 s cap ran out while Theo was mid-answer, and Nova spoke over him."""
+    show = Show(paced=True)
+    show.until(80)  # Theo's turn has waited since 67.5 s for Maya's line to be reported
+    show.at(80, "speech_started", RIGHT)
+    show.until(90)
+    assert first_question_times(show) == [45.0], "the cap ran out at 87.5 s, but Theo is talking"
+    show.at(92, "speech_stopped", RIGHT)
+    show.until(93)
+    assert first_question_times(show) == [45.0], "Maya may be about to answer him"
+    show.until(93.5)
+    assert first_question_times(show) == [45.0, 93.5], "the turn gap, even after the cap"
+
+
+def test_paced_only_half_a_minute_of_speech_without_a_break_is_talked_over():
+    show = Show(paced=True)
+    show.at(60, "speech_started", LEFT)  # a TV the voice detector hears, from 60 s
+    show.until(94.5)
+    assert first_question_times(show) == [45.0], "30 s, then the usual 5 s talk-over grace"
+    show.until(95)
+    assert first_question_times(show) == [45.0, 95.0]
+
+
+def test_unpaced_turns_go_by_the_clock():
+    show = Show()
+    show.until(100)
+    assert first_question_times(show) == [45.0, 67.5]
+
+
+def test_paced_thats_time_never_cuts_off_the_last_dater():
+    """Each turn line finishes 3 s after its cue, but Nova only finishes asking Theo for his
+    last word at 7:58: "That's time." waits until he has had his answer window."""
+    show = Show(paced=True)
+    reported: set[int] = set()
+    while show.now < 490:
+        show.until(show.now + 0.5)
+        for i, (t, say) in enumerate(show.says()):
+            if i in reported or say.moment not in (Moment.FIRST_QUESTION, Moment.LAST_WORD):
+                continue
+            theos_last_word = say.moment is Moment.LAST_WORD and say.about is RIGHT
+            if show.now >= (478.0 if theos_last_word else t + 3.0):
+                show.runner.line_done(show.now, say)
+                reported.add(i)
+    assert show.times(Say, moment=Moment.TIME) == [484.0]
+    show.until(560)
+    assert show.times(Say, moment=Moment.RESULT) == [544.0], "the full decision window"
+
+
+def test_paced_a_turn_waits_while_a_dater_is_still_answering():
+    """Before, the next line went out over a dater after the 5 s talk-over grace: Nova cut
+    Theo off five seconds into an eight-second answer (the LiveKit run)."""
+    show = Show(paced=True)
+    show.until(50)
+    show.runner.line_done(50, MAYAS_QUESTION)
+    show.at(66, "speech_started", LEFT)  # Maya is still answering when Theo's turn is due
+    show.until(74.5)
+    assert first_question_times(show) == [45.0]
+    show.at(75, "speech_stopped", LEFT)
+    show.until(76)
+    assert first_question_times(show) == [45.0], "a pause between sentences, maybe"
+    show.until(76.5)
+    assert first_question_times(show) == [45.0, 76.5], "1.5 s after she stops"
+
+
+def test_paced_a_turn_dropped_by_a_pause_holds_nothing():
+    show = Show(paced=True)
+    show.until(50)
+    show.runner.line_done(50, MAYAS_QUESTION)
+    show.at(67, "speech_started", RIGHT)
+    show.until(67.5)  # Theo's question waits for him to finish speaking
+    show.at(68, "need_a_moment", RIGHT)  # and the pause drops it
+    assert show.runner._turns_unfinished == 0
+
+
+def paced_date(show: Show, until: float, events=(), *, finish_after: float = 3.0) -> Show:
+    """Runs a paced date: Nova finishes each turn line finish_after seconds after its cue,
+    and the daters start and stop speaking at the given times."""
+    pending = sorted(events)
+    reported: set[int] = show.__dict__.setdefault("reported", set())  # kept across calls
+    while show.now < until:
+        while pending and pending[0][0] <= show.now + 0.5:
+            t, event, seat = pending.pop(0)
+            show.at(t, event, seat)
+        show.until(show.now + 0.5)
+        for i, (t, say) in enumerate(show.says()):
+            if i not in reported and say.moment in TURN_MOMENTS and show.now >= t + finish_after:
+                show.runner.line_done(show.now, say)
+                reported.add(i)
+    return show
+
+
+def audience_question_times(show: Show) -> list[float]:
+    return show.times(Say, moment=Moment.FROM_THE_ROOM)
+
+
+def two_quick_questions() -> Show:
+    """The second audience question is due 8 s after the first (at 240 s)."""
+    show = Show(paced=True, timing=replace_timing(second_question_after=8.0))
+    show.at(10, "queue_question", approved("What's the best meal you've ever had?"))
+    show.at(10, "queue_question", approved("Mountains or sea?"))
+    return show
+
+
+def test_paced_a_question_to_both_waits_for_the_second_dater_to_answer():
+    """Before, Nova asked the next question 1.5 s after the first dater finished, just as
+    the second began to answer (the LiveKit run with listening daters)."""
+    show = paced_date(
+        two_quick_questions(),
+        300,
+        [
+            (244, "speech_started", LEFT),
+            (249, "speech_stopped", LEFT),
+            (252, "speech_started", RIGHT),  # Theo takes 3 s to start
+            (256, "speech_stopped", RIGHT),
+        ],
+    )
+    assert audience_question_times(show) == [240.0, 258.5], "after Theo, and a lull"
+
+
+def test_paced_a_dater_who_never_answers_is_passed_over():
+    show = paced_date(
+        two_quick_questions(), 300, [(244, "speech_started", LEFT), (249, "speech_stopped", LEFT)]
+    )
+    assert audience_question_times(show) == [240.0, 255.0], "6 s after Maya, with no word from Theo"
+
+
+def test_paced_a_question_to_one_dater_waits_only_for_them():
+    show = paced_date(
+        Show(paced=True, timing=replace_timing(second_prompt_after=6.0)),
+        70,
+        [(49, "speech_started", LEFT), (53, "speech_stopped", LEFT)],
+    )
+    assert first_question_times(show) == [45.0, 54.5], "Maya answered; nobody waits for Theo"
+
+
+def test_paced_an_audience_question_waits_for_a_lull_not_a_gap():
+    """The daters are talking to each other as the audience question comes due at 240 s:
+    a 2 s gap between them isn't a lull."""
+    show = Show(paced=True)
+    show.at(10, "queue_question", approved("Mountains or sea?"))
+    paced_date(
+        show,
+        260,
+        [
+            (236, "speech_started", LEFT),
+            (238.5, "speech_stopped", LEFT),
+            (240.5, "speech_started", RIGHT),
+            (243, "speech_stopped", RIGHT),
+        ],
+    )
+    assert audience_question_times(show) == [245.5]
+
+
+def test_paced_the_cap_counts_from_when_nova_finished_asking():
+    """Before, it counted from when the next turn came due, while Nova was still asking the
+    question before: the cap ran out before Theo had answered, and Nova moved on over him."""
+    show = Show(paced=True, timing=replace_timing(second_question_after=8.0))
+    show.at(10, "queue_question", approved("What's the best meal you've ever had?"))
+    show.at(10, "queue_question", approved("Mountains or sea?"))
+    paced_date(show, 239)
+    show.until(262)  # Nova is slow to finish the first question: the next has waited 14 s
+    first = next(i for i, (_, say) in enumerate(show.says()) if say.moment is Moment.FROM_THE_ROOM)
+    show.runner.line_done(262, show.says()[first][1])
+    show.reported.add(first)
+    paced_date(show, 300, [(263, "speech_started", LEFT), (270, "speech_stopped", LEFT)])
+    assert audience_question_times(show) == [240.0, 276.0], "6 s after Maya, Theo's chance"

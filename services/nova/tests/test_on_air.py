@@ -104,9 +104,10 @@ async def through_the_rehearsal(finals: tuple[str, ...], labels: dict[str, str])
         first_up=LEFT,
     )
     r.start()
-    clock.now = ON_AIR_AT
-    r.tick()
-    await r.speak_queued()
+    while clock.now < ON_AIR_AT:  # to free talk, Nova saying each line: the rehearsal is paced
+        clock.now = min(ON_AIR_AT, clock.now + 0.5)
+        r.tick()
+        await r.speak_queued()
     before = len(r.cues)
     for at, speech, final in spoken(finals, at=ON_AIR_AT):
         while clock.now + 0.05 < at:  # the rehearsal ticks as time passes

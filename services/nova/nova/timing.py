@@ -45,6 +45,17 @@ class Timing:
     # A beat's lines and sounds wait while a dater is mid-sentence (the brand book: sounds
     # never play over someone speaking), but never longer than this.
     talk_over_grace: float = 5.0
+    # A dater's turn (a question, a last word, "That's time") never comes until the dater
+    # asked before had this long to start answering, from when Nova finished asking them.
+    # Only when Nova's lines are reported played (ShowRunner paced); the schedule gives far
+    # more in a full date, so this matters when Nova runs late or in a rehearsal.
+    answer_window: float = 6.0
+    # ... and until nobody has spoken for this long: people pause between sentences,
+    # and the voice detector hears each pause as the end of their speech.
+    turn_gap: float = 1.5
+    # An audience question breaks into the daters' own conversation: it waits for a
+    # real lull, not a gap between two sentences.
+    lull: float = 2.5
 
     def __post_init__(self) -> None:
         starts = [
@@ -59,10 +70,18 @@ class Timing:
             raise ValueError("Segment starts must be in running-order sequence")
 
     def scaled(self, factor: float) -> Timing:
-        """Shrinks every beat by factor, except the silence rule and the talk-over grace:
-        people need the same few seconds to fill a silence or finish a sentence whether or
-        not it's a rehearsal."""
-        keep = {"silence_after", "silence_cooldown", "talk_over_grace", "cover_lines"}
+        """Shrinks every beat by factor, except the silence rule, the talk-over grace and
+        the answer window: people need the same few seconds to fill a silence, finish a
+        sentence or start an answer whether or not it's a rehearsal."""
+        keep = {
+            "silence_after",
+            "silence_cooldown",
+            "talk_over_grace",
+            "answer_window",
+            "turn_gap",
+            "lull",
+            "cover_lines",
+        }
         return replace(
             self,
             **{
