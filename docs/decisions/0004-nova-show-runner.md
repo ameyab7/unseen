@@ -97,9 +97,11 @@ Date: 2026-10-13. Status: accepted.
   a few seconds long, never skips a turn, and the decision window is never cut short (a
   first version moved only the turn, and a late "That's time." left the daters 1.8 s to
   decide). After 20 s of waiting (a line never reported played, daters who never pause
-  long) a turn takes the first moment nobody is speaking, so it never cuts a dater off
-  (a first cap ran out while Theo was mid-answer); only 30 s of speech without a break,
-  a TV the voice detector hears, is talked over. The schedule gives far more time in a full date, so
+  long) a turn stops waiting for the lull and the answers but still needs the turn gap,
+  so it never cuts a dater off (a first cap ran out while Theo was mid-answer, a second
+  went the instant Maya stopped, as Theo began); only 30 s of speech without a break, a
+  TV the voice detector hears, is talked over. The rehearsal logs each start and stop
+  the voice detector hears (`speech`, the seat only), to check turn-taking afterwards. The schedule gives far more time in a full date, so
   this matters when Nova runs late and in rehearsals. Unpaced (the evaluation, the
   runner's own tests), every beat goes by the clock as before.
 - **A report pauses the date** until the moderator resumes or ends it (the prototype's

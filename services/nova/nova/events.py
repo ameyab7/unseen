@@ -19,6 +19,7 @@ class Event(StrEnum):
     ALERT = "alert"  # an alert for the moderator console
     QUESTION_SKIPPED = "question_skipped"  # an approved question the screen caught: its code
     COMMAND = "command"  # a rehearsal chat command (the command only, never its text)
+    SPEECH = "speech"  # the voice detector heard a dater start or stop: the seat only
 
 
 def _allowed(value: object) -> bool:

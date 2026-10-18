@@ -101,7 +101,7 @@ TURN_BEATS = frozenset(
 # Turns that break into the daters' own conversation: they wait for timing.lull.
 LULL_BEATS = frozenset({"from_the_room", "audience_question"})
 # After a turn has waited this long (a line never reported played, daters who never pause
-# for long), it takes the first moment nobody is speaking: it never cuts a dater off.
+# for long), it goes at the first turn gap: it never cuts a dater off.
 # Wall seconds, during which the show clock is stopped.
 TURN_WAIT_CAP = 20.0
 # Only speech this long without a break is talked over: a TV the voice detector hears.
@@ -742,20 +742,21 @@ class ShowRunner:
         between their sentences isn't the end of their answer; timing.lull before an audience
         question, which breaks into their conversation), and until everyone it asked has
         started answering: one who hasn't within timing.answer_window of the last person to
-        speak (or of Nova finishing) is passed over. After TURN_WAIT_CAP it goes the first
-        moment nobody is speaking; only SPEECH_CAP of speech without a break is talked
-        over (before, the cap ran out while Theo was mid-answer, and Nova spoke over him)."""
+        speak (or of Nova finishing) is passed over. After TURN_WAIT_CAP it stops waiting
+        for the lull and the answers, but still for timing.turn_gap of quiet (before, it went
+        the instant one dater stopped, and Theo, starting to answer, was talked over); only
+        SPEECH_CAP of speech without a break is talked over."""
         if not self._paced or beat.action not in TURN_BEATS:
             return False
         if self._speaking:
             started = self._speech_since
             return started is None or now - started < SPEECH_CAP
+        ended = self._speech_ended_at
         since = self._turn_wait_from
         if since is not None and now - since >= TURN_WAIT_CAP:
-            return False
+            return ended is not None and now < ended + self._timing.turn_gap
         if self._turns_unfinished:
             return True
-        ended = self._speech_ended_at
         gap = self._timing.lull if beat.action in LULL_BEATS else self._timing.turn_gap
         if ended is not None and now < ended + gap:
             return True

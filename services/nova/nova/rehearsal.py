@@ -363,6 +363,7 @@ class Rehearsal:
         """The voice detector heard the dater start speaking."""
         self._listening()
         self._speaking = self.seat
+        self._events.emit(Event.SPEECH, seat=self.seat, started=True)
         self._on_air.speech_started(self.seat)
         self._heard_who_speaks()
 
@@ -371,6 +372,7 @@ class Rehearsal:
         seat that started speaking, even if the chat has chosen the other one since."""
         seat, self._speaking = self._speaking or self.seat, None
         self._ended = seat, self._clock()
+        self._events.emit(Event.SPEECH, seat=seat, started=False)
         self._on_air.speech_ended(seat)
         self._heard_who_speaks()
 

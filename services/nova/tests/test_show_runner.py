@@ -1559,7 +1559,10 @@ def test_paced_after_the_cap_a_turn_still_never_cuts_a_dater_off():
     show.until(90)
     assert first_question_times(show) == [45.0], "the cap ran out at 87.5 s, but Theo is talking"
     show.at(92, "speech_stopped", RIGHT)
-    assert first_question_times(show) == [45.0, 92.0], "the first moment nobody is speaking"
+    show.until(93)
+    assert first_question_times(show) == [45.0], "Maya may be about to answer him"
+    show.until(93.5)
+    assert first_question_times(show) == [45.0, 93.5], "the turn gap, even after the cap"
 
 
 def test_paced_only_half_a_minute_of_speech_without_a_break_is_talked_over():
