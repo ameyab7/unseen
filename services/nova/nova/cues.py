@@ -116,7 +116,8 @@ class Say:
     the line writer writes one for this moment, about this dater, from detail; talk to the
     room works from the room facts. number of of: a question's place in its round (the
     lightning round's "2 of 3"). away: a dater off air after the moderator resumed without
-    them, whom an audience question or a reply must not name or address."""
+    them, whom an audience question, a reply, or the other dater's first question or last
+    word must not name or address."""
 
     moment: Moment
     text: str | None = None

@@ -462,6 +462,16 @@ class Rehearsal:
             self._current.line.cancel()
         self.speaker.stop()
 
+    def _after_its_hold(self, item: _Pending) -> bool:
+        """A line that covers a hold (talk to the room while held, "Bear with us"), once
+        the hold is over before Nova got to it: the dater is back, or the moderator resumed
+        or ended the date. It's never said; the date goes on (decision 0004)."""
+        say = item.say
+        covers = say.moment is Moment.BEAR_WITH_US or (
+            say.moment is Moment.ROOM_TALK and say.number is not None
+        )
+        return covers and not self._runner.held
+
     async def _speak_forever(self) -> None:
         while True:
             await self._speak(await self._queue.get())
@@ -508,6 +518,9 @@ class Rehearsal:
                 action = await self._unless_stopped(item, item.hold)
             if action is None or item.stopped.is_set():
                 return
+            if self._after_its_hold(item):
+                item.line.cancel()
+                return
             if action is ReplyAction.DROP:
                 item.line.cancel()  # never answered (nova/on_air.py, reply_after)
                 return
@@ -517,7 +530,7 @@ class Rehearsal:
                 line = Line(script.TAKE_YOUR_TIME, Source.FALLBACK, Moment.REPLY)
             else:
                 written = await self._unless_stopped(item, item.line)
-                if written is None:
+                if written is None or self._after_its_hold(item):
                     return
                 line = written
             if not line.text:  # Nova says nothing for this cue

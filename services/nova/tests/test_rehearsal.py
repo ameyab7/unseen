@@ -715,8 +715,74 @@ async def test_chat_commands_drive_the_show():
     r.command("end")
     await r.speak_queued()
     assert r.speaker.texts[-1] == script.MODERATOR_END
-    assert r.speaker.stops == 1, "Nova stops mid-line first"
+    assert r.speaker.stops == 2, "Nova stops mid-line first, for the moment and the end"
     assert r.finished
+
+
+def held_until_bear_with_us(r: Rehearsal, clock: Clock) -> None:
+    """Maya asks for a moment at 30 s; rehearsal timing covers every 3 s and asks the room
+    to bear with us at 39 s. Nothing is spoken yet: Nova was busy the whole time."""
+    clock.now = 30.0
+    r.command("moment")
+    for t in (33.0, 36.0, 39.0):
+        clock.now = t
+        r.tick()
+    assert [c for c in r.cues if getattr(c, "moment", None) is Moment.BEAR_WITH_US]
+
+
+@pytest.mark.parametrize("command", ["resume", "back"])
+async def test_talk_that_covered_a_hold_is_never_said_once_the_hold_is_over(command):
+    """Before, the lines queued to cover a hold were still said after the moderator
+    resumed: "we're taking a short pause" and "Bear with us a little longer" for twenty
+    seconds of a date that had moved on (the scenario run)."""
+    clock = Clock()
+    r = await started(clock)
+    held_until_bear_with_us(r, clock)
+    clock.now = 40.0
+    r.command(command)
+    await r.speak_queued()
+    assert lines(r, Moment.BEAR_WITH_US) == [] and lines(r, Moment.ROOM_TALK) == []
+    assert script.NEED_A_MOMENT in r.speaker.texts
+
+
+async def test_talk_that_covers_a_hold_is_said_while_the_hold_lasts():
+    clock = Clock()
+    r = await started(clock)
+    held_until_bear_with_us(r, clock)
+    await r.speak_queued()
+    assert len(lines(r, Moment.ROOM_TALK)) == 3 and len(lines(r, Moment.BEAR_WITH_US)) == 1
+
+
+async def test_talk_to_the_room_still_being_written_when_the_hold_ends_is_never_said():
+    clock = Clock()
+    gate = asyncio.Event()
+    model = GatedWriter(gate)
+    r = await started(clock, model=model)
+    model.gating = True
+    clock.now = 30.0
+    r.command("moment")
+    speaking = asyncio.ensure_future(r.speak_queued())
+    await asyncio.sleep(0.05)  # the moment's line is said; the room talk waits on the model
+    r.command("back")
+    gate.set()
+    await asyncio.wait_for(speaking, 1.0)
+    await r.speak_queued()
+    assert lines(r, Moment.ROOM_TALK) == []
+    assert r.speaker.texts[-2:] == [script.NEED_A_MOMENT, script.WELCOME_BACK]
+
+
+async def test_a_dater_who_needs_a_moment_cuts_nova_off_mid_line():
+    """Before, Nova finished an eight-second question to both daters first (the scenario
+    run). Now it stops at once, as for a report or a distress pause."""
+    clock = Clock()
+    r = await started(clock, speaker=FakeSpeaker(clock, length=12.0))
+    clock.now = 40.0
+    r.tick()  # the first questions, twelve seconds each, queued and not yet spoken
+    r.command("moment")
+    await r.speak_queued()
+    assert r.speaker.stops == 1
+    assert lines(r, Moment.FIRST_QUESTION) == [], "dropped, as for the kind line"
+    assert lines(r, Moment.NEED_A_MOMENT)
 
 
 async def test_when_the_moderator_ends_the_date_nothing_already_queued_is_said():

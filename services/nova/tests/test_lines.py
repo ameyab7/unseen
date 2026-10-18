@@ -807,6 +807,28 @@ async def test_a_line_naming_the_dater_who_is_away_is_rejected(said):
     assert line.source is Source.FALLBACK and Violation.UNKNOWN_NAME in line.violations
 
 
+AWAY_LAST_WORD = Say(Moment.LAST_WORD, about=RIGHT, away=LEFT)
+
+
+async def test_a_prepared_turn_that_names_the_dater_who_is_away_is_never_said():
+    """Written before the date for both daters; Maya is away by the last word."""
+    w = writer(FakeModel("Theo, what's one thing you hope Maya discovers about you?"))
+    await w.prepare()
+    line = await w.line_for(AWAY_LAST_WORD)
+    assert (line.text, line.source) == (script.last_word_fallback(THEO), Source.FALLBACK)
+    assert Violation.UNKNOWN_NAME in line.violations
+    with_both = await w.line_for(Say(Moment.LAST_WORD, about=RIGHT))
+    assert with_both.source is Source.PREPARED, "the same line, with both on air"
+
+
+async def test_a_prepared_turn_for_the_dater_who_is_here_is_said_as_prepared():
+    said = "Theo, the floor is yours for twenty seconds."
+    w = writer(FakeModel(said))
+    await w.prepare()
+    line = await w.line_for(AWAY_LAST_WORD)
+    assert (line.text, line.source) == (said, Source.PREPARED)
+
+
 async def test_a_silence_prompt_for_one_dater_never_names_the_other():
     line = await writer(FakeModel("Maya, Theo, tea or coffee?")).line_for(
         Say(Moment.SILENCE, about=RIGHT)

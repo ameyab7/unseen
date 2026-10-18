@@ -15,7 +15,7 @@ import itertools
 import math
 import random
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from nova import running_order, script
@@ -251,6 +251,11 @@ class ShowRunner:
     def started(self) -> bool:
         return self._started_at is not None
 
+    @property
+    def held(self) -> bool:
+        """The show is held: a dater's moment, a distress or conduct pause, or a report."""
+        return self._held_since is not None
+
     # --- Things that happen in the room ---------------------------------------------------
     # Daters, the moderator and the room can do these at any time, so none of them raises
     # before start() or after the date. Moderator alerts never depend on the show clock.
@@ -273,15 +278,17 @@ class ShowRunner:
         return self._due(now)
 
     def need_a_moment(self, now: float, seat: Seat) -> list[Cue]:
-        """Nova covers without naming anyone, and the show clock holds until the same dater
-        is back. If they aren't back after timing.moment_alert_after, Nova asks the room to
-        bear with us once, the moderator is alerted, and the show stays on hold until the
-        moderator keeps waiting, resumes or ends the date. No limit on how often, but the
-        moderator is alerted when the same dater pauses a second time. Asked while the show
-        is already held for something else, it's kept: their own pause starts when that
-        hold ends, instead of the show going on with them on air."""
+        """Nova stops mid-line, as for a report, and covers without naming anyone, and the
+        show clock holds until the same dater is back. If they aren't back after
+        timing.moment_alert_after, Nova asks the room to bear with us once, the moderator
+        is alerted, and the show stays on hold until the moderator keeps waiting, resumes
+        or ends the date. No limit on how often, but the moderator is alerted when the same
+        dater pauses a second time. Asked while the show is already held for something
+        else, it's kept: their own pause starts when that hold ends, instead of the show
+        going on with them on air."""
         cues = self._due(now)
         if self._can_pause:
+            cues.append(StopSpeaking())
             cues += self._pause(now, seat, script.NEED_A_MOMENT)
         elif self._live and self._held_since is not None and seat is not self._away:
             self._wanting = seat
@@ -729,8 +736,16 @@ class ShowRunner:
         return [SegmentStarted(segment)]
 
     def _present(self, say: Say) -> list[Cue]:
-        """A dater's turn, unless they're away after the moderator resumed without them."""
-        return [] if say.about is not None and say.about in self._absent else [say]
+        """A dater's turn, unless they're away after the moderator resumed without them.
+        While the other dater is away, the turn carries away, so its line, written before
+        the date for both daters, is never said if it names the one who's gone."""
+        if say.about is None:
+            return [say]
+        if say.about in self._absent:
+            return []
+        if say.about.other in self._absent:
+            return [replace(say, away=say.about.other)]
+        return [say]
 
     def _prompt(self, seat: Seat) -> Say:
         return running_order.first_question(self._pair, seat)
