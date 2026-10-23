@@ -1,0 +1,6 @@
+# The independent held-out set (decision 0005) never leaves the machine that runs it: written
+# by someone other than the developer, read only by the evaluation's --independent run.
+# Only this file and the README, which tells the author what to write, are committed.
+*
+!.gitignore
+!README.md

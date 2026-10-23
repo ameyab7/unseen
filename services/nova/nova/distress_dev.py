@@ -255,4 +255,13 @@ DEV_SET: tuple[Sample, ...] = (
         "I'm not telling you my worst film, you'll never let it go.",
         "What's the worst film you secretly love?",
     ),
+    # Objecting to something said on the date, alone or answering it (added 2026-10-23: no
+    # dev sentence covered it), each beside ordinary talk with the same words about
+    # something else. Unsure between no and maybe is maybe, so these must never get nothing.
+    _real("I really didn't appreciate that."),
+    _ordinary("I really didn't appreciate that album until my second listen."),
+    _real("Wow. That's a horrible thing to say to someone."),
+    _ordinary("Wow, that's a horrible thing to say about pineapple on pizza, ha."),
+    _real("That was way over the line.", "Bet you'd be prettier if you lost a bit of weight."),
+    _ordinary("That was way over the line, the referee should've blown for it."),
 )

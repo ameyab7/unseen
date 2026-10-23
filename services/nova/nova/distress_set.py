@@ -104,7 +104,10 @@ DISTRESS_SET: tuple[Sample, ...] = (
     _real_plain("He keeps asking where I live."),
     _real_plain("He won't take no for an answer."),
     _real_plain("He keeps making comments about my body."),
-    _real_plain("Why do you keep asking for my number?"),
+    # Relabelled 2026-10-23 to the product owner's refusal decision of 2026-10-22 (decision
+    # 0005, (b)): asking why the other dater keeps asking is a calm boundary, an alert
+    # with no pause. Written before that decision, it was labelled as a pause.
+    Sample("Why do you keep asking for my number?", True, plain=True, boundary=True),
     _real_plain("Is this almost over?"),
     _real_plain("Can I talk to someone from the show, privately?"),
     _real_plain("My heart is racing and I can't think straight."),

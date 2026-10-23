@@ -11,6 +11,7 @@ from nova import script
 from nova.cards import Seat
 from nova.config import Settings
 from nova.cues import AlertModerator, ModeratorAlert, Moment, Say
+from nova.distress import LIGHT_SYSTEM
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
 from nova.lines import LineWriter, Source
 from nova.rehearsal import (
@@ -130,6 +131,8 @@ class FakeModel:
     async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
         if '"sentence": "' not in prompt:
             return "ok"  # the warm-up's tiny request
+        if system == LIGHT_SYSTEM:
+            return '{"light": false}'  # the second question after a maybe: the maybe stands
         sentence = prompt.split('"sentence": "')[1].split('"')[0]
         self.checked.append(sentence)
         if self.gate is not None:

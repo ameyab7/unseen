@@ -9,3 +9,6 @@ voice-samples
 **/__pycache__
 **/.pytest_cache
 **/.ruff_cache
+# The independent held-out set (decision 0005) stays on the machine that wrote it: never in
+# an image. The evaluation that reads it runs natively; it imports no LiveKit.
+independent/*.json
