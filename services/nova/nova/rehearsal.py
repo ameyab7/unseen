@@ -32,8 +32,10 @@ from nova.cues import (
     Moment,
     QuestionSkipped,
     Say,
+    SegmentStarted,
     StopSpeaking,
 )
+from nova.date_context import DateContext
 from nova.decisions import Choice, DecisionError, InMemoryDecisionDesk
 from nova.distress import Checked, DistressCheck, Verdict
 from nova.events import Event, EventLog
@@ -222,8 +224,17 @@ class Rehearsal:
         utterance_max_wait: float = Settings.utterance_max_wait,
         events: EventLog | None = None,
         yield_hold: float = YIELD_HOLD,
+        live_context: bool = True,
+        share_context: bool = True,
     ) -> None:
+        """live_context: replies and silence prompts see this date's context (decision 0008)
+        and the arc's segment (decision 0005). False runs them as before both, for the date
+        benchmark's baseline (nova/benchmark.py); a real show always runs with them.
+        share_context: False keeps this date's turns out of the model's prompts, for a model
+        that isn't local without NOVA_DIALOGUE_TO_PROVIDER (Settings.shares_dialogue); the
+        context is still made, one for the date, and read by the checks on Nova's lines."""
         self.speaker = speaker
+        self.share_context = share_context
         self._model, self._classifier = model, classifier
         # Safety checks before lines on a model both use (nova/priority.py): two Ollama
         # models share one server, which serves one request at a time.
@@ -247,6 +258,10 @@ class Rehearsal:
             paced=True,  # every line is reported as it finishes (_speak, _stop)
         )
         self._turn_gap = timing.turn_gap
+        # This date's context (decision 0008): the listener adds the daters' checked turns,
+        # the writer reads it for replies and silences, and both clear it at the end.
+        context = DateContext() if live_context else None
+        self._live_context = live_context
         self._writer = LineWriter(
             model,
             pair,
@@ -257,6 +272,8 @@ class Rehearsal:
             prep_parallel=prep_parallel,
             events=self._events,
             tonight=Tonight(),
+            context=context,
+            share_context=share_context,
             gate=self._gate,
         )
         self._on_air = OnAirListener(
@@ -271,6 +288,7 @@ class Rehearsal:
             clock=clock,
             grace=utterance_grace,
             max_wait=utterance_max_wait,
+            context=context,
         )
         self._queue: asyncio.Queue[_Pending] = asyncio.Queue()
         self._queued = 0  # lines queued so far: which waiting lines came after a cut
@@ -688,6 +706,8 @@ class Rehearsal:
                 )
             if isinstance(cue, QuestionSkipped):
                 self._events.emit(Event.QUESTION_SKIPPED, reason=cue.reason)
+            if isinstance(cue, SegmentStarted) and self._live_context:
+                self._writer.entered(cue.segment)  # where the date is, for the arc
             if not isinstance(cue, Say):
                 continue
             if reply_due and (cue.moment is Moment.REPLY or cue.text == script.DISTRESS_PAUSE):
@@ -981,7 +1001,12 @@ def render_report(rehearsal: Rehearsal) -> str:
     )
     warm_up = "".join(_warm_up_text(what, warmed) for what, warmed in r.warmed)
     lines = [
-        f"Nova rehearsal: voice {r.voice}, model {r.model_name}, speech recognition {r.stt}",
+        f"Nova rehearsal: voice {r.voice}, model {r.model_name}, speech recognition {r.stt}; "
+        + (
+            "this date's turns go to the model"
+            if r.share_context
+            else "this date's turns stay here (NOVA_DIALOGUE_TO_PROVIDER isn't set)"
+        ),
         f"{warm_up}Set pieces prepared in {r.prep_ms / 1000:.1f} s.{budget} {len(r.spoken)} "
         f"lines spoken, {r.alerts} moderator alerts.",
         "",

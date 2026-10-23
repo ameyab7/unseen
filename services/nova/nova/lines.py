@@ -13,8 +13,11 @@
 
 Every model line passes the guardrails or is replaced by a fallback line. Every prompt
 sees what Nova has said tonight for that moment, across dates (nova/tonight.py), except
-audience questions and replies, which are never remembered. The log records events and
-timings only, never text.
+audience questions and replies, which are never remembered. A reply or a silence prompt
+also sees this date's context, if the date has one (nova/date_context.py, decision 0008):
+recent turns the checks cleared, open questions and Nova's own last lines. A line written
+from it is never kept in tonight's memory, and every turn it holds is passed to the
+guardrails. The log records events and timings only, never text.
 """
 
 import asyncio
@@ -29,7 +32,8 @@ from enum import StrEnum
 from nova import prompts, quality, running_order, script
 from nova.cards import BlindCard, Pair, Seat
 from nova.config import Settings
-from nova.cues import Moment, RoomFacts, Say, Situation
+from nova.cues import Moment, RoomFacts, Say, Segment, Situation
+from nova.date_context import DateContext
 from nova.distress import has_warning, is_unmistakable
 from nova.events import Event, EventLog
 from nova.guardrails import (
@@ -61,6 +65,8 @@ LIVE_REACTIONS = frozenset({Moment.SILENCE, Moment.FROM_THE_ROOM, Moment.ROOM_TA
 # Live reactions kept in tonight's memory. Not audience questions or replies: their lines
 # carry what a listener or dater said, and the memory reaches every later date's prompts.
 REMEMBERED_LIVE = frozenset({Moment.SILENCE, Moment.ROOM_TALK})
+# Live reactions that see this date's context (decision 0008).
+WITH_THIS_DATE = frozenset({Moment.SILENCE, Moment.REPLY})
 CANDIDATES = 3  # model lines written for each set piece; the best one is kept
 # What Nova says while the show is held, or as a date ends early: any other line means the
 # hold is over, and the next hold may use the room-talk fallback again.
@@ -80,6 +86,10 @@ class Source(StrEnum):
     PREPARED = "prepared"  # a set piece the model wrote before the date
     MODEL = "model"  # a live reaction the model wrote during the date
     FALLBACK = "fallback"  # an approved fallback line
+
+
+# The lines Nova wrote, which join this date's context once played (decision 0008).
+WRITTEN = frozenset({Source.PREPARED, Source.MODEL})
 
 
 class ErrorKind(StrEnum):
@@ -136,6 +146,9 @@ class Line:
     violations: tuple[Violation, ...] = ()  # what the rejected model line broke, if any
     error: ErrorKind | None = None
     ms: int = 0
+    # Written with this date's context in its prompt, so it may carry what a dater said:
+    # never kept in tonight's memory (decision 0008).
+    from_date: bool = False
 
 
 @dataclass(frozen=True)
@@ -199,11 +212,20 @@ class LineWriter:
         events: EventLog | None = None,
         rng: random.Random | None = None,
         tonight: Tonight | None = None,
+        context: DateContext | None = None,
+        share_context: bool = True,
         gate: SafetyFirst | None = None,
     ) -> None:
         """prep_parallel: at most this many requests for set pieces in flight at once
-        (NOVA_PREP_PARALLEL); None, no limit."""
+        (NOVA_PREP_PARALLEL); None, no limit. context: this date's (decision 0008), shared
+        with the on-air listener, which adds the daters' turns; None, replies and silence
+        prompts work from what was just said and the cards, as before. share_context: False
+        keeps it out of every prompt (a model that isn't local, without
+        NOVA_DIALOGUE_TO_PROVIDER), while the checks on Nova's lines still read it here."""
+        self._context = context
+        self.share_context = share_context
         self._gate = gate  # safety checks first, on a model they share (nova/priority.py)
+        self._segment: Segment | None = None  # where the date is (entered), for the arc
         self._model = model
         self._prep_slots = asyncio.Semaphore(prep_parallel) if prep_parallel else None
         self._pair = pair
@@ -284,17 +306,22 @@ class LineWriter:
             ms=line.ms,
             error=line.error,
             violations=line.violations,
+            context=line.from_date,
         )
         return line
 
     def played(self, say: Say, line: Line) -> None:
         """The room heard this line: a set piece stays in tonight's memory, and silences and
-        room talk are remembered, so later prompts and fallbacks don't repeat them."""
+        room talk are remembered, so later prompts and fallbacks don't repeat them, unless
+        it was written from this date's context. Lines Nova wrote join this date's context."""
         planned = self._planned.get(_key(say)) if say.text is None else None
         if planned is not None and say.moment in SET_PIECES:
             self._tonight.heard(planned)
-        if line.text and line.source is not Source.FIXED and line.moment in REMEMBERED_LIVE:
+        heard = line.text and line.source is not Source.FIXED
+        if heard and line.moment in REMEMBERED_LIVE and not line.from_date:
             self._tonight.remember(line.moment, line.text, names=self._names)
+        if self._context is not None and line.text and line.source in WRITTEN:
+            self._context.said(line.text)
 
     async def attempt_for(self, say: Say) -> Attempt:
         """One model attempt for a cue, with no fallback: for the evaluation script. An
@@ -326,8 +353,21 @@ class LineWriter:
         if self._declines(say):  # the runner skips these; if one gets here, say nothing
             return Line("", Source.FALLBACK, say.moment, error=ErrorKind.DECLINED)
 
+        from_date = self._this_date(say) is not None
         attempt = await self._attempt(say, self._prompt_for(say), self._live_timeout)
-        return self._settle(say, attempt, Source.MODEL)
+        line = self._settle(say, attempt, Source.MODEL)
+        return replace(line, from_date=True) if from_date and line.source is Source.MODEL else line
+
+    def entered(self, segment: Segment) -> None:
+        """The show runner started a segment (its SegmentStarted cue): replies and silence
+        prompts are told where the date is, for the arc's aim there (decision 0005). It
+        changes no timing and asks for no line."""
+        self._segment = segment
+
+    @property
+    def segment(self) -> Segment | None:
+        """The segment the show runner last started, as entered()."""
+        return self._segment
 
     def lightning_form(self, number: int) -> str:
         """The format this date's lightning question number asks for (prompts.LIGHTNING_FORMS)."""
@@ -337,8 +377,11 @@ class LineWriter:
 
     def finish(self) -> None:
         """The date is over: the set pieces it never spoke (it ended early) leave tonight's
-        memory, so lines the room never heard don't steer later dates' lines."""
+        memory, so lines the room never heard don't steer later dates' lines; and this date's
+        context lets go of everything (decision 0008)."""
         self._tonight.drop(self._planned.values())
+        if self._context is not None:
+            self._context.clear()
 
     # --- Internals ------------------------------------------------------------------------
 
@@ -429,6 +472,8 @@ class LineWriter:
         audience question) is passed in so no proper noun from it is repeated."""
         rules = rules_for(say.moment)
         said = [say.detail] if say.moment in (Moment.REPLY, Moment.FROM_THE_ROOM) else []
+        if self._context is not None and say.moment in WITH_THIS_DATE:
+            said += self._context.spoken()  # what its prompt may have seen of this date
         away = _away(say)
         if away is not None:
             cards = [self._pair.card(away.other)]  # one dater is away: only the one who's here
@@ -571,9 +616,12 @@ class LineWriter:
                 shape = self._rng.choice(prompts.NEXT_UP_SHAPES)
                 return prompts.next_up(self._next_pair or pair, shape=shape, tonight=tonight)
             case Moment.SILENCE:
+                this_date, segment = self._this_date(say), self._segment
                 if say.about is not None:
-                    return prompts.silence_to_one(pair, say.about, tonight=tonight)
-                return prompts.silence(pair, tonight=tonight)
+                    return prompts.silence_to_one(
+                        pair, say.about, tonight=tonight, this_date=this_date, segment=segment
+                    )
+                return prompts.silence(pair, tonight=tonight, this_date=this_date, segment=segment)
             case Moment.FROM_THE_ROOM:
                 to = say.away.other if say.away is not None else None
                 return prompts.from_the_room(pair, say.detail or "", to=to, tonight=tonight)
@@ -583,8 +631,25 @@ class LineWriter:
             case Moment.REPLY:
                 away = say.away is not None
                 words = say.detail or ""
-                return prompts.reply(pair, _seat(say), words, other_away=away, tonight=tonight)
+                return prompts.reply(
+                    pair,
+                    _seat(say),
+                    words,
+                    other_away=away,
+                    tonight=tonight,
+                    this_date=self._this_date(say),
+                    segment=self._segment,
+                )
         raise ValueError(f"No prompt for {say.moment}")
+
+    def _this_date(self, say: Say) -> dict[str, object] | None:
+        """This date's context for a reply or a silence prompt (decision 0008), without the
+        dater who's away and without the words a reply answers; None if there's none."""
+        if self._context is None or not self.share_context or say.moment not in WITH_THIS_DATE:
+            return None
+        names = {seat: self._pair.card(seat).first_name for seat in Seat}
+        answering = (say.detail or "") if say.moment is Moment.REPLY else ""
+        return self._context.summary(names, away=_away(say), answering=answering)
 
     def _set_piece_cues(self) -> list[Say]:
         return running_order.set_pieces(self._pair, self._next_pair)

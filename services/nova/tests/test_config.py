@@ -218,3 +218,26 @@ def test_docker_never_copies_an_env_file_from_any_folder():
 def test_docker_runs_the_tests_without_an_env_file():
     compose = (Path(__file__).parents[1] / "compose.yaml").read_text(encoding="utf-8")
     assert "required: false" in compose and "host.docker.internal:host-gateway" in compose
+
+
+CLAUDE = {**GOOD, "NOVA_LLM": "anthropic/claude-haiku-5-5", "ANTHROPIC_API_KEY": "sk-test"}
+
+
+@pytest.mark.parametrize(
+    ("env", "shares"),
+    [
+        (GOOD, True),  # local Ollama: this date's turns never leave the machine
+        (CLAUDE, False),  # another provider: off until the privacy notice covers it
+        ({**CLAUDE, "NOVA_DIALOGUE_TO_PROVIDER": "true"}, True),
+        ({**CLAUDE, "NOVA_DIALOGUE_TO_PROVIDER": "false"}, False),
+    ],
+)
+def test_a_live_date_s_turns_go_to_a_model_that_isnt_local_only_once_approved(env, shares):
+    """Decision 0005: the current notice names no model provider, so Claude sees no recent
+    dialogue from a real date until NOVA_DIALOGUE_TO_PROVIDER says it may."""
+    assert Settings.from_env(env).shares_dialogue is shares
+
+
+def test_a_malformed_dialogue_setting_is_caught():
+    with pytest.raises(ConfigError, match="NOVA_DIALOGUE_TO_PROVIDER must be true or false"):
+        Settings.from_env({**CLAUDE, "NOVA_DIALOGUE_TO_PROVIDER": "maybe"})

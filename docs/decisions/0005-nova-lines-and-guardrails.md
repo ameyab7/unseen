@@ -313,7 +313,8 @@ Date: 2026-10-13. Status: accepted.
     now only alerts counts as "alerted only"; a miss is a miss either way. The rules were
     not tuned after the held-out run.
 - **Lines vary across the night.** Listeners hear every date, so Nova remembers the lines
-  it has used tonight, across dates (`nova/tonight.py`). Every prompt sees the lines
+  it has used tonight, across dates (`nova/tonight.py`). (What was said on the current
+  date, for replies and silences, is a separate context for that date only: decision 0008.) Every prompt sees the lines
   already said for its moment (daters' names masked, so no earlier dater's name reaches a
   later date) and is told not to repeat or echo them. Audience-question lines and replies
   are never remembered: they carry what a listener or dater said, and the memory reaches
@@ -358,6 +359,57 @@ Date: 2026-10-13. Status: accepted.
   default run of one, and three lines in two nights); silence prompts open alike more
   often (same opening 8 and 10 of 16, from 5 and 8); and replies speak of Nova's own
   feelings more ("I'm having a wonderful time").
+- **What reaches a model provider** (2026-10-22). With local Ollama, nothing leaves the
+  machine. With `NOVA_LLM=anthropic/...`, Anthropic receives:
+  - the blind cards (first names, ages, pronouns, the daters' card answers), for set pieces;
+  - approved audience questions;
+  - a dater's words to Nova, for a reply;
+  - this date's recent turns (decision 0008), but only if `NOVA_DIALOGUE_TO_PROVIDER` is
+    true. It is off by default, and off until the privacy notice covers it.
+  - With `NOVA_CLASSIFIER_LLM` unset, the distress and conduct check uses the same model,
+    so every utterance a dater finishes, with 15 s of both daters' words before it, goes to
+    Anthropic too. That is the largest flow; a local classifier keeps it here.
+
+  There is no privacy notice in the repository yet; the legal copy (terms, privacy policy,
+  on-air release) is still to be signed off (technical plan). Nothing in it names a model
+  provider, so none of these flows is covered. Recent dialogue is the only one switched off
+  in code, as asked. The others need the notice before any configuration with Claude meets
+  real daters.
+  - Each flow is minimal by construction: no surnames, contact details or places pass the
+    guardrails, the data block escapes markup, and nothing is logged.
+  - Cost and requests: one request per set piece (three candidates each before a date), per
+    live line and per check. This date's context adds about 150 tokens to a reply or a
+    silence prompt (decision 0008).
+  - A request cancelled here, at a timeout, may still run and be billed at Anthropic; only
+    Ollama drops cancelled work (above).
+- **A soft arc across the date** (2026-10-21): guidance for the moment, never a script, and
+  never a new turn, cue, model call or timing. The line writer hears each segment as the
+  show runner starts it (`LineWriter.entered`, from its `SegmentStarted` cue; the runner is
+  unchanged), and replies and silence prompts see it as data (`"moment": {"segment": ...}`)
+  with that segment's aim (`prompts.REPLY_AIMS`, `SILENCE_AIM`): a reply is a few words and
+  hands straight back, above all mid-story; early on it may invite the story behind an
+  answer; in free talk it follows up or links the daters only when it genuinely fits; in
+  the lightning round it keeps the pace; from the last word on it is brief and never sums
+  the date up. A silence with this date's context (decision 0008) finds a way back in from
+  what was said: a specific follow-up, a real link, a small playful choice if they've been
+  joking, a little deeper only when their own answers opened that door, an easier question
+  after short answers, one open question when nothing links them. The first question asks
+  for a story or an opinion. Nothing may play up a difference between the daters. The
+  outro stays a set piece written before the date: acknowledging something from the date
+  would take a live call right after the result, where a detail could sound like a hint.
+  Before and after, Gemma: two runs of each arc case with the arc off, then on (and the
+  default run): a mid-story reply 2 of 2, then 3 of 3 a few words long ("Now I'm hooked,
+  what happened with the dog?"); a shared but different interest linked in 1 of 2, then 3
+  of 3 ("since you're both working with your hands"); a difference played up in 1 of 2
+  both times ("opposite sides of the clock"); a calm boundary brought back in 1 of 2 ("the
+  office talk"), then none of 4 once a declined question is never shown (decision 0008);
+  no link, an open question every time. Three nights before, two after: fallbacks 2%, 1%,
+  4%, then 2%, 0%; airtime 20%, 20%, 19%, then 20%, 20% (at most 22%); live lines on date
+  8 within 869 ms worst before, 731 ms after; first questions that doubt the dater 1, 0, 1,
+  then 0, 0. Same opening rose (18 to 20%, then 24% and 28%), mostly in last words and
+  doors intros, whose prompts didn't change, so between-run variation; replies, which did
+  change, opened alike 1, 1 and 0 of 8 times, then 3 and 1. Scripted dates can't show two
+  people getting on: that needs someone listening to real ones.
 - **Choosing among a set piece's candidates** (2026-10-21, `nova/quality.py`). Before, of
   the three candidates that passed the guardrails, Nova kept the least like tonight's lines,
   so a fresh line that missed its moment's job beat a good one that echoed an earlier
