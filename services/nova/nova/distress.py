@@ -27,6 +27,7 @@ Nothing here logs or stores what anyone said: the log gets the verdict and the t
 """
 
 import asyncio
+import contextlib
 import json
 import math
 import re
@@ -41,6 +42,7 @@ from nova.cues import Conduct
 from nova.events import Event, EventLog
 from nova.measure import ms_since
 from nova.models import LineModel
+from nova.priority import SafetyFirst
 from nova.text import WORD, any_of, plain
 
 JOINED = 5.0  # seconds of one dater's transcripts joined for the instant layer
@@ -338,20 +340,31 @@ class DistressCheck:
     """The meaning layer: one utterance and both daters' last 15 seconds to the model
     (NOVA_CLASSIFIER_LLM, or NOVA_LLM), a label back."""
 
-    def __init__(self, model: LineModel, *, timeout: float, events: EventLog | None = None):
+    def __init__(
+        self,
+        model: LineModel,
+        *,
+        timeout: float,
+        events: EventLog | None = None,
+        gate: SafetyFirst | None = None,
+    ):
+        """gate: shared with the line writer when both use one model (nova/priority.py), so
+        a check never queues behind lines."""
         self._model = model
         self._timeout = timeout
         self._events = events or EventLog()
+        self._gate = gate
 
     async def check(self, sentence: str, earlier: str = "", other_earlier: str = "") -> Checked:
         started = time.monotonic()
         verdict, error, conduct = Verdict.UNCHECKED, None, None
         prompt = check_prompt(sentence, earlier, other_earlier)
         try:
-            answer = await asyncio.wait_for(
-                self._model.label(system=CHECK_SYSTEM, prompt=prompt, schema=LABEL_SCHEMA),
-                self._timeout,
-            )
+            async with self._gate.check() if self._gate else contextlib.nullcontext():
+                answer = await asyncio.wait_for(
+                    self._model.label(system=CHECK_SYSTEM, prompt=prompt, schema=LABEL_SCHEMA),
+                    self._timeout,
+                )
             verdict = parse(answer) or Verdict.UNCHECKED
             conduct = parse_conduct(answer)
             if verdict is Verdict.UNCHECKED:

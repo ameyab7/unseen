@@ -7,7 +7,8 @@ up, prepares its set pieces within the prep budget (NOVA_PREP_BUDGET_SECONDS), w
 you, and runs one rehearsal date (about three minutes) as the host
 of Maya and Theo. You play both daters: speak, start with "Nova, ..." to talk to Nova, and
 type commands in the chat box (nova/rehearsal.py, Command): maya, theo, moment, back,
-unlock, ask <question>, reveal, unseen, keep, resume, end, leave, report. What daters say
+unlock, ask <question>, reveal, unseen, keep, resume, end, leave, report, and for the
+moderator, start (a date Nova isn't ready for). What daters say
 and type is heard from the moment the session starts, before the date does, and never
 raises: Nova acts on each utterance once the dater has finished it (nova/on_air.py). At
 the end the report (codes and numbers only) is logged and saved in
@@ -170,6 +171,7 @@ async def rehearse(ctx: JobContext) -> None:
         prep_timeout=settings.prep_timeout,
         prep_budget=settings.prep_budget,
         prep_parallel=settings.prep_parallel,
+        warm_up=settings.warm_up,
         distress_timeout=settings.distress_timeout,
         utterance_grace=settings.utterance_grace,
         utterance_max_wait=settings.utterance_max_wait,
@@ -211,7 +213,10 @@ async def rehearse(ctx: JobContext) -> None:
         )
         await ctx.wait_for_participant()
         await preparing
-        await rehearsal.run()
+        # Not ready (a model that didn't warm up, every set piece a fallback): the
+        # moderator is alerted and chooses, never a silent date of fallbacks (decision 0005).
+        if await rehearsal.hold_until_ready():
+            await rehearsal.run()
     finally:
         listening.cancel()
 

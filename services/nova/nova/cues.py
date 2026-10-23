@@ -74,6 +74,9 @@ class ModeratorAlert(StrEnum):
     PERSONAL_DETAIL_ON_AIR = "personal_detail_on_air"  # a dater said a phone, street, workplace...
     CONDUCT_FLAG = "conduct_flag"  # a dater's conduct, with its category: listen in now
     SHOW_HELD = "show_held"  # the date is still held for a dater's conduct after 30 s: decide
+    # Nova isn't ready to open the date (a model didn't warm up, or every set piece is a
+    # fallback): the doors hold until the moderator starts it anyway or ends it.
+    NOVA_NOT_READY = "nova_not_ready"
 
 
 class Conduct(StrEnum):
@@ -178,10 +181,11 @@ class LightningMeterClosed:
 @dataclass(frozen=True)
 class AlertModerator:
     """For the moderator console only. Never published to the room. category: for a
-    conduct flag, what the dater's words did."""
+    conduct flag, what the dater's words did. seat: None for an alert about the show, not a
+    dater (Nova not ready)."""
 
     alert: ModeratorAlert
-    seat: Seat
+    seat: Seat | None = None
     category: Conduct | None = None
 
 

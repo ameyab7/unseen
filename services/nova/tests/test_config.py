@@ -103,7 +103,10 @@ class TestTimeouts:
         settings = Settings.from_env(GOOD)
         assert settings.live_timeout == 2.0
         assert settings.prep_timeout == 60.0
-        assert settings.prep_budget == 45.0
+        # The product owner's bound (2026-10-22): Nova ready within 60 s of the session
+        # starting, the warm-up's 40 and the prep budget's 20 (measured: 29 to 30 s cold).
+        assert (settings.warm_up, settings.prep_budget) == (40.0, 20.0)
+        assert settings.warm_up + settings.prep_budget <= 60.0
         assert settings.distress_timeout == 2.0
         assert (settings.utterance_grace, settings.utterance_max_wait) == (0.6, 1.5)
         assert settings.ollama_base_url == "http://localhost:11434"

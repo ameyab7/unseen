@@ -42,7 +42,8 @@ from nova.guardrails import (
     question_is_off_limits,
 )
 from nova.measure import ms_since
-from nova.models import WARM_UP_TIMEOUT, LineModel, ModelRefused, Warmed, warm_up
+from nova.models import WARM_UP_DEADLINE, LineModel, ModelRefused, Warmed, warm_up
+from nova.priority import SafetyFirst
 from nova.text import plain
 from nova.tonight import SHOWN, SHOWN_LIVE, Remembered, Tonight, mask
 
@@ -198,9 +199,11 @@ class LineWriter:
         events: EventLog | None = None,
         rng: random.Random | None = None,
         tonight: Tonight | None = None,
+        gate: SafetyFirst | None = None,
     ) -> None:
         """prep_parallel: at most this many requests for set pieces in flight at once
         (NOVA_PREP_PARALLEL); None, no limit."""
+        self._gate = gate  # safety checks first, on a model they share (nova/priority.py)
         self._model = model
         self._prep_slots = asyncio.Semaphore(prep_parallel) if prep_parallel else None
         self._pair = pair
@@ -226,11 +229,18 @@ class LineWriter:
 
     # --- Before the date ------------------------------------------------------------------
 
-    async def warm_up(self, *, timeout: float = WARM_UP_TIMEOUT) -> Warmed:
-        """One tiny request (nova/models.py, warm_up), so a cold model loads now and not
-        inside the prep budget: how long it took, and whether it failed."""
-        warmed = await warm_up(self._model, timeout=timeout)
-        self._events.emit(Event.WARMUP, ms=warmed.ms, error=warmed.error, classifier=False)
+    async def warm_up(self, *, deadline: float = WARM_UP_DEADLINE) -> Warmed:
+        """A tiny request held up to the deadline (nova/models.py, warm_up), so a cold
+        model loads now and not inside the prep budget: how long it took, how many tries,
+        and whether it failed."""
+        warmed = await warm_up(self._model, deadline=deadline)
+        self._events.emit(
+            Event.WARMUP,
+            ms=warmed.ms,
+            error=warmed.error,
+            attempts=warmed.attempts,
+            classifier=False,
+        )
         return warmed
 
     async def prepare(self) -> None:
@@ -388,9 +398,7 @@ class LineWriter:
     async def _attempt(self, say: Say, prompt: str, timeout: float) -> Attempt:
         started = time.monotonic()
         try:
-            raw = await asyncio.wait_for(
-                self._model.write(system=prompts.SYSTEM_PROMPT, prompt=prompt), timeout
-            )
+            raw = await asyncio.wait_for(self._gated_write(prompt), timeout)
         except TimeoutError:
             return Attempt(None, (), ms_since(started), ErrorKind.TIMEOUT)
         except ModelRefused:
@@ -399,6 +407,21 @@ class LineWriter:
             return Attempt(None, (), ms_since(started), ErrorKind.ERROR)
         text = clean(raw)
         return Attempt(text, self._check(say, text), ms_since(started), None)
+
+    async def _gated_write(self, prompt: str) -> str:
+        """The model's words, once no safety check is waiting on the same model: inside
+        the line's own timeout, so waiting can cost a line its model words, never a check."""
+        if self._gate is not None:
+            await self._gate.line()
+        return await self._model.write(system=prompts.SYSTEM_PROMPT, prompt=prompt)
+
+    @property
+    def all_fallbacks(self) -> bool:
+        """Every set piece prepared is an approved fallback: the model gave nothing for
+        any of them (decision 0005: then the doors hold for the moderator)."""
+        return bool(self._prepared) and all(
+            line.source is Source.FALLBACK for line in self._prepared.values()
+        )
 
     def _check(self, say: Say, text: str) -> tuple[Violation, ...]:
         """The guardrails for this cue. Names and places on the blind cards of the daters

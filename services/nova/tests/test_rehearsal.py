@@ -599,7 +599,9 @@ async def test_a_model_that_cant_answer_is_never_reported_as_warm(caplog):
     r = rehearsal(Clock(), model=DownModel())
     await r.warm_up()
     assert "warmup ms=" in caplog.text and "error=error" in caplog.text
+    assert "attempts=1" in caplog.text, "a failure it can't tell is never tried again"
     assert "Model warm-up failed (error)" in render_report(r)
+    assert ", 1 attempt." in render_report(r)
 
 
 class Hanging(FakeModel):
@@ -628,7 +630,7 @@ async def test_the_same_model_is_warmed_up_once_and_another_at_the_same_time():
         clock=Clock(),
     )
     started = time.monotonic()
-    await r.warm_up(timeout=0.2)
+    await r.warm_up(deadline=0.2)
     assert model.asked == 1 and time.monotonic() - started < 0.35
     classifier = Hanging("fake/classifier")
     r = Rehearsal(
@@ -641,7 +643,7 @@ async def test_the_same_model_is_warmed_up_once_and_another_at_the_same_time():
         clock=Clock(),
     )
     started = time.monotonic()
-    await r.warm_up(timeout=0.2)
+    await r.warm_up(deadline=0.2)
     assert classifier.asked == 1 and time.monotonic() - started < 0.35, "at the same time"
     assert "Distress check's model warm-up failed (timeout)" in render_report(r)
 
@@ -1426,3 +1428,71 @@ async def test_the_cues_the_rehearsal_keeps_hold_nothing_a_dater_or_listener_sai
         await r.speak_queued()
     kept = repr(r.cues)
     assert "OKAPI" not in kept and "PANGOLIN" not in kept
+
+
+# --- Nova not ready: the doors hold for the moderator (decision 0005, 2026-10-22) ------------
+
+
+class WontWarm(FakeModel):
+    """Its warm-up fails, and it fails the same way for every line."""
+
+    async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
+        if '"sentence": "' not in prompt:
+            raise RuntimeError("the model is down")
+        return await super().label(system=system, prompt=prompt, schema=schema)
+
+    async def write(self, *, system: str, prompt: str) -> str:
+        raise RuntimeError("the model is down")
+
+
+async def not_ready(clock: Clock) -> Rehearsal:
+    r = rehearsal(clock, model=WontWarm())
+    await r.warm_up(deadline=1.0)
+    await r.prepare()
+    return r
+
+
+async def test_a_ready_nova_opens_the_date_at_once_with_no_alert():
+    clock = Clock()
+    r = rehearsal(clock)
+    await r.warm_up(deadline=1.0)
+    await r.prepare()
+    assert r.ready and await asyncio.wait_for(r.hold_until_ready(), 1.0)
+    assert ModeratorAlert.NOVA_NOT_READY not in alerts(r) and r.held_for is None
+
+
+async def test_nova_not_ready_holds_the_doors_until_the_moderator_opens_the_date():
+    """Two rehearsals on 2026-10-18 opened with every set piece a fallback after a failed
+    warm-up, and only the report said so. Now the moderator is told and decides."""
+    clock = Clock()
+    r = await not_ready(clock)
+    assert not r.ready
+    held = asyncio.ensure_future(r.hold_until_ready())
+    await asyncio.sleep(0.02)
+    assert ModeratorAlert.NOVA_NOT_READY in alerts(r) and not held.done(), "never on its own"
+    clock.now = 12.0
+    r.command("start")
+    assert await asyncio.wait_for(held, 1.0) is True and r.held_for == 12.0
+    r.start()
+    assert "the doors held 12.0 s for the moderator, who opened the date" in render_report(r)
+
+
+async def test_the_moderator_can_end_a_date_nova_isnt_ready_for():
+    clock = Clock()
+    r = await not_ready(clock)
+    held = asyncio.ensure_future(r.hold_until_ready())
+    await asyncio.sleep(0.02)
+    r.command("end")
+    assert await asyncio.wait_for(held, 1.0) is False and r.finished
+    assert "ended it" in render_report(r)
+
+
+async def test_every_set_piece_a_fallback_is_not_ready_even_when_the_warm_up_was_fine():
+    class WarmButBroken(WontWarm):
+        async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
+            return "ok" if '"sentence": "' not in prompt else "no"
+
+    r = rehearsal(Clock(), model=WarmButBroken())
+    await r.warm_up(deadline=1.0)
+    await r.prepare()
+    assert all(w.error is None for _, w in r.warmed) and not r.ready

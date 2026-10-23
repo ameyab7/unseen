@@ -1,16 +1,22 @@
 """The language models that write Nova's lines, chosen by NOVA_LLM ("provider/model").
 
 Both adapters make one request per line with retries off: if a request is slow or fails,
-Nova uses a fallback line instead of waiting.
+Nova uses a fallback line instead of waiting. A request that times out is cancelled
+(asyncio.wait_for), which closes its connection. Measured on the development PC
+(2026-10-21, decision 0005): Ollama then drops the work, running or queued, so abandoned
+requests don't pile up behind later ones. But cancelling the only request waiting on a cold
+load aborts the load too, which is why the warm-up holds one request for its whole deadline.
 """
 
 import asyncio
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
 
+import anthropic
+import openai
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
@@ -92,7 +98,10 @@ class OllamaModel:
             temperature=temperature,
             **extra,
         )
-        content = response.choices[0].message.content
+        choice = response.choices[0]
+        if getattr(choice, "finish_reason", None) == "length":
+            raise ModelError("cut off")  # half a line would be said as it stands
+        content = choice.message.content
         if not content or not content.strip():
             raise ModelError("empty reply")
         return content
@@ -155,43 +164,90 @@ class AnthropicModel:
         return text
 
 
-# The warm-up's wait: long enough for the 20-28 s cold load measured on the development PC,
-# short next to the prep timeout. Its answer is ignored.
-WARM_UP_TIMEOUT = 30.0
+# The warm-up's one deadline (NOVA_WARM_UP_SECONDS, Settings.warm_up), before the date's
+# own prep budget starts: cold loads took 17.6 to 28 s on the development PC, so 40 s, with
+# a 20 s prep budget, keeps Nova ready within the product owner's 60 s. Its answer is
+# ignored.
+WARM_UP_DEADLINE = 40.0
 WARM_UP_SYSTEM = "Reply with one word."
+# Pauses before trying again after a failure that may pass (the server still starting, or
+# overloaded), and the most tries in all: bounded, never a tight loop.
+BACKOFF = (1.0, 2.0, 4.0, 8.0)
+WARM_UP_ATTEMPTS = 5
 
 
 class WarmUpError(StrEnum):
-    TIMEOUT = "timeout"
+    TIMEOUT = "timeout"  # the deadline ran out while the one request waited
     REFUSED = "refused"
-    ERROR = "error"  # not running, not pulled, a bad key, a parameter it rejects
+    # Rejected outright, and never tried again: a bad key, no permission, a model not
+    # pulled or unknown, a parameter or request it won't take.
+    REJECTED = "rejected"
+    ERROR = "error"  # failed, and still failing when the tries or the deadline ran out
 
 
 @dataclass(frozen=True)
 class Warmed:
-    """How long the warm-up took, and why it failed, if it did: a model that can't answer
-    at all shows up here, not as a warm model."""
+    """How long the warm-up took, how many requests it made, and why it failed, if it did:
+    a model that can't answer at all shows up here, never as a warm model."""
 
     ms: int
     error: WarmUpError | None = None
+    attempts: int = 1
 
 
-async def warm_up(model: LineModel, *, timeout: float = WARM_UP_TIMEOUT) -> Warmed:
-    """One tiny request, so a cold model loads now. Without it, a short timeout (the
-    distress check's 2 s) gives up on the load, the next request starts it again, and every
-    check fails until something waits long enough. The answer is ignored; whether there was
-    one, and how long it took, are not."""
+def retryable(error: BaseException) -> bool:
+    """A failure that may pass, worth one more try after a pause: the server not up yet or
+    unreachable for a moment, overloaded, rate-limited or failing on its side. Never a bad
+    key, a missing model or a request it rejects, and never something we can't tell."""
+    for sdk in (openai, anthropic):
+        if isinstance(error, sdk.APIConnectionError):  # refused, reset, or its own timeout
+            return True
+        if isinstance(error, sdk.APIStatusError):
+            return error.status_code == 429 or error.status_code >= 500
+    return False
+
+
+def _rejected(error: BaseException) -> bool:
+    return any(isinstance(error, sdk.APIStatusError) for sdk in (openai, anthropic))
+
+
+async def warm_up(
+    model: LineModel,
+    *,
+    deadline: float = WARM_UP_DEADLINE,
+    backoff: Sequence[float] = BACKOFF,
+    attempts: int = WARM_UP_ATTEMPTS,
+) -> Warmed:
+    """A tiny request, so a cold model loads now and not inside the prep budget, or on a
+    2 s distress check that gives up and starts the load again. One request is held for
+    whatever is left of the deadline: cancelling it would abort the load (decision 0005),
+    so it is never cut short to try again. Only a fast failure that may pass is tried again
+    (retryable), after a pause, within the deadline and at most `attempts` times; anything
+    else ends it at once. The answer is ignored; whether there was one, how long it took
+    and how many tries it took are not."""
     started = time.monotonic()
-    error: WarmUpError | None = None
-    try:
-        await asyncio.wait_for(model.label(system=WARM_UP_SYSTEM, prompt="Say ok."), timeout)
-    except TimeoutError:
-        error = WarmUpError.TIMEOUT
-    except ModelRefused:
-        error = WarmUpError.REFUSED
-    except Exception:  # any failure is reported, never raised
-        error = WarmUpError.ERROR
-    return Warmed(ms_since(started), error)
+    tried = 0
+    while True:
+        tried += 1
+        left = deadline - (time.monotonic() - started)
+        try:
+            await asyncio.wait_for(model.label(system=WARM_UP_SYSTEM, prompt="Say ok."), left)
+            return Warmed(ms_since(started), None, tried)
+        except TimeoutError:
+            error = WarmUpError.TIMEOUT
+        except ModelRefused:
+            error = WarmUpError.REFUSED
+        except Exception as caught:  # any failure is reported, never raised
+            if retryable(caught):
+                pause = backoff[min(tried - 1, len(backoff) - 1)] if backoff else 0.0
+                in_time = time.monotonic() - started + pause < deadline
+                if tried < attempts and in_time:
+                    await asyncio.sleep(pause)
+                    continue
+                error = WarmUpError.ERROR
+            else:
+                error = WarmUpError.REJECTED if _rejected(caught) else WarmUpError.ERROR
+        return Warmed(ms_since(started), error, tried)
 
 
 def build_model(settings: Settings, choice: LlmChoice | None = None) -> LineModel:

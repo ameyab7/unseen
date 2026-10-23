@@ -174,7 +174,14 @@ class FakeRehearsal:
         self.order.append("prepare")
         await self.listening.wait()  # a dater may speak while set pieces are prepared
 
+    opens = True  # what the moderator chose, if Nova wasn't ready
+
+    async def hold_until_ready(self) -> bool:
+        self.order.append("hold")
+        return FakeRehearsal.opens
+
     async def run(self) -> None:
+        self.order.append("run")
         self.listening_at_the_start = self.listening.is_set() and not self.stopped_listening
 
 
@@ -258,7 +265,7 @@ async def test_the_model_is_warmed_up_before_set_pieces_are_prepared(monkeypatch
     """A cold model takes 20-28 s to load: the warm-up takes that, not the prep budget."""
     await rehearse(monkeypatch, tmp_path)
     rehearsal = FakeRehearsal.last
-    assert rehearsal is not None and rehearsal.order == ["warm_up", "prepare"]
+    assert rehearsal is not None and rehearsal.order == ["warm_up", "prepare", "hold", "run"]
     assert rehearsal.options["prep_budget"] == SETTINGS.prep_budget
 
 
@@ -271,3 +278,15 @@ def test_redaction_is_added_once_however_often_the_agent_starts():
         assert sum(isinstance(f, RedactPii) for f in handler.filters) == 1
     finally:
         logging.getLogger().removeHandler(handler)
+
+
+async def test_a_date_nova_isnt_ready_for_never_opens_unless_the_moderator_says(
+    monkeypatch, tmp_path
+):
+    """Decision 0005: the doors hold (Rehearsal.hold_until_ready) and the report is still
+    written; a moderator who ends it gets no date at all."""
+    monkeypatch.setattr(FakeRehearsal, "opens", False)
+    await rehearse(monkeypatch, tmp_path)
+    rehearsal = FakeRehearsal.last
+    assert rehearsal is not None and rehearsal.order == ["warm_up", "prepare", "hold"]
+    assert list(tmp_path.glob("*.txt")), "the report is written all the same"

@@ -65,10 +65,17 @@ class Settings:
     # 20-28 s (decision 0005), so 60 s covers a cold start plus the line.
     prep_timeout: float = 60.0
     # How long preparing all of a date's set pieces may take. When it runs out, every set
-    # piece not yet chosen gets its fallback and the date can start, so a model that hangs
-    # holds a show for the warm-up's timeout (30 s, nova/models.py) and this, not ten set
-    # pieces times the prep timeout.
-    prep_budget: float = 45.0
+    # piece not yet chosen gets its fallback, so a model that hangs holds a show for the
+    # warm-up's deadline (below) and this, not ten set pieces times the prep timeout. With
+    # the warm-up, the product owner's bound from session start to Nova ready (2026-10-22):
+    # 60 s. Measured warm: 11.2 and 11.4 s for all ten set pieces, three candidates each.
+    prep_budget: float = 20.0
+    # The warm-up's one deadline, before the prep budget starts and apart from it: a cold
+    # load took 17.6 and 18.8 s on the development PC (2026-10-22; 17.7 s and 20-28 s
+    # before), and cancelling a request mid-load aborts the load (decision 0005), so the
+    # warm-up holds one request for all of it. If it fails, the doors hold for the
+    # moderator (Rehearsal.hold_until_ready), never a silent date of fallbacks.
+    warm_up: float = 40.0
     # How many requests for set pieces may be in flight at once while they're prepared. A
     # distress check during prep queues behind them on the same model, and with Ollama
     # serving one request at a time (OLLAMA_NUM_PARALLEL), more never prepared faster: set
@@ -104,6 +111,7 @@ class Settings:
         "NOVA_LIVE_TIMEOUT_SECONDS",
         "NOVA_PREP_TIMEOUT_SECONDS",
         "NOVA_PREP_BUDGET_SECONDS",
+        "NOVA_WARM_UP_SECONDS",
         "NOVA_PREP_PARALLEL",
         "NOVA_DISTRESS_TIMEOUT_SECONDS",
         "NOVA_UTTERANCE_GRACE_SECONDS",
@@ -150,6 +158,7 @@ class Settings:
             live_timeout=_seconds(env, "NOVA_LIVE_TIMEOUT_SECONDS", cls.live_timeout),
             prep_timeout=_seconds(env, "NOVA_PREP_TIMEOUT_SECONDS", cls.prep_timeout),
             prep_budget=_seconds(env, "NOVA_PREP_BUDGET_SECONDS", cls.prep_budget),
+            warm_up=_seconds(env, "NOVA_WARM_UP_SECONDS", cls.warm_up),
             prep_parallel=_count(env, "NOVA_PREP_PARALLEL", cls.prep_parallel),
             distress_timeout=_seconds(env, "NOVA_DISTRESS_TIMEOUT_SECONDS", cls.distress_timeout),
             utterance_grace=grace,
