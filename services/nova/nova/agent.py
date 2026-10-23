@@ -40,6 +40,7 @@ from livekit.agents import (
     inference,
     room_io,
 )
+from livekit.agents.voice.transcription import TranscriptSynchronizer
 
 from nova.config import Settings, load_settings
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
@@ -96,23 +97,78 @@ def voice_parts(voice: str) -> tuple[str, str | None]:
     return model, name or None
 
 
+def word_timings(model: str) -> dict[str, Any]:
+    """Options asking a voice to time its words, for the ones that can through LiveKit
+    Inference: Cartesia's timestamps. With them, a line a dater cut off goes on from the
+    sentence it was cut in (nova/rehearsal.py, after_a_cut); any other voice gets none, and
+    a cut is never placed in the words."""
+    return {"add_timestamps": True} if model.split("/")[0] == "cartesia" else {}
+
+
+def time_played_words(session: Any) -> bool:
+    """Once the session has started: Nova's audio goes through LiveKit's transcript
+    synchronizer, so each line's playback_finished event carries the words that had played,
+    paced by the voice's word timestamps against the audio the room was sent. Its text goes
+    nowhere (no next output): nothing is published to the room, and the words stay in
+    memory. True if the voice times its words; without timings the synchronizer only
+    estimates from a speaking rate, so it isn't installed and SessionSpeaker never uses
+    one."""
+    tts, output = getattr(session, "tts", None), getattr(session, "output", None)
+    timed = (
+        tts is not None
+        and tts.capabilities.aligned_transcript
+        and session.options.use_tts_aligned_transcript is True
+    )
+    if not timed or output is None or output.audio is None:
+        return False
+    synchronizer = TranscriptSynchronizer(next_in_chain_audio=output.audio, next_in_chain_text=None)
+    output.audio = synchronizer.audio_output
+    output.transcription = synchronizer.text_output
+    return True
+
+
 class SessionSpeaker:
     """Nova's voice through the agent session. Lines play one at a time and can't be talked
     over; a line's first audio is when the agent's state turns to speaking."""
 
     START_TIMEOUT = 10.0
 
-    def __init__(self, session: Any, *, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self, session: Any, *, clock: Callable[[], float] = time.monotonic, timed: bool = False
+    ) -> None:
         self._session = session
         self._clock = clock
         self._speaking = asyncio.Event()
         self._started_at: float | None = None
+        # Seconds of the last line that played, as the room's audio output counts them
+        # (PlaybackFinishedEvent.playback_position: the audio handed to WebRTC, not a guess).
+        # None until the output has said.
+        self.played: float | None = None
+        # The words of the last line that had played when it finished or was cut, only when
+        # the voice times its words (timed: time_played_words); otherwise None, and the
+        # rehearsal never places a cut in the words. In memory only, never logged.
+        self.played_text: str | None = None
+        self.timed = timed
+        self._watching: Any = None
         session.on("agent_state_changed", self._on_state)
 
     def _on_state(self, event: Any) -> None:
         if event.new_state == "speaking" and not self._speaking.is_set():
             self._started_at = self._clock()
             self._speaking.set()
+
+    def _on_played(self, event: Any) -> None:
+        self.played = float(event.playback_position)
+        if self.timed:
+            self.played_text = getattr(event, "synchronized_transcript", None)
+
+    def _watch_playback(self) -> None:
+        """The room's audio output exists once the session has started; without one, the
+        rehearsal tells the sentence from how long the line had played instead."""
+        audio = getattr(getattr(self._session, "output", None), "audio", None)
+        if audio is not None and audio is not self._watching:
+            audio.on("playback_finished", self._on_played)
+            self._watching = audio
 
     async def speak(self, text: str) -> float | None:
         """Waits for the line's first audio or the end of its playout, whichever comes first,
@@ -121,6 +177,8 @@ class SessionSpeaker:
         the line after it, which may be the kind line. Never started: None."""
         self._speaking.clear()
         self._started_at = None
+        self.played = self.played_text = None
+        self._watch_playback()
         handle = self._session.say(text, allow_interruptions=False, add_to_chat_ctx=False)
         # wait_for_playout() shields the speech, so cancelling this never cancels the line.
         playout = asyncio.ensure_future(handle.wait_for_playout())
@@ -142,11 +200,16 @@ class SessionSpeaker:
 
 def new_session(settings: Settings) -> AgentSession:
     model, voice = voice_parts(settings.voice)
+    voice_options: dict[str, Any] = {"voice": voice} if voice else {}
+    if timings := word_timings(model):
+        voice_options["extra_kwargs"] = timings
     return AgentSession(
         stt=inference.STT(settings.stt, language="en"),
-        tts=inference.TTS(model, voice=voice) if voice else inference.TTS(model),
+        tts=inference.TTS(model, **voice_options),
         turn_handling=TURN_HANDLING,
         aec_warmup_duration=AEC_WARMUP,
+        # The words the voice timed reach SessionSpeaker through time_played_words.
+        use_tts_aligned_transcript=bool(timings),
     )
 
 
@@ -158,11 +221,12 @@ async def rehearse(ctx: JobContext) -> None:
     redact_logs()
     settings = load_settings()
     session = new_session(settings)
+    speaker = SessionSpeaker(session)
     rehearsal = Rehearsal(
         REHEARSAL_PAIR,
         model=build_model(settings),
         classifier=build_classifier(settings),
-        speaker=SessionSpeaker(session),
+        speaker=speaker,
         voice=settings.voice,
         stt=settings.stt,
         timing=REHEARSAL,
@@ -211,6 +275,7 @@ async def rehearse(ctx: JobContext) -> None:
             ),
             **START_OPTIONS,
         )
+        speaker.timed = time_played_words(session)
         await ctx.wait_for_participant()
         await preparing
         # Not ready (a model that didn't warm up, every set piece a fallback): the

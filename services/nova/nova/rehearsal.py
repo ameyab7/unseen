@@ -13,6 +13,7 @@ private decision.
 
 import asyncio
 import contextlib
+import re
 import statistics
 import time
 from collections import Counter
@@ -52,10 +53,24 @@ FINAL_WAIT = 30.0
 # A final transcript this soon after the voice detector heard a dater stop is still theirs.
 LATE_FINAL = 2.0
 # A dater who starts speaking this soon after Nova handed a line to its voice began at the
-# same moment as Nova (after a silence, both took the floor): Nova stops, lets them finish
-# and says the line again, once. Its voice takes about half a second to start, and the
-# voice detector as long to hear the dater, so neither could have known.
+# same moment as Nova (after a silence, both took the floor): Nova stops at once, lets them
+# finish and says the line again, once. Its voice takes about half a second to start, and
+# the voice detector as long to hear the dater, so neither could have known.
 YIELD_WINDOW = 1.5
+# Later in a line, a dater who starts and keeps going this long stops Nova too (decision
+# 0004), so a "mm-hm" or a cough doesn't; Nova goes on once they've finished (after_a_cut).
+YIELD_HOLD = 0.3
+# A line stops for daters up to this many times: a dater who starts again, or the other
+# one, is never talked over just because Nova stopped once already. Past it, speech that
+# keeps coming back (a TV the voice detector hears) no longer stops the line, which plays
+# out; and the waits after a line's yields share one SPEECH_CAP.
+MAX_YIELDS = 3
+# Cut where the words that played aren't known (a voice without word timings), a line cut
+# this early is said again from its start, so at most this much is heard twice; cut later,
+# the rest is dropped rather than resumed from a guess at where the cut came.
+RESTART_WITHIN = 2.0
+# A sentence of a line, with the punctuation that ends it.
+SENTENCES = re.compile(r"(?<=[.?!…])\s+")
 
 
 class Command(StrEnum):
@@ -114,8 +129,44 @@ class Spoken:
     grace_ms: int | None = None
 
 
+class Then(StrEnum):
+    """What Nova did with a line a dater cut off (decision 0004)."""
+
+    RESUMED = "resumed"  # from the sentence it was cut in, placed by the words that played
+    RESTARTED = "restarted"  # said again from its start: cut early, the words played unknown
+    DROPPED = "dropped"  # the rest never said: cut later with the words unknown, or at the end
+    SUPERSEDED = "superseded"  # a newer line was waiting (a reply, "Let's keep it kind.")
+    STOPPED = "stopped"  # Nova was told to stop meanwhile (a hold, a report, the date ending)
+
+
+@dataclass(frozen=True)
+class Yield:
+    """One time Nova stopped a line for a dater (decision 0004): how long from when the voice
+    detector heard them start to when Nova's line had stopped, how much of what it was
+    saying had played, the sentence it was cut in (0 is the first; None when the words that
+    played aren't known) of how many, and what Nova did next. When the dater began and when
+    Nova was told to stop are on the rehearsal's clock, for the yield rehearsal
+    (nova/yield_live.py). Never any words."""
+
+    moment: Moment
+    stop_ms: int
+    played_ms: int
+    sentence: int | None
+    sentences: int
+    then: Then
+    began: float = 0.0
+    cut: float = 0.0
+
+    @property
+    def resumed(self) -> bool:
+        """Nova said the line, or the rest of it, after the dater."""
+        return self.then in (Then.RESUMED, Then.RESTARTED)
+
+
 class Speaker(Protocol):
-    """Nova's voice in the room."""
+    """Nova's voice in the room. After each line a voice may also say how much of it played:
+    `played` (seconds) and `played_text` (the words, only from a voice with word timings).
+    Without them the rehearsal goes by its own clock, and never places a cut in the words."""
 
     async def speak(self, text: str) -> float | None:
         """Plays a line. Returns, once it has finished, the time (on the rehearsal's clock)
@@ -139,7 +190,12 @@ class _Pending:
     # Set when Nova is told to stop while this is the line being spoken or waited for.
     stopped: asyncio.Event = field(default_factory=asyncio.Event)
     voiced_at: float | None = None  # when the line went to Nova's voice, while it plays
-    yielded: bool = False  # Nova stopped it for a dater who began at the same moment
+    cut: bool = False  # Nova stopped what it was saying for a dater, and hasn't gone on yet
+    yields: int = 0  # how often it stopped for a dater: at most MAX_YIELDS
+    yield_began: float | None = None  # when that dater began, as the voice detector heard
+    cut_at: float | None = None  # when Nova was told to stop for them
+    resume_by: float | None = None  # the waits after this line's yields end by then
+    queued_at_cut: int = 0  # lines queued so far when it was cut: any after are newer
 
 
 class Rehearsal:
@@ -165,6 +221,7 @@ class Rehearsal:
         utterance_grace: float = Settings.utterance_grace,
         utterance_max_wait: float = Settings.utterance_max_wait,
         events: EventLog | None = None,
+        yield_hold: float = YIELD_HOLD,
     ) -> None:
         self.speaker = speaker
         self._model, self._classifier = model, classifier
@@ -216,6 +273,7 @@ class Rehearsal:
             max_wait=utterance_max_wait,
         )
         self._queue: asyncio.Queue[_Pending] = asyncio.Queue()
+        self._queued = 0  # lines queued so far: which waiting lines came after a cut
         self._current: _Pending | None = None  # the line Nova is speaking or waiting for
         self._talk_over_grace = timing.talk_over_grace
         self._quiet = asyncio.Event()  # nobody is speaking
@@ -238,6 +296,11 @@ class Rehearsal:
         self.prep_ms = 0
         self.warm_up_ms: int | None = None
         self.warmed: list[tuple[str, Warmed]] = []  # each model warmed up: what for, and how
+        self.yields: list[Yield] = []  # each line Nova stopped for a dater, numbers only
+        self._yield_hold = yield_hold
+        # When the dater speaking now began, as the voice detector heard: None while quiet.
+        self._speech_since: float | None = None
+        self._holds: set[asyncio.Task[None]] = set()  # mid-line starts, waiting out the hold
         # Nova not ready to open the date: the moderator's choice, and how long it took.
         self._decided = asyncio.Event()
         self._start_anyway = False
@@ -366,7 +429,7 @@ class Rehearsal:
         dater was still saying is acted on, and the checks in flight get the distress
         timeout to finish (nova/on_air.py, finish)."""
         self.start()
-        speaking = asyncio.create_task(self._speak_forever())
+        speaking = asyncio.create_task(self.speak_lines())
         try:
             while not self.finished:
                 self.tick()
@@ -383,6 +446,16 @@ class Rehearsal:
         """Speaks every line queued so far, in order."""
         while not self._queue.empty():
             await self._speak(self._queue.get_nowait())
+
+    def say(self, moment: Moment, text: str) -> None:
+        """Queues a fixed line, as a beat would, with the date not started: for the yield
+        rehearsal (nova/yield_live.py), whose test lines go through the same speaking path
+        as a date's, yields and all. A date never calls it."""
+        self._queue_cues([Say(moment, text=text)])
+
+    async def lines_done(self) -> None:
+        """Waits until every line queued so far has been said, cut off or dropped."""
+        await self._queue.join()
 
     # --- What happens in the room -------------------------------------------------------------
 
@@ -436,15 +509,17 @@ class Rehearsal:
         """The voice detector heard the dater start speaking."""
         self._listening()
         self._speaking = self.seat
+        self._speech_since = self._clock()
         self._events.emit(Event.SPEECH, seat=self.seat, started=True)
         self._on_air.speech_started(self.seat)
         self._heard_who_speaks()
-        self._yield_if_both_began()
+        self._maybe_yield()
 
     def speech_ended(self) -> None:
         """The voice detector heard the dater stop: the end of their sentence. It ends the
         seat that started speaking, even if the chat has chosen the other one since."""
         seat, self._speaking = self._speaking or self.seat, None
+        self._speech_since = None
         self._ended = seat, self._clock()
         self._events.emit(Event.SPEECH, seat=seat, started=False)
         self._on_air.speech_ended(seat)
@@ -473,29 +548,100 @@ class Rehearsal:
         if self._listening_since is None:
             self._listening_since = self._clock()
 
-    def _yield_if_both_began(self) -> None:
-        """A dater began as Nova did: Nova stops at once, never talking over them, and says
-        the line once they've finished (_speak). Only a line that waits for a dater anyway
-        (show_runner.waits_for_speech), never a reply, a safety line or the result, and only
-        once per line."""
+    def _may_yield(self, item: _Pending | None) -> bool:
+        """Only a line playing now that waits for a dater anyway
+        (show_runner.waits_for_speech), never a reply, a safety line or the result, and up to
+        MAX_YIELDS times a line, the rest it goes on with included, and not once the waits
+        after its yields have used up their SPEECH_CAP: a TV that keeps starting and stopping
+        can't hold one line back for ever."""
+        return (
+            item is not None
+            and item.voiced_at is not None
+            and not item.cut
+            and item.yields < MAX_YIELDS
+            and (item.resume_by is None or self._clock() < item.resume_by)
+            and not item.stopped.is_set()
+            and item.kind is not Kind.REPLY
+            and waits_for_speech(item.say)
+        )
+
+    def _maybe_yield(self) -> None:
+        """A dater began speaking while Nova plays a line. If they began as Nova did (within
+        YIELD_WINDOW of the line, or what it goes on with, going to its voice), Nova stops at
+        once; later, once they've kept going for the hold, so a "mm-hm" or a cough never
+        stops Nova. Either way Nova goes on once they've finished (_after_the_cut)."""
         item = self._current
-        if (
-            item is None
-            or item.voiced_at is None
-            or item.yielded
-            or item.kind is Kind.REPLY
-            or not waits_for_speech(item.say)
-            or self._clock() - item.voiced_at > YIELD_WINDOW
-        ):
+        if not self._may_yield(item):
             return
-        item.yielded = True
+        assert item is not None and item.voiced_at is not None
+        # The same reading as speech_started's: the hold checks this stretch of speech is
+        # unbroken by comparing the two, and a second reading of a real clock never matches
+        # (the yield rehearsal found no dater ever stopped Nova after its first 1.5 s).
+        began = self._speech_since if self._speech_since is not None else self._clock()
+        if began - item.voiced_at <= YIELD_WINDOW:
+            self._yield(item, began)
+            return
+        try:
+            hold = asyncio.ensure_future(self._yield_after_the_hold(item, began))
+        except RuntimeError:  # no event loop running: nothing plays, so nothing to stop
+            return
+        self._holds.add(hold)
+        hold.add_done_callback(self._holds.discard)
+
+    async def _yield_after_the_hold(self, item: _Pending, began: float) -> None:
+        await asyncio.sleep(self._yield_hold)
+        still = self._speech_since == began  # the same stretch of speech, unbroken
+        if still and self._current is item and self._may_yield(item):
+            self._yield(item, began)
+
+    def _yield(self, item: _Pending, began: float) -> None:
+        item.cut, item.yields = True, item.yields + 1
+        item.yield_began, item.cut_at = began, self._clock()
+        item.queued_at_cut = self._queued
+        if item.resume_by is None:
+            item.resume_by = item.cut_at + SPEECH_CAP
         self.speaker.stop()
+
+    async def _after_the_cut(
+        self, item: _Pending, moment: Moment, text: str, started: float | None
+    ) -> str | None:
+        """A dater cut Nova off in `text`: they go first, then Nova goes on as after_a_cut
+        says, unless it was told to stop meanwhile or a line queued after the cut is waiting
+        (a reply to what the dater said, "Let's keep it kind."), which goes first instead.
+        Logged and reported as numbers only. Returns what to say next, or None."""
+        played = getattr(self.speaker, "played", None)
+        if played is None:  # the voice doesn't say: from its first audio to the cut
+            cut = item.cut_at if item.cut_at is not None else self._clock()
+            played = max(0.0, cut - started) if started is not None else 0.0
+        words = getattr(self.speaker, "played_text", None)
+        then, rest, sentence, sentences = after_a_cut(text, played, words)
+        began = item.yield_began if item.yield_began is not None else self._clock()
+        stop_ms = ms(self._clock() - began)
+        await self._after_the_dater(item)
+        if item.stopped.is_set():
+            then = Then.STOPPED
+        elif rest and self._queued > item.queued_at_cut and not self._queue.empty():
+            then = Then.SUPERSEDED
+        cut = item.cut_at if item.cut_at is not None else began
+        cut_off = Yield(moment, stop_ms, ms(played), sentence, sentences, then, began, cut)
+        self.yields.append(cut_off)
+        self._events.emit(
+            Event.YIELDED,
+            moment=moment,
+            stop_ms=stop_ms,
+            played_ms=ms(played),
+            sentence=sentence,
+            sentences=sentences,
+            then=then,
+        )
+        item.cut = False
+        return rest if then in (Then.RESUMED, Then.RESTARTED) else None
 
     async def _after_the_dater(self, item: _Pending) -> None:
         """After a yield: until nobody has spoken for the turn gap (a pause between a dater's
         sentences isn't the end of what they're saying: Nova came back in on one), or Nova is
-        told to stop; at most SPEECH_CAP."""
-        deadline = self._clock() + SPEECH_CAP
+        told to stop; at most SPEECH_CAP from the line's first yield, shared by all of them."""
+        deadline = item.resume_by if item.resume_by is not None else self._clock() + SPEECH_CAP
         while not item.stopped.is_set() and self._clock() < deadline:
             ended = self._ended[1] if self._ended is not None else None
             if self._quiet.is_set() and (ended is None or self._clock() - ended >= self._turn_gap):
@@ -555,6 +701,7 @@ class Rehearsal:
             closed = closed_at if kind is Kind.REPLY else None
             held = hold if cue.moment is Moment.REPLY else None
             self._queue.put_nowait(_Pending(cue, kind, now, ends, line, held, closed))
+            self._queued += 1
         current = self._current
         if current is not None and self._after_its_hold(current):
             # The hold ended while Nova covered it: stopped mid-line, so "And we're back."
@@ -588,7 +735,9 @@ class Rehearsal:
         )
         return covers and not self._runner.held
 
-    async def _speak_forever(self) -> None:
+    async def speak_lines(self) -> None:
+        """Speaks every line as it's queued, in order, until cancelled: run() does for a
+        date, and the yield rehearsal (nova/yield_live.py) for its test lines."""
         while True:
             await self._speak(await self._queue.get())
 
@@ -658,18 +807,25 @@ class Rehearsal:
             if waited is not None:  # measured from when the dater finished, as the runner does
                 cue_at = picked = max(cue_at, waited)
             try:
-                item.voiced_at = self._clock()
-                started = await self.speaker.speak(line.text)
-                item.voiced_at = None
-                if item.yielded and not item.stopped.is_set():
-                    # Both began at once: the dater goes first, then Nova says it again.
-                    self._events.emit(Event.YIELDED, moment=line.moment)
-                    await self._after_the_dater(item)
-                    if item.stopped.is_set():
-                        return
-                    started = await self.speaker.speak(line.text)
-                if started is not None:
-                    self.nova_seconds += max(0.0, self._clock() - started)
+                first: float | None = None  # when the line's first audio played
+                text, again = line.text, False
+                while True:
+                    if again:
+                        self.characters_spoken += len(text)  # said again, so billed again
+                    item.voiced_at = self._clock()
+                    started = await self.speaker.speak(text)
+                    item.voiced_at = None
+                    if started is not None:
+                        first = started if first is None else first
+                        self.nova_seconds += max(0.0, self._clock() - started)
+                    if not item.cut or item.stopped.is_set():
+                        break
+                    # The dater goes first, then Nova goes on, or doesn't (after_a_cut).
+                    rest = await self._after_the_cut(item, line.moment, text, started)
+                    if rest is None:
+                        break
+                    text, again = rest, True
+                started = first
             except Exception:  # the voice failed: this line never played, the date goes on
                 started = None
                 self._events.emit(Event.VOICE_ERROR, moment=line.moment)
@@ -790,6 +946,29 @@ def price(prices: dict[str, float], model: str) -> float:
 # --- The report ---------------------------------------------------------------------------
 
 
+def after_a_cut(
+    text: str, played: float, played_text: str | None
+) -> tuple[Then, str, int | None, int]:
+    """What Nova says once a dater who cut it off in `text` has finished (decision 0004),
+    after `played` seconds of it, and `played_text`, the words that had played, if the voice
+    knows them. Known: the sentence the first unplayed word is in, and every one after it,
+    so nothing the room heard whole is said twice; every word played, nothing. Unknown: the
+    whole line again if under RESTART_WITHIN seconds had played, otherwise nothing, never a
+    guess at the sentence. Returns what Nova does, what it says, the sentence it was cut in
+    (0 is the first; None if unknown) and how many there are."""
+    parts = [part for part in SENTENCES.split(text.strip()) if part] or [text]
+    if played_text is None:
+        if played < RESTART_WITHIN:
+            return Then.RESTARTED, text, None, len(parts)
+        return Then.DROPPED, "", None, len(parts)
+    heard, words = len(played_text.split()), 0
+    for k, part in enumerate(parts):
+        words += len(part.split())
+        if heard < words:
+            return Then.RESUMED, " ".join(parts[k:]), k, len(parts)
+    return Then.DROPPED, "", len(parts) - 1, len(parts)
+
+
 def render_report(rehearsal: Rehearsal) -> str:
     """Codes and numbers only: never what anyone said, typed or heard."""
     r = rehearsal
@@ -816,6 +995,8 @@ def render_report(rehearsal: Rehearsal) -> str:
             f"{ms_text(s.grace_ms):>9}{ms_text(s.model_ms or None):>8}"
         )
     lines += ["", _utterance_row(r), _airtime_row(r)]
+    if r.yields:
+        lines.append(_yield_row(r))
     if r.held_for is not None:
         lines.append(
             f"Nova wasn't ready: the doors held {r.held_for:.1f} s for the moderator, who "
@@ -858,6 +1039,23 @@ def _warm_up_text(what: str, warmed: Warmed) -> str:
     if warmed.error is not None:
         return f"{name} warm-up failed ({warmed.error}) after {warmed.ms / 1000:.1f} s, {tries}. "
     return f"{name} warmed up in {warmed.ms / 1000:.1f} s ({tries}). "
+
+
+def _yield_row(r: Rehearsal) -> str:
+    """How often Nova stopped for a dater, and how fast: from when the voice detector heard
+    them start to when Nova's line had stopped, as the agent measures it (the room hears it
+    a little later, after the network)."""
+    stops = sorted(y.stop_ms for y in r.yields)
+    then = Counter(y.then for y in r.yields)
+    placed = sum(y.sentence is not None for y in r.yields)
+    later = sum(y.then is Then.RESUMED and (y.sentence or 0) > 0 for y in r.yields)
+    return (
+        f"Nova stopped for a dater {len(stops)} times: from the dater starting to Nova "
+        f"stopped, median {round(statistics.median(stops))} ms, worst {stops[-1]} ms; then "
+        + ", ".join(f"{t} {then[t]}" for t in Then if then[t])
+        + f"; the words that played known {placed} times, resumed from a later sentence "
+        f"{later} times."
+    )
 
 
 def _utterance_row(r: Rehearsal) -> str:

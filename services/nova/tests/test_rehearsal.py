@@ -14,15 +14,19 @@ from nova.cues import AlertModerator, ModeratorAlert, Moment, Say
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
 from nova.lines import LineWriter, Source
 from nova.rehearsal import (
+    MAX_YIELDS,
     Command,
     Kind,
     Rehearsal,
     Spoken,
+    Then,
+    after_a_cut,
     estimate_cost,
     parse_command,
     render_report,
     targets,
 )
+from nova.show_runner import SPEECH_CAP
 from nova.timing import REHEARSAL
 
 # REHEARSAL timing: first question at 13.5 s, free talk 27 s, from the room 72 s,
@@ -138,6 +142,11 @@ class FakeModel:
         return answer
 
 
+# How long a dater must keep going mid-line before Nova yields, in these tests: the real
+# hold (0.3 s, nova/rehearsal.py) as real time would slow every test that waits it out.
+HOLD = 0.05
+
+
 def rehearsal(clock: Clock, speaker=None, *, model=None, reply: str = "Here we go, Maya and Theo."):
     return Rehearsal(
         REHEARSAL_PAIR,
@@ -149,6 +158,7 @@ def rehearsal(clock: Clock, speaker=None, *, model=None, reply: str = "Here we g
         first_up=Seat.LEFT,
         voice="fake/voice",
         stt="deepgram/nova-3",
+        yield_hold=HOLD,
     )
 
 
@@ -880,20 +890,433 @@ async def test_a_dater_who_starts_as_nova_does_goes_first_and_nova_says_it_again
     assert len(lines(r, Moment.LIGHTNING_UNLOCKED)) == 1
 
 
-async def test_a_dater_who_starts_well_into_novas_line_is_not_a_collision():
-    clock = Clock()
-    speaker = PlaysUntilStopped(clock, script.LIGHTNING_UNLOCKED)
-    r = await started(clock, speaker=speaker)
-    speaker.armed = True
+class Plays(FakeSpeaker):
+    """Plays the lines under test until stopped or finish() is called, as a real voice does;
+    any other line plays at once. Like a voice without word timings, it never says which
+    words played."""
+
+    def __init__(self, clock: Clock, *held: str) -> None:
+        super().__init__(clock)
+        self.held = set(held)
+        self._done = asyncio.Event()
+
+    async def speak(self, text: str) -> float | None:
+        if text not in self.held:
+            return await super().speak(text)
+        self.texts.append(text)
+        self._done.clear()
+        started = self.clock.now
+        await self._done.wait()
+        return started
+
+    def stop(self) -> None:
+        super().stop()
+        self._done.set()
+
+    def finish(self) -> None:
+        self._done.set()
+
+
+# How fast the voice below says its words, on the fake clock.
+WORDS_A_SECOND = 2.5
+
+
+class PlaysWithWords(Plays):
+    """The same, as a voice with word timings: once a line stops, the words that had played,
+    as LiveKit's transcript synchronizer gives them from Cartesia's timestamps."""
+
+    def __init__(self, clock: Clock, *held: str) -> None:
+        super().__init__(clock, *held)
+        self.played: float | None = None
+        self.played_text: str | None = None
+        self._text, self._started = "", 0.0
+
+    async def speak(self, text: str) -> float | None:
+        self._text, self._started = text, self.clock.now
+        self.played = self.played_text = None
+        return await super().speak(text)
+
+    def stop(self) -> None:
+        self.played = self.clock.now - self._started
+        self.played_text = " ".join(self._text.split()[: int(self.played * WORDS_A_SECOND)])
+        super().stop()
+
+
+UNLOCKED_FIRST, UNLOCKED_REST = "The lightning round is unlocked.", "Three quick ones, coming up."
+
+
+async def unlocked(clock: Clock, voice: type[Plays] = Plays):
+    """Nova starts "The lightning round is unlocked. Three quick ones, coming up." at 30 s,
+    a line that waits for daters (show_runner.waits_for_speech), and is still playing."""
+    speaker = voice(clock, script.LIGHTNING_UNLOCKED, UNLOCKED_REST)
+    r = await started(clock, speaker=FakeSpeaker(clock))
+    r.speaker = speaker
     clock.now = 30.0
     r.command("unlock")
     speaking = asyncio.ensure_future(r.speak_queued())
+    await asyncio.sleep(0.02)
+    assert speaker.texts[-1] == script.LIGHTNING_UNLOCKED
+    return r, speaker, speaking
+
+
+async def finished_talking(r: Rehearsal, clock: Clock, *, at: float) -> None:
+    """The dater stops at `at` and nobody speaks for the turn gap (and a moment, so adding
+    seconds up on the fake clock never falls short of it)."""
+    clock.now = at
+    r.speech_ended()
     await asyncio.sleep(0.05)
-    clock.now = 32.0  # two seconds into Nova's line: the dater talks over Nova, not the reverse
+    clock.now = at + REHEARSAL.turn_gap + 0.01
+    await asyncio.sleep(0.1)
+
+
+async def test_a_dater_who_starts_well_into_novas_line_stops_it_once_they_keep_going():
+    """Before, a dater who began two seconds into a line was talked over for the rest of it
+    (decision 0004). Now Nova stops once they've kept going for the hold."""
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock, PlaysWithWords)
+    clock.now = 31.9  # 1.6 s, four words, in: still the first sentence
     r.speech_started()
-    assert speaker.stops == 0
-    speaking.cancel()
-    await asyncio.gather(speaking, return_exceptions=True)
+    assert speaker.stops == 0, "not at once: a cough or a mm-hm wouldn't stop Nova"
+    await asyncio.sleep(HOLD + 0.05)
+    assert speaker.stops == 1, "they kept going: Nova stops"
+    await finished_talking(r, clock, at=36.0)
+    assert speaker.texts[-1] == script.LIGHTNING_UNLOCKED, "cut in its first sentence: again"
+    speaker.finish()
+    await asyncio.wait_for(speaking, 1.0)
+    assert r.yields[-1].sentence == 0 and r.yields[-1].then is Then.RESUMED
+
+
+class CreepingClock(Clock):
+    """Moves on a millisecond each time it's read, as a real clock does between two reads."""
+
+    def __call__(self) -> float:
+        self.now += 0.001
+        return self.now
+
+
+async def test_a_dater_cutting_in_mid_line_stops_nova_on_a_clock_that_moves_between_reads():
+    """Found by the yield rehearsal in LiveKit: the hold compared the clock read when the
+    voice detector heard the dater with a second reading a moment later, never equal on a
+    real clock, so no dater stopped Nova after its line's first 1.5 s. On a fake clock that
+    stood still between reads, every test passed."""
+    clock = CreepingClock()
+    r, speaker, speaking = await unlocked(clock, PlaysWithWords)
+    clock.now = 33.0
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)
+    assert speaker.stops == 1, "they kept going: Nova stops"
+    await finished_talking(r, clock, at=36.0)
+    speaker.finish()
+    await asyncio.wait_for(speaking, 1.0)
+    assert r.yields[-1].then is Then.RESUMED
+
+
+async def test_cut_off_later_nova_says_only_the_sentence_it_was_cut_in_and_the_rest():
+    """With the words that played known, Nova goes on from the sentence the first unplayed
+    word is in: nothing the room heard whole is said twice."""
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock, PlaysWithWords)
+    clock.now = 33.0  # 2.7 s, six words, in: the second sentence
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)
+    assert speaker.stops == 1
+    await finished_talking(r, clock, at=36.0)
+    assert speaker.texts[-2:] == [script.LIGHTNING_UNLOCKED, UNLOCKED_REST], "not the whole again"
+    assert speaker.texts.count(script.LIGHTNING_UNLOCKED) == 1
+    speaker.finish()
+    await asyncio.wait_for(speaking, 1.0)
+    cut = r.yields[-1]
+    assert (cut.sentence, cut.sentences, cut.then, cut.played_ms) == (1, 2, Then.RESUMED, 2700)
+    assert cut.stop_ms == 0, "on this fake clock; the LiveKit yield rehearsal measures it"
+    assert (cut.began, cut.cut) == (33.0, 33.0)
+    assert len(lines(r, Moment.LIGHTNING_UNLOCKED)) == 1, "one line, said once and resumed"
+
+
+async def test_without_word_timings_a_line_cut_early_is_said_again_from_its_start():
+    """Where the cut came in the words is unknown, so nothing is guessed from a speaking
+    rate: cut within RESTART_WITHIN, at most that much is heard twice."""
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock)
+    clock.now = 31.8  # 1.5 s in
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)
+    await finished_talking(r, clock, at=34.0)
+    assert speaker.texts.count(script.LIGHTNING_UNLOCKED) == 2
+    speaker.finish()
+    await asyncio.wait_for(speaking, 1.0)
+    cut = r.yields[-1]
+    assert (cut.then, cut.sentence, cut.played_ms) == (Then.RESTARTED, None, 1500)
+
+
+async def test_without_word_timings_the_rest_of_a_line_cut_later_is_dropped():
+    """Before, the sentence was told from the session's speaking rate, a guess: wrong, Nova
+    says a sentence the room already heard, or skips one it didn't."""
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock)
+    clock.now = 33.0
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)
+    await finished_talking(r, clock, at=36.0)
+    await asyncio.wait_for(speaking, 1.0)
+    assert speaker.texts.count(script.LIGHTNING_UNLOCKED) == 1
+    assert UNLOCKED_REST not in speaker.texts
+    assert r.yields[-1].then is Then.DROPPED and not r.yields[-1].resumed
+    assert len(lines(r, Moment.LIGHTNING_UNLOCKED)) == 1, "it played, in part"
+
+
+async def test_a_mm_hm_shorter_than_the_hold_never_stops_nova():
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock)
+    clock.now = 33.0
+    r.speech_started()
+    clock.now = 33.2
+    r.speech_ended()  # under the hold: a backchannel, a cough
+    await asyncio.sleep(HOLD + 0.05)
+    assert speaker.stops == 0 and r.yields == []
+    speaker.finish()
+    await asyncio.wait_for(speaking, 1.0)
+
+
+async def test_a_pause_between_the_daters_sentences_is_not_the_end_of_what_they_say():
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock, PlaysWithWords)
+    clock.now = 33.0
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)
+    clock.now = 35.0
+    r.speech_ended()  # half a second between two sentences
+    await asyncio.sleep(0.05)
+    clock.now = 35.5
+    r.speech_started()
+    await asyncio.sleep(0.1)
+    assert speaker.texts[-1] == script.LIGHTNING_UNLOCKED, "not in her pause"
+    await finished_talking(r, clock, at=38.0)
+    assert speaker.texts[-1] == UNLOCKED_REST
+    speaker.finish()
+    await asyncio.wait_for(speaking, 1.0)
+
+
+async def test_a_second_interruption_stops_what_nova_goes_on_with_too():
+    """Before, a line stopped once at most: a dater who started again over what Nova went on
+    with, or the other dater, was talked over because Nova had stopped once already."""
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock, PlaysWithWords)
+    clock.now = 31.9  # in the first sentence: Nova says the line again
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)
+    await finished_talking(r, clock, at=34.0)
+    assert speaker.texts.count(script.LIGHTNING_UNLOCKED) == 2
+    clock.now += 3.0  # seven words into the line again
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)
+    assert speaker.stops == 2, "stopped again"
+    await finished_talking(r, clock, at=clock.now + 2.0)
+    assert speaker.texts[-1] == UNLOCKED_REST
+    speaker.finish()
+    await asyncio.wait_for(speaking, 1.0)
+    assert [y.then for y in r.yields] == [Then.RESUMED, Then.RESUMED]
+    assert [y.sentence for y in r.yields] == [0, 1]
+    assert len(lines(r, Moment.LIGHTNING_UNLOCKED)) == 1
+
+
+async def test_speech_that_keeps_coming_back_stops_a_line_at_most_max_yields_times():
+    """A TV, or a dater who talks over everything: MAX_YIELDS stops, then Nova plays the line
+    out, so nothing can hold it silent for ever."""
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock)
+    for n in range(MAX_YIELDS):
+        clock.now += 0.5  # as Nova starts: it stops at once
+        r.speech_started()
+        await asyncio.sleep(0.02)
+        assert speaker.stops == n + 1
+        await finished_talking(r, clock, at=clock.now + 1.0)
+        assert speaker.texts.count(script.LIGHTNING_UNLOCKED) == n + 2, "said again"
+    clock.now += 0.5
+    r.speech_started()  # once more
+    await asyncio.sleep(HOLD + 0.05)
+    assert speaker.stops == MAX_YIELDS, "talked over now"
+    r.speech_ended()
+    speaker.finish()
+    await asyncio.wait_for(speaking, 1.0)
+    assert [y.then for y in r.yields] == [Then.RESTARTED] * MAX_YIELDS
+
+
+async def test_the_waits_after_a_lines_yields_share_one_speech_cap():
+    """Each wait for a dater to finish could take SPEECH_CAP, three a minute and a half of
+    one line. They share one cap, from the line's first stop; past it the line plays out."""
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock)
+    clock.now = 30.5
+    r.speech_started()  # and keeps going: a TV
+    await asyncio.sleep(0.05)
+    assert speaker.stops == 1
+    clock.now = 30.5 + SPEECH_CAP + 0.1
+    await asyncio.sleep(0.1)
+    assert speaker.texts.count(script.LIGHTNING_UNLOCKED) == 2, "said again once the cap ran out"
+    clock.now += 1.0
+    r.speech_ended()
+    clock.now += 0.3
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)
+    assert speaker.stops == 1, "past the line's cap, no more stops"
+    speaker.finish()
+    await asyncio.wait_for(speaking, 1.0)
+
+
+async def test_a_reply_queued_after_a_cut_goes_first_and_the_rest_is_dropped():
+    """The dater spoke to Nova while cutting it off: the reply answers them, and the rest of
+    the old line, stale by then, is never said before or after it."""
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock, PlaysWithWords)
+    clock.now = 33.0
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)
+    r.transcript("Nova, what happens in the lightning round?")
+    clock.now = 35.0
+    r.speech_ended()
+    close(r, clock)  # the utterance closes: the reply is queued while Nova waits to go on
+    await asyncio.sleep(0.05)
+    clock.now = 40.0
+    await asyncio.wait_for(speaking, 1.0)
+    assert UNLOCKED_REST not in speaker.texts
+    assert r.yields[-1].then is Then.SUPERSEDED and not r.yields[-1].resumed
+    assert lines(r, Moment.REPLY), "the reply was said"
+
+
+async def test_lines_queued_before_the_cut_never_count_as_newer():
+    """A beat's lines go out together: the next one waiting is not a reason to drop the rest."""
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock, PlaysWithWords)
+    r._queue_cues([Say(Moment.LIGHTNING_QUESTION, text="Sweet or savoury?")])  # already queued
+    clock.now = 33.0
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)
+    await finished_talking(r, clock, at=36.0)
+    assert speaker.texts[-1] == UNLOCKED_REST
+    speaker.finish()
+    await asyncio.wait_for(speaking, 1.0)
+    assert r.yields[-1].then is Then.RESUMED
+
+
+async def test_a_stop_request_while_nova_waits_to_go_on_gets_the_kind_line_at_once():
+    """Yield handling never delays a safety line: the wait for the dater to finish ends as
+    soon as what they said is heard as a request to stop, and the kind line comes, never the
+    rest of the line."""
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock, PlaysWithWords)
+    clock.now = 33.0
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)
+    r.transcript("I want to stop.")
+    clock.now = 35.0
+    r.speech_ended()
+    close(r, clock)  # before the turn gap is up: the stop comes first
+    await asyncio.wait_for(speaking, 1.0)
+    await r.speak_queued()
+    assert UNLOCKED_REST not in speaker.texts and r.yields[-1].then is Then.STOPPED
+    kind = lines(r, Moment.NEED_A_MOMENT)[0]
+    assert kind.from_sentence_end_ms == 900, "the grace and the voice's start, no more"
+    assert ModeratorAlert.DATER_DISTRESSED in alerts(r)
+
+
+async def test_a_line_waiting_to_resume_is_dropped_if_the_date_is_held_meanwhile():
+    """A stale line is never said: the dater asks for a moment while Nova waits to resume."""
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock, PlaysWithWords)
+    clock.now = 33.0
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)
+    r.command("moment")
+    clock.now = 36.0
+    r.speech_ended()
+    await asyncio.wait_for(speaking, 1.0)
+    speaker.finish()
+    await r.speak_queued()
+    assert UNLOCKED_REST not in speaker.texts and r.yields[-1].then is Then.STOPPED
+    assert script.NEED_A_MOMENT in speaker.texts
+
+
+async def test_a_late_final_transcript_after_nova_resumes_is_still_heard_and_acted_on():
+    """Stopping and resuming never touch what reaches the distress check: the dater's
+    words, transcribed late, pause the date as ever."""
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock, PlaysWithWords)
+    clock.now = 33.0
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)
+    await finished_talking(r, clock, at=36.0)
+    assert speaker.texts[-1] == UNLOCKED_REST  # Nova has resumed
+    r.transcript("I want to stop.")  # the final for what she said, late
+    close(r, clock)
+    await asyncio.wait_for(speaking, 1.0)
+    await r.speak_queued()
+    assert script.DISTRESS_PAUSE in speaker.texts
+    assert ModeratorAlert.DATER_DISTRESSED in alerts(r)
+
+
+@pytest.mark.parametrize("command", ["moment", "report"])
+async def test_safety_lines_never_yield_to_a_dater_starting_over_them(command):
+    """The need-a-moment cover and the report's pause line are never stopped for speech."""
+    clock = Clock()
+    speaker = Plays(clock, script.NEED_A_MOMENT)
+    r = await started(clock, speaker=FakeSpeaker(clock))
+    r.speaker = speaker
+    clock.now = 30.0
+    r.command(command)
+    speaking = asyncio.ensure_future(r.speak_queued())
+    await asyncio.sleep(0.02)
+    assert speaker.texts[-1] == script.NEED_A_MOMENT
+    stops = speaker.stops
+    clock.now = 33.0
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)
+    assert speaker.stops == stops and r.yields == []
+    clock.now = 34.0
+    r.speech_ended()
+    speaker.finish()
+    await asyncio.wait_for(speaking, 1.0)
+
+
+async def test_a_yield_is_logged_and_reported_as_numbers_never_words(caplog):
+    caplog.set_level(logging.INFO, logger="nova")
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock, PlaysWithWords)
+    clock.now = 33.0
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)
+    await finished_talking(r, clock, at=36.0)
+    speaker.finish()
+    await asyncio.wait_for(speaking, 1.0)
+    assert (
+        "yielded moment=lightning_unlocked stop_ms=0 played_ms=2700 sentence=1 sentences=2 "
+        "then=resumed" in caplog.text
+    )
+    assert "speech seat=left started=True" in caplog.text
+    for words in (UNLOCKED_FIRST, UNLOCKED_REST, "lightning round is"):
+        assert words not in caplog.text
+    report = render_report(r)
+    assert "Nova stopped for a dater 1 times" in report and "then resumed 1" in report
+    assert "the words that played known 1 times" in report
+
+
+TEXT = "One two. Three four? Five!"
+
+
+@pytest.mark.parametrize(
+    ("played", "words", "expected"),
+    [
+        (0.5, None, (Then.RESTARTED, TEXT, None, 3)),
+        (1.99, None, (Then.RESTARTED, TEXT, None, 3)),
+        (2.0, None, (Then.DROPPED, "", None, 3)),  # never a guess at the sentence
+        (9.0, "", (Then.RESUMED, TEXT, 0, 3)),  # before its first word
+        (9.0, "One", (Then.RESUMED, TEXT, 0, 3)),
+        (9.0, "One two.", (Then.RESUMED, "Three four? Five!", 1, 3)),  # the first one whole
+        (9.0, "One two. Three", (Then.RESUMED, "Three four? Five!", 1, 3)),
+        (9.0, TEXT, (Then.DROPPED, "", 2, 3)),  # every word had played
+    ],
+)
+def test_after_a_cut_nova_goes_on_only_from_where_it_knows_the_cut_came(played, words, expected):
+    assert after_a_cut(TEXT, played, words) == expected
 
 
 async def test_a_dater_who_needs_a_moment_cuts_nova_off_mid_line():
@@ -1328,7 +1751,7 @@ async def test_the_speaking_task_stops_when_cancelled_whatever_it_waits_on(label
     r.transcript(words)
     close(r, clock)
     await r.heard()
-    speaking = asyncio.ensure_future(r._speak_forever())
+    speaking = asyncio.ensure_future(r.speak_lines())
     await asyncio.sleep(0.05)
     speaking.cancel()
     with pytest.raises(asyncio.CancelledError):

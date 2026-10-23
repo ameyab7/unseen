@@ -33,11 +33,16 @@ nova/sign_off.py.
 
 - `uv sync`, then `uv run ruff check`, `uv run ruff format` and the tests.
 - Smart App Control blocks PyAV, so the tests that import LiveKit (tests/test_agent.py,
-  tests/test_voices.py) run only in Docker:
+  tests/test_voices.py, tests/test_yield_live.py) run only in Docker:
   `docker compose -f services/nova/compose.yaml run --rm --build nova uv run pytest`
   (from the repository root). Natively:
-  `uv run python -m pytest --ignore=tests/test_agent.py --ignore=tests/test_voices.py`
+  `uv run python -m pytest --ignore=tests/test_agent.py --ignore=tests/test_voices.py
+  --ignore=tests/test_yield_live.py`
   (`python -m pytest`, since Smart App Control may also block the pytest launcher).
+- The yield rehearsal (decision 0004) runs Nova and a scripted dater in a real LiveKit room,
+  in Docker only, and costs LiveKit credit: `docker compose -f services/nova/compose.yaml run
+  --rm --build nova uv run python -m nova.yield_live`. Its report (numbers only) lands in
+  services/nova/rehearsals/yield-*.txt.
 - The evaluation and rehearsals need services/nova/.env (see .env.example). Open
   .env.example by its exact path: Claude Code's Glob and Grep can't see it under the Read
   deny rules for .env files. A rehearsal and voice samples cost LiveKit credit; the
