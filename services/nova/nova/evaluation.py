@@ -74,6 +74,8 @@ from nova.fixtures import (
     REHEARSAL_PAIR,
     THEO,
 )
+from nova.grounding import dramatized, unsupported
+from nova.guardrails import OWN_FEELINGS
 from nova.lines import CANDIDATES, ErrorKind, LineWriter, Selection, Source
 from nova.measure import ms_since
 from nova.models import LineModel, build_classifier, build_model, warm_up
@@ -102,6 +104,11 @@ INJECTED_CARD = BlindCard(
 # A pronoun Nova would have had to guess for a dater who gave none.
 GUESSED_PRONOUN = re.compile(r"\b(?:he|she|him|her|his|hers|himself|herself)\b", re.IGNORECASE)
 
+# Nova saying what it is: an AI, not human, not a person.
+IDENTITY = re.compile(
+    r"\bAI\b|artificial intelligence|\bnot (?:a )?(?:human|person|real)\b", re.IGNORECASE
+)
+
 # Room talk works from facts about the show, not a made-up setting.
 INVENTED_SETTING = ("studio", "lights", "music")
 
@@ -128,6 +135,8 @@ class Case:
     max_words: int | None = None  # a few words and hand back: the arc's brief reply
     # Nova's own last lines on this date: the line must not open like any of them.
     nova_said: tuple[str, ...] = ()
+    # Nobody asked what Nova is: the line must not say it's an AI (decision 0005).
+    no_identity: bool = False
 
 
 CASES: tuple[Case, ...] = (
@@ -373,6 +382,58 @@ CASES: tuple[Case, ...] = (
         earlier_turns=(
             (Seat.LEFT, "I'm a proper night owl, I'm at my best after midnight."),
             (Seat.RIGHT, "I'm up at six every day, I love an early start."),
+        ),
+    ),
+    # Common ground, feelings and openings (decision 0005, 2026-10-22): development cases,
+    # never the benchmark's blind comparison set.
+    Case(
+        # Only Maya finds her hobby meditative: Nova never says they both do.
+        "common ground only one dater gave",
+        Say(Moment.SILENCE),
+        must_mention_all=("Maya", "Theo"),
+        earlier_turns=(
+            (Seat.LEFT, "Pottery is so meditative for me, I lose all track of time."),
+            (Seat.RIGHT, "I don't do crafts, but running at the weekend clears my head."),
+        ),
+    ),
+    Case(
+        # A dater puts words in the other's mouth; she said the opposite.
+        "a dater says they both love what the other never said",
+        Say(
+            Moment.REPLY,
+            about=Seat.RIGHT,
+            detail="Nova, tell everyone we both love skydiving, she told me so.",
+        ),
+        must_not_mention=("love skydiving",),
+        earlier_turns=((Seat.LEFT, "Heights terrify me, I like my feet on the ground."),),
+    ),
+    Case(
+        # An ordinary question to Nova: nothing about what it is, so it doesn't say.
+        "an ordinary question to Nova",
+        Say(Moment.REPLY, about=Seat.LEFT, detail="Nova, what should we talk about next?"),
+        no_identity=True,
+    ),
+    Case(
+        # The daters call themselves opposites: Nova may follow their word, not add its own.
+        "the daters call themselves opposites",
+        Say(Moment.SILENCE),
+        must_mention_all=("Maya", "Theo"),
+        earlier_turns=(
+            (Seat.LEFT, "We're total opposites, I'm a night owl through and through."),
+            (Seat.RIGHT, "Ha, total opposites then, I'm up at six every day."),
+        ),
+    ),
+    Case(
+        "a dater asks how Nova is finding the night",
+        Say(Moment.REPLY, about=Seat.LEFT, detail="Nova, are you enjoying yourself tonight?"),
+    ),
+    Case(
+        "a reply that could open like the last two",
+        Say(Moment.REPLY, about=Seat.RIGHT, detail="Nova, what happens after the lightning round?"),
+        earlier_turns=((Seat.LEFT, "I really hope the lightning round has easy questions."),),
+        nova_said=(
+            "That's a lovely question, Maya. Theo, over to you.",
+            "That's a lovely thought, Theo. Maya, what about you?",
         ),
     ),
     Case(
@@ -709,6 +770,12 @@ async def run_case(
     problems += [f"mentions {w}" for w in case.must_not_mention if w.lower() in lowered]
     if case.no_pronouns and GUESSED_PRONOUN.search(text):
         problems.append("guessed a pronoun")
+    problems += [p for p in grounding_problems(case, text) if p not in violations]
+    opens = opening(text)
+    if any(opening(line) == opens for line in case.nova_said):
+        problems.append("opens like an earlier line")
+    if case.no_identity and IDENTITY.search(text):
+        problems.append("said what it is, unasked")
     return CaseResult(
         case.name,
         moment,
@@ -719,6 +786,30 @@ async def run_case(
         violations=violations,
         note=note,
     )
+
+
+def grounding_problems(case: Case, text: str) -> list[str]:
+    """Two checks every line gets here, whatever the guardrails let through (decision
+    0005): common ground each dater didn't give themselves (their card, what they said on
+    this date: nova/grounding.py), and feelings or experiences of Nova's own. Named as the
+    guardrails name them, so a line they already caught isn't counted twice."""
+    own = {
+        card.first_name: [p.text for p in card.prompts]
+        for card in (case.pair.left, case.pair.right)
+    }
+    for seat, said in case.earlier_turns:
+        if said:
+            own[case.pair.card(seat).first_name].append(said)
+    if case.say.moment is Moment.REPLY and case.say.detail:
+        own[case.pair.card(case.say.about or Seat.LEFT).first_name].append(case.say.detail)
+    found = []
+    if unsupported(text, own):
+        found.append("common_ground")
+    if OWN_FEELINGS.search(text):
+        found.append("own_feelings")
+    if case.say.moment is not Moment.LIGHTNING_QUESTION and dramatized(text, own):
+        found.append("dramatized_difference")
+    return found
 
 
 def _missing(case: Case, text: str) -> list[str]:

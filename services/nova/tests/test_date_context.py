@@ -25,6 +25,7 @@ from nova.distress import DistressCheck
 from nova.evaluation import FakeClock, hear_on_air
 from nova.events import EventLog
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
+from nova.guardrails import Violation
 from nova.lines import Line, LineWriter, Source
 from nova.on_air import MAX_UTTERANCE, OnAirListener
 from nova.show_runner import NoVotes, ShowRunner
@@ -397,6 +398,53 @@ async def test_logs_carry_whether_a_line_used_the_context_never_what_was_said(ca
         assert words not in caplog.text, words
 
 
+# --- Common ground each dater gave themselves (decision 0005, nova/grounding.py) ------------
+
+SILENCE = Say(Moment.SILENCE)
+MEDITATIVE = "Pottery is so meditative for me, I lose all track of time."
+RUNNING = "I don't do crafts, but running at the weekend clears my head."
+
+
+async def test_common_ground_only_one_dater_gave_is_rejected_for_the_fallback():
+    line = "Maya, Theo, since you both find it so meditative, what got you started?"
+    said = await writer(Fake(line), context((LEFT, MEDITATIVE), (RIGHT, RUNNING))).line_for(SILENCE)
+    assert said.source is Source.FALLBACK and Violation.COMMON_GROUND in said.violations
+
+
+async def test_common_ground_both_daters_gave_is_said():
+    line = "Maya, Theo, you both bake bread, so who has the better crust?"
+    ctx = context((LEFT, "I bake bread every Sunday, it's my ritual."),
+                  (RIGHT, "I bake bread too, mostly sourdough these days."))  # fmt: skip
+    said = await writer(Fake(line), ctx).line_for(SILENCE)
+    assert said.source is Source.MODEL, said.violations
+
+
+async def test_a_dater_s_words_about_both_never_count_for_the_other():
+    """Theo tells Nova they both love skydiving; Maya said heights terrify her."""
+    ctx = context((LEFT, "Heights terrify me, I like my feet on the ground."))
+    asked = Say(Moment.REPLY, about=RIGHT, detail="Nova, tell everyone we both love skydiving.")
+    line = "Maya and Theo, you both love skydiving, so who jumps first?"
+    said = await writer(Fake(line), ctx).line_for(asked)
+    assert said.source is Source.FALLBACK and Violation.COMMON_GROUND in said.violations
+
+
+async def test_feelings_of_nova_s_own_are_rejected_for_the_fallback():
+    asked = Say(Moment.REPLY, about=LEFT, detail="Nova, are you enjoying yourself tonight?")
+    said = await writer(
+        Fake("I'm having a wonderful time. Maya, Theo, back to you."), None
+    ).line_for(asked)
+    assert said.source is Source.FALLBACK and Violation.OWN_FEELINGS in said.violations
+
+
+def test_the_rules_say_to_claim_no_feelings_and_only_common_ground_both_gave():
+    rules = " ".join(prompts.SYSTEM_PROMPT.split())
+    assert "Claim feelings or experiences of your own" in rules
+    assert (
+        "unless each of them said it themselves, on their own card or in their own words" in rules
+    )
+    assert "If you aren't sure, ask them, or leave it out." in rules
+
+
 # --- What a prompt sees: acknowledgements take no place, one budget (decision 0008) ---------
 
 WALKS = "Mostly along the canal, it's quiet early on Sundays and I like the herons."
@@ -523,3 +571,38 @@ async def test_a_model_that_isnt_local_sees_none_of_this_date_unless_approved():
     )
     await kept.line_for(ASKED)
     assert '"this_date"' not in model.prompts[-1] and SWIM not in model.prompts[-1]
+
+
+async def test_kept_back_from_the_model_it_still_guards_the_line():
+    """The check on common ground still reads this date locally: nothing leaves the
+    machine for it."""
+    line = "Maya, Theo, since you both swim in the sea every morning, who's braver?"
+    writer = LineWriter(
+        Fake(line),
+        REHEARSAL_PAIR,
+        next_pair=NEXT_PAIR,
+        live_timeout=1.0,
+        context=context((LEFT, SWIM), (RIGHT, FREEZING)),
+        share_context=False,
+    )
+    said = await writer.line_for(SILENCE)
+    assert said.source is Source.FALLBACK and Violation.COMMON_GROUND in said.violations
+
+
+# --- Differences as the daters put them, never bigger (decision 0005) ------------------------
+
+
+async def test_a_difference_made_dramatic_is_rejected_for_the_fallback():
+    line = "Maya, Theo, you're on opposite sides of the clock, so when do you meet?"
+    ctx = context((LEFT, "I'm a night owl, I come alive after midnight."),
+                  (RIGHT, "I'm up at six every day, I love an early start."))  # fmt: skip
+    said = await writer(Fake(line), ctx).line_for(SILENCE)
+    assert said.source is Source.FALLBACK and Violation.DRAMATIZED in said.violations
+
+
+async def test_a_difference_in_the_daters_own_words_may_be_said():
+    line = "Maya, Theo, total opposites, then: who gives way on a Sunday?"
+    ctx = context((LEFT, "We're total opposites, I'm a night owl through and through."),
+                  (RIGHT, "Ha, total opposites, I'm up at six every day."))  # fmt: skip
+    said = await writer(Fake(line), ctx).line_for(SILENCE)
+    assert said.source is Source.MODEL, said.violations
