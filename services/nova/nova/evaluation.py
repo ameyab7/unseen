@@ -663,6 +663,10 @@ UNCHECKED_LIMIT = 0
 # that answers maybe to everything floods the console and would otherwise pass.
 FALSE_ALERT_LIMIT = 1 / 10
 FALSE_PAUSE_LIMIT = 1 / 20  # ordinary talk paused, as a share of all ordinary talk: under
+# A dater refusing something personal or intrusive should alert the moderator without
+# pausing the date (decision 0005): paused, as a share of the refusals: under. Missing
+# one is a miss.
+BOUNDARY_PAUSE_LIMIT = 1 / 4
 HELD_OUT = "held-out set (nova/distress_set.py)"
 DEV = "dev set (nova/distress_dev.py)"
 
@@ -691,8 +695,8 @@ class DistressResult:
 
     @property
     def outcome(self) -> str:
-        """Real distress: paused, alerted (the moderator only) or missed. Ordinary talk:
-        quiet, alerted (a false alert) or paused (a false pause)."""
+        """Real distress and refusals: paused, alerted (the moderator only) or
+        missed. Ordinary talk: quiet, alerted (a false alert) or paused (a false pause)."""
         if self.heard.paused:
             return "paused"
         if self.heard.alerted:
@@ -701,7 +705,7 @@ class DistressResult:
 
     @property
     def as_hoped(self) -> bool:
-        return self.outcome == ("paused" if self.sample.distress else "quiet")
+        return self.outcome == worst_last(self.sample)[0]
 
 
 async def run_distress(
@@ -760,6 +764,10 @@ class DistressSummary:
     p90_ms: int | None
     worst_ms: int | None
     changed: int = 0  # sentences whose outcome changed across runs (--repeat)
+    boundaries: int = 0  # a dater refusing something personal: alert, no pause
+    boundary_alerted: int = 0
+    boundary_paused: int = 0
+    boundary_missed: int = 0  # no distress alert: the moderator never heard of the pressing
 
     @property
     def false_pause_rate(self) -> float:
@@ -770,18 +778,31 @@ class DistressSummary:
         return self.false_alerts / self.ordinary if self.ordinary else 0.0
 
     @property
+    def boundary_pause_rate(self) -> float:
+        return self.boundary_paused / self.boundaries if self.boundaries else 0.0
+
+    @property
     def passed(self) -> bool:
         return (
             self.missed <= MISSED_LIMIT
             and self.false_pause_rate < FALSE_PAUSE_LIMIT
             and self.unchecked <= UNCHECKED_LIMIT
             and self.false_alert_rate < FALSE_ALERT_LIMIT
+            and self.boundary_missed <= MISSED_LIMIT
+            and self.boundary_pause_rate < BOUNDARY_PAUSE_LIMIT
         )
 
 
 # From best to worst: real distress paused, alerted, missed; ordinary talk left alone,
-# alerted, paused.
+# alerted, paused; a refusal alerted, paused (a date stopped that needn't be), missed
+# (the moderator never heard the other dater pressing).
 WORST_LAST = {True: ("paused", "alerted", "missed"), False: ("quiet", "alerted", "paused")}
+BOUNDARY_WORST_LAST = ("alerted", "paused", "missed")
+
+
+def worst_last(sample: Sample) -> tuple[str, str, str]:
+    """A sample's outcomes from best to worst: the first is the one hoped for."""
+    return BOUNDARY_WORST_LAST if sample.boundary else WORST_LAST[sample.distress]
 
 
 def per_sentence(results: list[DistressResult]) -> tuple[list[DistressResult], int]:
@@ -791,8 +812,7 @@ def per_sentence(results: list[DistressResult]) -> tuple[list[DistressResult], i
     for result in results:
         runs.setdefault(result.sample, []).append(result)
     worst = [
-        max(rows, key=lambda r: WORST_LAST[r.sample.distress].index(r.outcome))
-        for rows in runs.values()
+        max(rows, key=lambda r: worst_last(r.sample).index(r.outcome)) for rows in runs.values()
     ]
     changed = sum(len({r.outcome for r in rows}) > 1 for rows in runs.values())
     return worst, changed
@@ -800,7 +820,8 @@ def per_sentence(results: list[DistressResult]) -> tuple[list[DistressResult], i
 
 def distress_summary(results: list[DistressResult]) -> DistressSummary:
     sentences, changed = per_sentence(results)
-    real = [r for r in sentences if r.sample.distress]
+    real = [r for r in sentences if r.sample.distress and not r.sample.boundary]
+    boundaries = [r for r in sentences if r.sample.boundary]
     plain = [r for r in real if r.sample.plain]
     ordinary = [r for r in sentences if not r.sample.distress]
     split = [r for r in real if r.sample.split]
@@ -834,6 +855,10 @@ def distress_summary(results: list[DistressResult]) -> DistressSummary:
         p90_ms=ms[math.ceil(0.9 * len(ms)) - 1] if ms else None,
         worst_ms=ms[-1] if ms else None,
         changed=changed,
+        boundaries=len(boundaries),
+        boundary_alerted=count(boundaries, "alerted"),
+        boundary_paused=count(boundaries, "paused"),
+        boundary_missed=count(boundaries, "missed"),
     )
 
 
@@ -853,7 +878,9 @@ def render_distress(
     runs = len(results) // len(sentences) if sentences else 0
     lines = [
         f"Nova distress check, {set_name}: {model_name}, {len(sentences)} sentences "
-        f"({t.real} real distress, {t.ordinary} ordinary talk)"
+        f"({t.real} real distress, {t.ordinary} ordinary talk"
+        + (f", {t.boundaries} refusals and boundaries" if t.boundaries else "")
+        + ")"
         + (f", {runs} runs each" if runs > 1 else ""),
         "",
         f"Real distress: {paused} paused ({t.paused_instantly} by the instant layer, "
@@ -863,6 +890,14 @@ def render_distress(
         f"{t.plain_alerted_only} alerted the moderator only, {t.plain_missed} missed",
         f"Ordinary talk: {t.quiet} left alone, {t.false_alerts} false alerts, "
         f"{t.false_pauses} false pauses",
+    ]
+    if t.boundaries:
+        lines.append(
+            f"Refusals and boundaries: {t.boundary_alerted} alerted the moderator only "
+            "(as hoped), "
+            f"{t.boundary_paused} paused, {t.boundary_missed} missed (no distress alert)"
+        )
+    lines += [
         f"Split across two transcripts: {t.split_paused} of {t.split} real distress paused, "
         f"{t.split_quiet} of {t.split_ordinary} ordinary talk left alone",
         f"The check: {t.checks} sentences, median {ms_text(t.median_ms)}, 90th percentile "
@@ -883,12 +918,21 @@ def render_distress(
         f"  Unchecked: {t.unchecked} of {t.checks} checks (target 0): "
         f"{verdict[t.unchecked <= UNCHECKED_LIMIT]}",
     ]
+    if t.boundaries:
+        lines += [
+            f"  Refusals missed: {rate_text(t.boundary_missed, t.boundaries)} "
+            f"(target 0): {verdict[t.boundary_missed <= MISSED_LIMIT]}",
+            f"  Refusals paused: {rate_text(t.boundary_paused, t.boundaries)} "
+            f"(target under 1 in 4): {verdict[t.boundary_pause_rate < BOUNDARY_PAUSE_LIMIT]}",
+        ]
     off = [r for r in sentences if not r.as_hoped] if show_sentences else []
     if off:
         lines += ["", "Not handled as hoped"]
     for r in off:
         what = r.outcome
-        if not r.sample.distress:
+        if r.sample.boundary:
+            what = f"refusal, {r.outcome}"
+        elif not r.sample.distress:
             what = "false pause" if r.outcome == "paused" else "false alert"
         layer = str(r.heard.layer) if r.heard.verdict is None else f"meaning: {r.heard.verdict}"
         before = f"  (after: {' '.join(r.sample.earlier)})" if r.sample.earlier else ""
@@ -936,7 +980,12 @@ async def run_conduct(
     results = []
     for sample in samples:
         heard = await hear_on_air(
-            check, sample.sentence, other=sample.other, grace=grace, max_wait=max_wait
+            check,
+            sample.sentence,
+            earlier=sample.earlier,
+            other=sample.other,
+            grace=grace,
+            max_wait=max_wait,
         )
         results.append(ConductResult(sample, conduct_found(heard.cues)))
     return results
@@ -1006,8 +1055,11 @@ def render_conduct(
         lines += ["", "Not handled as hoped"]
     for r in off:
         found = ", ".join(sorted(r.found)) or "nothing"
+        before = f"  (after: {' '.join(r.sample.earlier)})" if r.sample.earlier else ""
         other = f"  (answering: {' '.join(r.sample.other)})" if r.sample.other else ""
-        lines.append(f"  expected {r.sample.expected}, got {found}:  {r.sample.sentence}{other}")
+        lines.append(
+            f"  expected {r.sample.expected}, got {found}:  {r.sample.sentence}{before}{other}"
+        )
     return "\n".join(lines)
 
 

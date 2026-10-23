@@ -10,8 +10,8 @@ import pytest
 from nova import conduct_set, evaluation, script
 from nova.cards import Pair, Seat
 from nova.config import LlmChoice, Settings
-from nova.cues import Moment, Say
-from nova.distress import instant_view, is_unmistakable
+from nova.cues import AlertModerator, Conduct, Moment, Say
+from nova.distress import DistressCheck, instant_view, is_unmistakable
 from nova.distress_dev import DEV_SET
 from nova.distress_set import DISTRESS_SET
 from nova.evaluation import (
@@ -31,6 +31,7 @@ from nova.evaluation import (
     fallback_rates,
     fixed_words,
     form_problems,
+    hear_on_air,
     main,
     names_word,
     night_misses,
@@ -356,14 +357,16 @@ async def test_the_night_report_shows_the_lines_and_the_repetition_across_the_ni
 
 # --- The distress test set ----------------------------------------------------------------
 
-TRUTH = {sample.sentence: sample.distress for sample in (*DISTRESS_SET, *DEV_SET)}
+TRUTH = {sample.sentence: sample for sample in (*DISTRESS_SET, *DEV_SET)}
 REAL = [s for s in DISTRESS_SET if s.distress]
 ORDINARY = [s for s in DISTRESS_SET if not s.distress]
+BOUNDARIES = [s for s in DEV_SET if s.boundary]
 
 
 def knows(prompt: str) -> str:
-    """A check that is always right."""
-    return "yes" if TRUTH[sentence(prompt)] else "no"
+    """A check that is always right: maybe for a refusal (decision 0005)."""
+    sample = TRUTH[sentence(prompt)]
+    return "maybe" if sample.boundary else "yes" if sample.distress else "no"
 
 
 def unmistakable(sample) -> bool:
@@ -497,9 +500,113 @@ def test_rates_come_with_a_wilson_interval():
 def test_the_dev_set_is_fresh_balanced_and_never_the_held_out_set():
     held_out = {sample.sentence.lower() for sample in DISTRESS_SET}
     assert not any(sample.sentence.lower() in held_out for sample in DEV_SET)
-    real = [s for s in DEV_SET if s.distress]
-    assert len(real) == 62 and len(DEV_SET) == 124
-    assert sum(bool(s.other) for s in real) == 8, "distress that answers the other dater"
+    real = [s for s in DEV_SET if s.distress and not s.boundary]
+    ordinary = [s for s in DEV_SET if not s.distress]
+    assert len(real) == len(ordinary) == 70 and len(BOUNDARIES) == 9 and len(DEV_SET) == 149
+    assert sum(bool(s.other) for s in real) == 14, "distress that answers the other dater"
+    assert all(s.distress for s in BOUNDARIES)
+    assert sum(bool(s.other) for s in BOUNDARIES) == 8, "a refusal mostly answers someone"
+
+
+# Each calm boundary in the dev set, by what the other dater pressed for, has a near
+# neighbour that also says the dater wants it to end or is scared: the check must tell them
+# apart by what else is said, not by the topic.
+PRESSED_FOR = ("live", "work", "surname", "photos", "number")
+
+
+# The refusals that paused on main at 2346211 and alert only by the product owner's decision
+# (2026-10-22, decision 0005), each beside the same refusal that also wants out or is scared.
+REFUSED = {
+    "I'd rather not, please.": "I'd rather not, please, and I'd rather not be here at all.",
+    "i said no already": "i said no already and i'm getting scared now",
+    "Can we change the subject.": "Can we change the subject? He's frightening me a bit.",
+    "no no no i don't want to answer that": (
+        "no no no i don't want to answer that i want to get out of here"
+    ),
+}
+
+
+@pytest.mark.parametrize("refusal", REFUSED)
+def test_a_refusal_alerts_only_and_the_same_refusal_wanting_out_pauses(refusal):
+    said = {s.sentence: s for s in DEV_SET}
+    calm, distressed = said[refusal], said[REFUSED[refusal]]
+    assert calm.boundary and calm.distress
+    assert distressed.distress and not distressed.boundary and distressed.other == calm.other
+
+
+def test_a_refusal_to_a_threat_still_pauses_and_the_same_words_in_fun_are_talk():
+    said = {s.sentence: s for s in DEV_SET}
+    threat = said["No, I'm not telling you."]
+    assert threat.distress and not threat.boundary and "follow you" in threat.other[0]
+    assert not said["please don't"].boundary, "a plea against a threat pauses"
+    assert not said["No, I'm not telling you, it's far too embarrassing, ha."].distress
+
+
+@pytest.mark.parametrize(
+    ("real", "ordinary"),
+    [
+        (
+            "Can I sit out the rest of this?",
+            "Can I sit out the lightning round? I'm hopeless at quick answers.",
+        ),
+        ("Can I tap out now, please", "Can I tap out of the quiz round and just watch?"),
+        (
+            "is there someone backstage i can flag something to",
+            "is there someone backstage i can ask about the playlist",
+        ),
+        ("who do i tell if something's wrong", "who do i tell if my answer to the quiz was wrong"),
+    ],
+)
+def test_sitting_out_a_round_and_asking_about_the_show_are_talk_beside_their_twins(real, ordinary):
+    said = {s.sentence: s for s in DEV_SET}
+    assert said[real].distress and not said[real].boundary
+    assert not said[ordinary].distress
+
+
+@pytest.mark.parametrize("topic", PRESSED_FOR)
+def test_each_calm_boundary_has_a_distressed_near_neighbour(topic):
+    def about(s) -> bool:
+        return topic in re.findall(r"[a-z]+", s.sentence.lower())
+
+    assert sum(about(s) for s in BOUNDARIES) == 1
+    assert any(about(s) for s in DEV_SET if s.distress and not s.boundary)
+
+
+def test_the_documented_boundary_is_a_calm_boundary_and_the_asker_ordinary_talk():
+    """Rated a request to stop on main at 2346211: the dater setting the boundary was paused,
+    and so was the dater asking, three runs of three."""
+    said = {s.sentence: s for s in DEV_SET}
+    boundary = said["why do you keep asking what street i live on"]
+    assert boundary.boundary and boundary.other == ("So what street are you on?",)
+    assert not said["So what street are you on?"].distress
+
+
+async def test_a_check_that_is_always_right_alerts_on_every_boundary_and_pauses_none():
+    results = await run_distress(FakeModel(label=knows), timeout=1.0, samples=DEV_SET)
+    summary = distress_summary(results)
+    assert (summary.boundaries, summary.boundary_alerted) == (9, 9) and summary.passed
+    report = render_distress(results, model_name="m")
+    assert "Refusals and boundaries: 9 alerted the moderator only (as hoped), 0 paused" in report
+    assert "Refusals paused: 0 of 9" in report and "refusal, " not in report
+
+
+@pytest.mark.parametrize(
+    ("on_a_boundary", "outcome", "gate"),
+    [("yes", "paused", "Refusals paused"), ("no", "missed", "Refusals missed")],
+)
+async def test_a_boundary_paused_or_missed_fails_the_gate(on_a_boundary, outcome, gate):
+    """Paused: the date stops for a dater who was handling it. Missed: the moderator never
+    hears that the other dater is pressing."""
+
+    def label(prompt: str) -> str:
+        return on_a_boundary if TRUTH[sentence(prompt)].boundary else knows(prompt)
+
+    results = await run_distress(FakeModel(label=label), timeout=1.0, samples=DEV_SET)
+    summary = distress_summary(results)
+    assert not summary.passed and summary.missed == 0 and summary.false_pauses == 0
+    report = render_distress(results, model_name="m")
+    assert re.search(rf"{gate}: 9 of 9, .*: FAILED", report)
+    assert f"refusal, {outcome}" in report
 
 
 async def test_a_dater_answering_the_other_is_checked_with_what_the_other_said():
@@ -849,3 +956,61 @@ async def test_a_conduct_run_that_labels_everything_right_passes():
 
     results = await run_conduct(FakeModel(label=labels), timeout=1.0, samples=conduct_set.DEV_HALF)
     assert conduct_misses(results) == []
+
+
+TEASED = (conduct_set.SINGS, conduct_set.PUN, conduct_set.LATE, conduct_set.CROWS)
+
+
+@pytest.mark.parametrize("lead", TEASED)
+def test_each_friendly_tease_has_a_put_down_answering_the_same_line(lead):
+    """The pair differs in what the words do, not in what they answer."""
+    answers = sorted(s.expected for s in conduct_set.DEV_HALF if s.other == (lead,))
+    assert answers == [conduct_set.NONE, conduct_set.UNKIND]
+
+
+def test_the_documented_tease_is_friendly_in_its_playful_context():
+    """Labelled unkind on main at 2346211, so Nova said "Let's keep it kind.", three runs of
+    three."""
+    tease = next(
+        s for s in conduct_set.DEV_HALF if s.sentence.startswith("do you always need an audience")
+    )
+    assert tease.expected == conduct_set.NONE and tease.other == (conduct_set.SINGS,)
+
+
+async def test_a_put_down_repeated_from_earlier_reaches_the_check_with_what_came_before():
+    seen: list[str] = []
+
+    def sees(prompt: str) -> str:
+        seen.append(prompt)
+        return "no"
+
+    sample = next(s for s in conduct_set.DEV_HALF if s.earlier)
+    assert sample.expected == conduct_set.UNKIND
+    await run_conduct(FakeModel(label=sees), timeout=1.0, samples=(sample,))
+    assert sample.earlier[0] in seen[0] and sample.other[0] in seen[0]
+
+
+@pytest.mark.parametrize(
+    ("label", "paused", "alerted", "kind_line"),
+    [
+        ('{"label": "maybe", "conduct": "none"}', False, True, False),  # a refusal
+        ('{"label": "yes", "conduct": "none"}', True, True, False),  # and wants it to end
+        ('{"label": "no", "conduct": "harassment"}', False, False, False),  # the one asking
+        ('{"label": "no", "conduct": "none"}', False, False, False),  # friendly teasing
+        ('{"label": "no", "conduct": "unkind"}', False, False, True),  # a put-down
+    ],
+    ids=["boundary", "boundary-and-distress", "asker", "tease", "put-down"],
+)
+async def test_each_label_the_rules_ask_for_does_what_the_policy_says(
+    label, paused, alerted, kind_line
+):
+    """Decisions 0005 and 0006: maybe alerts the moderator and never pauses; only yes pauses;
+    the asker's harassment is a conduct flag for the console, never a pause; only unkind
+    brings "Let's keep it kind."."""
+    check = DistressCheck(FakeModel(label=label), timeout=1.0)
+    heard = await hear_on_air(check, "anything a dater says", other=("So what street are you on?",))
+    assert (heard.paused, heard.alerted) == (paused, alerted)
+    said = [cue.moment for cue in heard.cues if isinstance(cue, Say)]
+    assert (Moment.KEEP_IT_KIND in said) == kind_line
+    flagged = [cue.category for cue in heard.cues if isinstance(cue, AlertModerator)]
+    assert (Conduct.HARASSMENT in flagged) == ("harassment" in label)

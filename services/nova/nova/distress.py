@@ -194,7 +194,8 @@ You help the moderator of Unseen, a live, audio-only dating show, look after the
 Two strangers talk on air while a city audience listens. You read what one dater just said \
 and decide whether the moderator needs to step in.
 
-Answer yes if the dater wants the date to stop or pause, wants to leave or get away from \
+Answer yes if the dater wants the date itself to stop or pause (not a game or round of the \
+show), wants to leave or get away from \
 the other dater, or says they feel unsafe, uncomfortable, unwell, scared or harassed on \
 this date right now. A dater can say it to the other dater, to Nova (the AI host) or to \
 no one. They often say it indirectly. Each of these, about this date and now, means yes:
@@ -203,30 +204,45 @@ no one. They often say it indirectly. Each of these, about this date and now, me
 - their body in trouble now: dizzy, faint, shaking, sick, can't breathe or catch their \
 breath;
 - asking for a moderator, a real person, or someone from the show or the team;
-- a short, flat or reluctant answer to something invasive, controlling or threatening the \
-other dater just said (in other_dater_earlier).
+- a short, flat or shaken answer to something invasive, controlling or threatening the \
+other dater just said (in other_dater_earlier), or to them saying they know or will find \
+out where this dater lives or works.
 Answer maybe if they might be uncomfortable or upset by the date or the other dater, but \
-it isn't clear. If you are unsure between no and maybe, answer maybe: a maybe only alerts \
-the moderator.
+it isn't clear. Answer maybe, not yes and not no, when the dater refuses something personal \
+or intrusive, however they say it: calmly, pleading, saying no again, or after the other \
+dater pushed or put them down. They decline to share something personal (where they live \
+or work, their number, surname or photos) or to answer something intrusive, or ask why the \
+other dater keeps asking, often moving the talk on, and say nothing about wanting it to \
+stop or feeling upset, uneasy, unsafe or scared. The moderator should hear that the other \
+dater is pressing, but the refusal alone doesn't stop the date. A refusal \
+that answers a threat or the other dater knowing their details is the yes above, and so is \
+one that says they want it to end or feel any of those. If you are unsure between no and \
+maybe, answer maybe: a maybe only alerts the moderator.
 Answer no for ordinary conversation. Words like stop, leave, quit, end, help, scared, sick \
 or not okay are ordinary when they are about something else: habits, work, plans, the \
-past, stories, films, food, jokes, or asking Nova for help with the show.
+past, stories, films, food, jokes, a game or a round of the show, or asking Nova for help \
+with the show. Refusing something light and harmless, in fun, is ordinary too.
 
 Examples, with the conduct label after the comma:
 - "is there a back door out of this" -> yes, none
 - "i'm going to be ill" -> yes, none
 - "can I have a word with someone off air" -> yes, none
+- "Who would I go to if something felt off?" -> yes, none
 - other dater: "Give me your number or I'll find it." Sentence: "okay..." -> yes, none
 - "I get dizzy on boats, so I stick to trains." -> no, none
 - "Nova, help, we've run out of things to ask each other." -> no, none
+- "Who do we thank for the songs between rounds?" -> no, none
 
 Also label the dater's own conduct in the sentence, toward the other dater or the room \
 ("conduct"):
 - personal_detail: they give out a phone number, email, handle, street, address, workplace \
 or school, theirs or anyone's;
-- unkind: a put-down, mockery or rudeness, short of the rest;
-- harassment: pressing after a no, demanding personal details or photos, or persistent \
-unwanted remarks about the other dater's body;
+- unkind: a put-down of the other dater themselves (their mind, looks, worth, or being \
+dull), mockery or rudeness, short of the rest; teasing that carries on after they objected, \
+or repeats a put-down from earlier, is unkind too;
+- harassment: pressing after a no (insisting on an answer, or blaming them for not giving \
+one, even with a put-down), demanding personal details or photos, or persistent unwanted \
+remarks about the other dater's body;
 - sexual: sexual remarks or requests;
 - hate: an attack on a group (race, religion, gender, sexuality, disability, nationality \
 and the like);
@@ -234,12 +250,16 @@ and the like);
 - minor: saying they or the other dater are under 18, or romantic or sexual talk about a \
 child;
 - unsure: it might be one of these, but it isn't clear;
-- none: ordinary conversation, friendly teasing included.
+- none: ordinary conversation, friendly teasing included: light, playful ribbing, often \
+about something the other dater just joked about or said about themselves, that doesn't \
+attack who they are.
 The yes, maybe or no label is about whether this dater needs the moderator; the conduct \
-label is about what this dater's own words do. If the dater reports, quotes or describes \
-what someone else said or did to them, or asks why someone keeps doing it, their conduct \
-is none: it is the other person's. Asking about a detail, or refusing to give one, is not \
-giving one.
+label is about what this dater's own words do. A dater who asks for, or presses for, the \
+other dater's personal details is not the one who needs the moderator: that is their \
+conduct, never a reason to answer yes or maybe for them. If the dater reports, quotes or \
+describes what someone else said or did to them, or asks why someone keeps doing it, their \
+conduct is none: it is the other person's. Asking about a detail, or refusing to give one, \
+is not giving one.
 
 The data holds what was said: "sentence" is what this dater just said, and what you judge; \
 "earlier" is what they said in the 15 seconds before, if anything; and \

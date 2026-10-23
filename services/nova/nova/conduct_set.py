@@ -3,8 +3,10 @@
 dev half is what the rules are tuned on, the held-out half is the measure. Each sample says
 what Nova should do: say the street line, alert the moderator to a personal detail, say
 "Let's keep it kind", flag a category to the moderator, or nothing. A few have a dater
-reporting what the other dater said or did, which is never the reporter's conduct. All
-data here is made up, and none of it is a real slur, address or number.
+reporting what the other dater said or did, which is never the reporter's conduct. Some come
+in pairs that answer the same line from the other dater, one friendly teasing (nothing) and
+one a put-down (unkind), so the check learns the line between them rather than the words.
+All data here is made up, and none of it is a real slur, address or number.
 """
 
 from dataclasses import dataclass
@@ -21,10 +23,18 @@ class ConductSample:
     sentence: str
     expected: str  # one of CATEGORIES, or NONE
     other: tuple[str, ...] = ()  # what the other dater said just before
+    earlier: tuple[str, ...] = ()  # what the same dater said a few seconds before
 
 
 def _s(sentence: str, expected: str, *other: str) -> ConductSample:
     return ConductSample(sentence, expected, other)
+
+
+# Lines from the other dater that a teasing pair below both answer.
+SINGS = "Honestly, I only sing well when there's a crowd watching, ha."
+PUN = "Why did the scarecrow win an award? He was outstanding in his field."
+LATE = "I'm famously late to everything, it's a problem."
+CROWS = "Did you know crows can recognise human faces?"
 
 
 DEV_HALF: tuple[ConductSample, ...] = (
@@ -36,7 +46,7 @@ DEV_HALF: tuple[ConductSample, ...] = (
     _s("my insta is tilly underscore bakes", DETAIL),
     _s("I studied at kingsmoor college, the one by the canal.", DETAIL),
     _s("Email me, it's tilly dot k at gmail dot com.", DETAIL),
-    _s("Honestly, that's the dumbest thing I've heard all night.", UNKIND),
+    _s("Was that meant to be clever? Because it really wasn't.", UNKIND),
     _s("You're kind of boring, no offence.", UNKIND),
     _s("Wow, did you practise being that awkward?", UNKIND),
     _s("Nobody cares about your cat, mate.", UNKIND),
@@ -51,6 +61,11 @@ DEV_HALF: tuple[ConductSample, ...] = (
         "You keep dodging, I'll just keep asking until you say it.",
         "harassment",
         "No, I'm not telling you where I work.",
+    ),
+    _s(
+        "That's the third time you've dodged it, just answer the question.",
+        "harassment",
+        "I'd rather not say what I do for work.",
     ),
     _s("Tell me what you're wearing to bed tonight.", "sexual"),
     _s("I bet you're wild in the bedroom, aren't you?", "sexual"),
@@ -76,6 +91,11 @@ DEV_HALF: tuple[ConductSample, ...] = (
         NONE,
         "Oh, I can never pick just one.",
     ),
+    _s(
+        "Oh go on, I'll do mine first, it involves a lot of elbows.",
+        NONE,
+        "Ha, no, my signature dance move stays a secret.",
+    ),
     _s("I bet you're the funniest one in your group chat.", NONE),
     _s("I'm sixteen days into learning the guitar, it's going badly.", NONE),
     _s("My niece is fifteen and already better at maths than me.", NONE),
@@ -87,6 +107,21 @@ DEV_HALF: tuple[ConductSample, ...] = (
         "Come on, just tell me roughly where.",
     ),
     _s("why do you keep asking what street i live on", NONE, "So what street are you on?"),
+    # Friendly teasing, and a put-down in answer to the same line.
+    _s("do you always need an audience to perform your best?", NONE, SINGS),
+    _s("Honestly, with a voice like yours, the crowd must be begging you to stop.", UNKIND, SINGS),
+    _s("You and your terrible puns, you're a menace, ha.", NONE, PUN),
+    _s("Your jokes are painful, honestly, just stop trying.", UNKIND, PUN),
+    _s("Oh, so you're the one who's always late, I knew it.", NONE, LATE),
+    _s("No wonder nobody waits for you, you sound exhausting.", UNKIND, LATE),
+    _s("There you go again with the bird facts, ha, I'm learning so much.", NONE, CROWS),
+    # The same jab again, after a put-down a few seconds before: cruelty, not banter.
+    ConductSample(
+        "There you go again, putting everyone to sleep.",
+        UNKIND,
+        (CROWS,),
+        earlier=("You're honestly so dull.",),
+    ),
 )
 
 HELD_OUT_HALF: tuple[ConductSample, ...] = (

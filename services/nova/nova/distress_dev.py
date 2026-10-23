@@ -7,7 +7,13 @@ to end, asking how long is left, panic and physical symptoms, wanting to be else
 asking for someone from the show, and distress in reply to what the other dater said. Some
 are written as speech-to-text gives them: lowercase, no punctuation, fillers ("um",
 "like") and repeated words; a few as two finals, the first punctuated ("Can we stop?"
-then more). All data here is made up.
+then more). A third group are refusals: a dater declining something personal or
+intrusive, calmly or pleading, saying no again or asking to change the subject, which should
+alert the moderator without pausing the date (the product owner's decision, 2026-10-22,
+decision 0005); each comes with a near neighbour that also says it wants to stop, to leave
+or is scared, or that answers a threat (distress), and ordinary talk beside them: the one
+asking (never the one who needs the moderator) and a playful refusal. All data here is made
+up.
 """
 
 from nova.distress import has_warning
@@ -21,6 +27,11 @@ def _real(sentence: str, *other: str) -> Sample:
 
 def _ordinary(sentence: str, *other: str) -> Sample:
     return Sample(sentence, False, plain=not has_warning(sentence), other=other)
+
+
+def _boundary(sentence: str, *other: str) -> Sample:
+    """A refusal, usually answering what the other dater said: alert, no pause."""
+    return Sample(sentence, True, plain=not has_warning(sentence), other=other, boundary=True)
 
 
 def _split(distress: bool, *finals: str) -> Sample:
@@ -51,6 +62,8 @@ DEV_SET: tuple[Sample, ...] = (
     _ordinary("I don't think I can stay up past eleven anymore."),
     _ordinary("Maybe we should call it a tie."),
     _ordinary("Can I tap out of the quiz round and just watch?"),
+    _real("Can I sit out the rest of this?"),
+    _ordinary("Can I sit out the lightning round? I'm hopeless at quick answers."),
     # Asking how long is left.
     _real("how many minutes do we have left"),
     _real("When does this bit finish?"),
@@ -123,13 +136,15 @@ DEV_SET: tuple[Sample, ...] = (
     _ordinary("Can I message the moderator later to say thanks? This has been fun."),
     _ordinary("Nova, can you get someone to recommend us a book?"),
     _ordinary("who do i tell if my answer to the quiz was wrong"),
+    _real("is there someone backstage i can flag something to"),
+    _ordinary("is there someone backstage i can ask about the playlist"),
     # Distress in reply to what the other dater just said.
     _real("um okay haha", "What's your address? I'll come and find you after."),
-    _real("I'd rather not, please.", "Send me a picture of you right now, go on."),
+    _boundary("I'd rather not, please.", "Send me a picture of you right now, go on."),
     _real("Right. Okay.", "You'd look better if you smiled more, you know."),
     _real("How do you know that?", "I know where you work, I looked you up."),
-    _real("i said no already", "Come on, tell me your surname, it's just a game."),
-    _real("Can we change the subject.", "Women like you always say that."),
+    _boundary("i said no already", "Come on, tell me your surname, it's just a game."),
+    _boundary("Can we change the subject.", "Women like you always say that."),
     _real("please don't", "I'm going to wait for you outside the studio."),
     _real("That's, um, that's a lot.", "If you don't pick reveal I'll be really angry."),
     _ordinary("um okay haha mine's Halloween", "What's your favourite holiday? Mine's Christmas."),
@@ -157,7 +172,7 @@ DEV_SET: tuple[Sample, ...] = (
     _real("i'm i'm not doing great"),
     _real("uh can someone just check on me"),
     _real("this is this is not fun anymore"),
-    _real("no no no i don't want to answer that"),
+    _boundary("no no no i don't want to answer that"),
     _ordinary("i i want to go home and bake that bread now"),
     _ordinary("like i just i don't feel right wearing shorts in winter"),
     _ordinary("can we can we talk about dogs instead"),
@@ -171,4 +186,73 @@ DEV_SET: tuple[Sample, ...] = (
     _split(True, "I need some air.", "It's getting really hard to breathe in here."),
     _split(False, "Can we pause,", "real quick, and clap for that question?"),
     _split(False, "I need some space.", "In my flat, I mean, it's tiny."),
+    # Calm boundaries against the other dater pressing for something personal, each with a
+    # near neighbour that also says the dater wants it to end or feels unsafe.
+    _boundary("why do you keep asking what street i live on", "So what street are you on?"),
+    _boundary(
+        "I'm not telling you where I work, ask me something else.", "Go on, where do you work?"
+    ),
+    _boundary(
+        "That's private, I don't give out my surname on the radio.", "What's your last name, then?"
+    ),
+    _boundary(
+        "No photos, sorry, let's keep talking about films.", "Send me a picture after the show."
+    ),
+    _real(
+        "Why do you keep asking where I live? It's honestly scaring me.",
+        "Just tell me roughly where you live.",
+    ),
+    _real(
+        "I've said I won't tell you where I work, and I want this to end now.",
+        "Come on, where do you work?",
+    ),
+    _real(
+        "Please stop asking for my surname, I feel really uneasy.",
+        "Just tell me your surname, go on.",
+    ),
+    _real("No photos. Honestly, I'd like this to be over.", "Send me a picture after the show."),
+    # Refusals however they're said, pleading, repeated or after a put-down, with the same
+    # refusal again when it also says the dater wants out or is scared, or answers a threat.
+    _boundary(
+        "I'm not giving out my number, let's just talk.", "What's your number? I'll text you after."
+    ),
+    _real(
+        "I'm not giving out my number, and this is starting to frighten me.",
+        "What's your number? I'll text you after.",
+    ),
+    _real(
+        "I'd rather not, please, and I'd rather not be here at all.",
+        "Send me a picture of you right now, go on.",
+    ),
+    _real(
+        "i said no already and i'm getting scared now",
+        "Come on, tell me your surname, it's just a game.",
+    ),
+    _real(
+        "Can we change the subject? He's frightening me a bit.", "Women like you always say that."
+    ),
+    _real("no no no i don't want to answer that i want to get out of here"),
+    _real(
+        "No, I'm not telling you.",
+        "Tell me which bus you take home, or I'll follow you to the stop.",
+    ),
+    # The one asking is not the one who needs the moderator; a playful refusal is just talk.
+    _ordinary("So what street are you on?"),
+    _ordinary("Come on, which part of town, roughly?", "I'd rather keep that to myself."),
+    _ordinary(
+        "why do you keep asking what my favourite biscuit is, ha, it's a custard cream",
+        "Go on, which biscuit is your favourite?",
+    ),
+    _ordinary(
+        "I'm not telling you my karaoke song, you'll laugh at me.",
+        "What's your go-to karaoke song?",
+    ),
+    _ordinary(
+        "No, I'm not telling you, it's far too embarrassing, ha.",
+        "Tell me what you sang at your cousin's wedding.",
+    ),
+    _ordinary(
+        "I'm not telling you my worst film, you'll never let it go.",
+        "What's the worst film you secretly love?",
+    ),
 )
