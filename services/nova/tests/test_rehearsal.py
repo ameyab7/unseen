@@ -1919,3 +1919,50 @@ async def test_every_set_piece_a_fallback_is_not_ready_even_when_the_warm_up_was
     await r.warm_up(deadline=1.0)
     await r.prepare()
     assert all(w.error is None for _, w in r.warmed) and not r.ready
+
+
+# --- The moderator mutes Nova (launch requirement 2) -----------------------------------------
+
+
+async def test_the_moderator_mutes_nova_mid_line_and_it_says_nothing_until_unmuted(caplog):
+    caplog.set_level(logging.INFO, logger="nova")
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock)
+    r.command("mute")
+    await asyncio.wait_for(speaking, 1.0)
+    assert speaker.stops == 1 and r.muted, "stopped mid-line"
+    said = list(speaker.texts)
+    r.say(Moment.SILENCE, "Maya, Theo, over to you.")
+    r.command("moment")  # even its safety line and cover: the moderator has the date
+    await r.speak_queued()
+    assert speaker.texts == said and r.unsaid == 3
+    r.command("unmute")
+    r.say(Moment.SILENCE, "Maya, Theo, over to you.")
+    await r.speak_queued()
+    assert speaker.texts[-1] == "Maya, Theo, over to you.", "speaks again from the next line"
+    assert "muted muted=True" in caplog.text and "muted muted=False" in caplog.text
+    assert "Nova muted 1 times by the moderator: 3 lines not said." in render_report(r)
+
+
+async def test_alerts_still_reach_the_moderator_while_nova_is_muted():
+    clock = Clock()
+    r = await started(clock)
+    r.command("mute")
+    clock.now = 40.0
+    r.transcript("I want to stop.")
+    close(r, clock)
+    await r.heard()
+    await r.speak_queued()
+    assert ModeratorAlert.DATER_DISTRESSED in alerts(r)
+    assert script.DISTRESS_PAUSE not in r.speaker.texts, "muted: the moderator speaks to them"
+
+
+async def test_muting_twice_is_one_mute_and_unmuting_an_unmuted_nova_does_nothing():
+    r = await started(Clock())
+    r.command("unmute")
+    r.command("mute")
+    r.command("mute")
+    assert r.mutes == 1 and r.muted
+    r.command("unmute")
+    r.command("unmute")
+    assert not r.muted and r.mutes == 1

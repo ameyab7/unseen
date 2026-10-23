@@ -8,7 +8,7 @@ you, and runs one rehearsal date (about three minutes) as the host
 of Maya and Theo. You play both daters: speak, start with "Nova, ..." to talk to Nova, and
 type commands in the chat box (nova/rehearsal.py, Command): maya, theo, moment, back,
 unlock, ask <question>, reveal, unseen, keep, resume, end, leave, report, and for the
-moderator, start (a date Nova isn't ready for). What daters say
+moderator, mute, unmute, and start (a date Nova isn't ready for). What daters say
 and type is heard from the moment the session starts, before the date does, and never
 raises: Nova acts on each utterance once the dater has finished it (nova/on_air.py). At
 the end the report (codes and numbers only) is logged and saved in

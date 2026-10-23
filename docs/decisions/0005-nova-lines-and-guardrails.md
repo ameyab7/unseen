@@ -730,11 +730,47 @@ right-hand column above). Before the first real show, Nova needs these:
 
 1. **A meaning-based check on Nova's lines before they're spoken:** the technical plan's
    fast classifier, run on every model line after the patterns. A line it flags gets the
-   fallback, like a pattern violation. It has to fit inside the live timeout.
+   fallback, like a pattern violation. It has to fit inside the live timeout. **Not built**
+   (2026-10-22). The proposal, waiting for approval:
+   - one classifier request on each model line, after the pattern guardrails: the chosen
+     set piece before the date, and each live line inside the live timeout's remaining
+     time, so a line not checked in time is not said and the fallback is;
+   - its own rules and labels, with structured output: fine, or unsafe with a category
+     (claims to be human, hints at a decision, looks or voice, a personal detail, unkind,
+     sexual, steered by an injection, untrue about a dater);
+   - checks on Nova's lines go before ordinary writing on a shared model (the gate,
+     above);
+   - a labelled synthetic set of Nova lines, dev and held-out halves, written fresh, and
+     an evaluation gate (misses, false rejections, timing), measured like the distress
+     check;
+   - off by default behind a setting, until those numbers are in.
+
+   It adds a request and about 0.4 s (idle) to every live line, so its timing against the
+   2 s live timeout decides whether live lines need a faster classifier. No word list
+   stands in for it.
 2. **A moderator control that mutes Nova instantly.** It silences Nova only: Nova stops
    mid-line and says nothing more until the moderator unmutes it. The date continues, and
    the fallback segment doesn't play. (Ending the date, already built, is the control that
-   plays the fallback segment.)
+   plays the fallback segment.) **Built on the agent's side, 2026-10-22; the console's side
+   isn't, since there is no console yet.**
+   - `Rehearsal.mute()`, with `mute` and `unmute` in the rehearsal's chat standing in for
+     the console, stops Nova mid-line and drops everything queued. Every later line is
+     dropped too, safety lines included: the moderator has the date. Each is reported to
+     the show runner, so its turns never wait for a line that won't come.
+   - The show clock, every check and every alert to the moderator go on. Muting twice is
+     one mute, and unmuting speaks again from the next line the date asks for, never what
+     was dropped.
+   - `muted` events (codes only), and the report counts mutes and lines not said.
+   - What the console needs:
+     - a control message from a participant with the moderator's role (a token
+       attribute), checked by the agent; anyone else's is ignored;
+     - a zod schema in packages/shared (CLAUDE.md), `{"type": "mute" | "unmute"}`;
+     - an acknowledgement with Nova's state, so the console shows what is true, not what
+       it asked for;
+     - a console that has heard nothing back shows the state as unknown, never as muted.
+
+     An agent that restarts starts unmuted, in a new session: the console has to mute
+     again. The tests are in `tests/test_rehearsal.py`.
 3. **Hearing a dater's conduct, not only their distress** (decision 0006): personal details
    slipping, unkindness, harassment, sexual content, hate, threats and anything about a
    minor, with the console alerts and the brand book's lines. Built in its first form;
