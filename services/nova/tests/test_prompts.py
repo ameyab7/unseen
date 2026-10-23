@@ -182,7 +182,7 @@ def test_the_outro_is_one_sentence_with_no_question():
 @pytest.mark.parametrize("form", prompts.LIGHTNING_FORMS)
 def test_a_lightning_question_takes_a_format_and_never_opens_with_the_names(form):
     instructions, _ = split(prompts.lightning_question(REHEARSAL_PAIR, 1, total=3, form=form))
-    assert form in instructions and "Don't open with their names" in instructions
+    assert form in instructions and "Don't use their names" in instructions
 
 
 def test_the_lightning_formats_are_either_or_finish_the_sentence_and_one_word():
@@ -215,6 +215,100 @@ def test_daters_without_pronouns_are_named_never_given_a_guessed_pronoun():
     _, given = split(prompts.doors_intro(REHEARSAL_PAIR))
     pronouns = json.loads(given.split("</data>")[0])["left_seat"]["pronouns"]
     assert pronouns == "she/her", "as written when given"
+
+
+def flat(text: str) -> str:
+    return " ".join(text.split()).lower()
+
+
+def test_nova_asks_rather_than_remarks_but_may_react_briefly_first():
+    """The brand book's rule, kept: a short reaction to what was actually said may come
+    first, and the line still hands the floor back."""
+    system = flat(prompts.SYSTEM_PROMPT)
+    assert "ask rather than remark" in system
+    assert "when someone has just spoken to you" in system, "never a lead-in to a set piece"
+    assert "short reaction to what they actually said" in system
+    assert "hands the floor back" in system
+
+
+def test_nova_never_hints_at_how_the_date_is_going():
+    """The decision guardrail blocks hints ("I bet", "sparks"): playful silence prompts
+    after the voice change lost four lines a night to it."""
+    system = flat(prompts.SYSTEM_PROMPT)
+    assert "how well they're getting on" in system
+    for hint in ("bets", "guesses", "sparks", "chemistry"):
+        assert hint in system, hint
+
+
+def test_nova_is_told_to_be_specific_natural_and_calm():
+    system = flat(prompts.SYSTEM_PROMPT)
+    for intent in ("specific, never generic", "empty praise", "contractions", "vary how"):
+        assert intent in system, intent
+    assert "no exclamation marks" in system and "!" not in prompts.SYSTEM_PROMPT
+
+
+def test_nova_keeps_its_lines_brief_and_the_first_question_short():
+    """After the voice change, a night's first questions doubled to about 24 words and
+    Nova's airtime rose from about a fifth to 23%, against the brand book's "well under"."""
+    assert "well under a fifth of the airtime" in flat(prompts.SYSTEM_PROMPT)
+    assert "under 20 words" in flat(split(prompts.first_question(REHEARSAL_PAIR, Seat.LEFT))[0])
+
+
+def test_set_pieces_keep_their_shape_after_the_voice_change():
+    """A night after it: doors intros asked a dater a question, Next up asked the next pair
+    one before they were on, and lightning questions grew lead-ins."""
+    doors = flat(split(prompts.doors_intro(REHEARSAL_PAIR))[0])
+    assert "don't ask either of them anything yet" in doors and "under 40 words" in doors
+    next_up = flat(split(prompts.next_up(NEXT_PAIR, shape=prompts.NEXT_UP_SHAPES[0]))[0])
+    assert "aren't on air yet: don't ask them anything" in next_up
+    for form in prompts.LIGHTNING_FORMS:
+        lightning = flat(
+            split(prompts.lightning_question(REHEARSAL_PAIR, 1, total=3, form=form))[0]
+        )
+        assert "no lead-in" in lightning and "don't use their names" in lightning
+    assert "never two" in flat(split(prompts.outro(REHEARSAL_PAIR))[0]), "one sentence is the rule"
+
+
+def test_the_output_rules_ask_for_nothing_the_guardrails_would_block():
+    """A guardrail blocks any acronym ("DIY"), so the model is told not to write one rather
+    than losing the line to a fallback, as with slashes."""
+    assert "no acronyms" in prompts.SYSTEM_PROMPT
+
+
+def test_teasing_is_only_where_the_moment_invites_it_and_never_humiliates():
+    system = flat(prompts.SYSTEM_PROMPT)
+    for intent in ("humiliation is not", "only when the moment invites it", "invent a disagree"):
+        assert intent in system, intent
+    assert "let a joke go" in system
+
+
+def test_nova_never_invents_show_facts_in_any_task():
+    system = flat(prompts.SYSTEM_PROMPT)
+    assert "invent anything about the show" in system
+    for made_up in ("studio", "lights", "music", "a break", "what comes next"):
+        assert made_up in system, made_up
+    for facts in (PAUSE, DECIDING):
+        assert "invent a break" in flat(split(prompts.room_talk(facts, opening=OPENING))[0])
+
+
+def test_the_last_word_is_the_end_of_the_date_with_no_break_after_it():
+    """On main at 2346211 it was asked "before we take a break", and "before we move on"."""
+    instructions = flat(split(prompts.last_word(REHEARSAL_PAIR, Seat.RIGHT))[0])
+    assert "nearly over" in instructions and "last moment" in instructions
+    assert "don't mention a break or what comes next" in instructions
+    assert "decid" not in instructions, "it never mentions the decision"
+
+
+def test_the_first_question_is_built_on_the_daters_answer_and_asked_directly():
+    """It asked the card's prompt back ("what is it that you claim you can do?") or asked
+    leave first ("should we start with your first prompt?")."""
+    instructions, data = split(prompts.first_question(REHEARSAL_PAIR, Seat.LEFT))
+    asked = flat(instructions)
+    assert "the answer to the first prompt" in asked and "not the prompt itself" in asked
+    assert "don't ask permission first" in asked and "don't challenge or doubt" in asked
+    assert "add nothing that isn't on their card" in asked
+    assert "to them alone" in asked, "the turn is theirs: the runner waits for them only"
+    assert '"answer": "my worst haircut."' in data
 
 
 def test_emoji_curly_quotes_and_accents_in_the_data_are_left_alone():

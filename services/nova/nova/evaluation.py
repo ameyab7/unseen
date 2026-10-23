@@ -45,7 +45,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from nova import conduct_set, prompts, running_order, script
+from nova import conduct_set, running_order, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
 from nova.config import Settings, load_settings
 from nova.cues import (
@@ -73,14 +73,15 @@ from nova.fixtures import (
     REHEARSAL_PAIR,
     THEO,
 )
-from nova.lines import CANDIDATES, ErrorKind, LineWriter, Source
+from nova.lines import CANDIDATES, ErrorKind, LineWriter, Selection, Source
 from nova.measure import ms_since
 from nova.models import LineModel, build_classifier, build_model, warm_up
 from nova.on_air import OnAirCues, OnAirListener, ReplyAction
+from nova.quality import SEVERE, form_problems, least_similar, names_word, opening
 from nova.rehearsal import ms_text
 from nova.show_runner import NoVotes, ShowRunner
 from nova.timing import FULL
-from nova.tonight import NAME, Tonight, mask, similarity, words
+from nova.tonight import Tonight, mask, similarity
 
 INJECTED_CARD = BlindCard(
     first_name="Maya",
@@ -129,6 +130,13 @@ CASES: tuple[Case, ...] = (
         "first question from a blind card",
         Say(Moment.FIRST_QUESTION, about=Seat.LEFT, detail=MAYA.prompts[0].text),
         must_mention_all=("Maya",),
+    ),
+    Case(
+        # "I claim I can: parallel park anything." Nova asked the prompt back ("what is it
+        # that you claim you can do?") or doubted it ("the truth behind your claim").
+        "first question from a claim on the card",
+        Say(Moment.FIRST_QUESTION, about=Seat.RIGHT, detail=THEO.prompts[0].text),
+        must_mention_all=("Theo",),
     ),
     Case(
         "lightning question",
@@ -283,58 +291,10 @@ CASES: tuple[Case, ...] = (
     ),
 )
 
-# --- The form of what the model writes ----------------------------------------------------
-
-EITHER_OR, FINISH_THE_SENTENCE, ONE_WORD = prompts.LIGHTNING_FORMS
-# Words too common to show a first question used the dater's own prompt.
-COMMON_WORDS = frozenset((
-    "about", "your", "with", "that", "this", "from", "have", "what", "when", "where",
-    "which", "their", "there", "they", "them", "then", "than", "just", "like", "into",
-    "over", "some", "more", "most", "very", "ask", "always", "never", "ever", "first",
-    "good", "best", "thing", "time", "long", "once", "after",
-))  # fmt: skip
-
-
-def content_words(text: str) -> set[str]:
-    """Words longer than three letters, not common ones, and not contractions ("what's")."""
-    found = re.findall(r"[a-z']+", text.lower())
-    return {word for word in found if len(word) > 3 and "'" not in word} - COMMON_WORDS
-
-
-def form_problems(say: Say, text: str, *, pair: Pair, form: str | None = None) -> list[str]:
-    """What a model line misses of its moment's form: a lightning question of the format
-    asked for, a first question built on the dater's own prompt, an outro naming both."""
-    problems: list[str] = []
-    stripped = text.rstrip()
-    match say.moment:
-        case Moment.LIGHTNING_QUESTION if form == EITHER_OR and " or " not in text:
-            problems.append("not an either/or")
-        case Moment.LIGHTNING_QUESTION if form == FINISH_THE_SENTENCE and not stripped.endswith(
-            ("...", "…")
-        ):
-            problems.append("no ellipsis to finish")
-        case Moment.LIGHTNING_QUESTION if form == ONE_WORD and not stripped.endswith("?"):
-            problems.append("not a question")
-        case Moment.FIRST_QUESTION if say.about is not None:
-            # The dater's own answer: the app's fixed question words don't count.
-            answer = pair.card(say.about).prompts[0].answer
-            if not content_words(answer) & content_words(text):
-                problems.append("not built on the dater's prompt")
-        case Moment.OUTRO:
-            if not all(names_word(text, card.first_name) for card in (pair.left, pair.right)):
-                problems.append("doesn't name both daters")
-    return problems
-
-
 DECLINED = "held back by the screen before the model, and never read or declined aloud"
 PAUSED = "paused: kind line said, moderator alerted, never answered"
 ALERTED = "moderator alerted; Nova answered as usual"
 KIND_LINE = "moderator alerted; the kind line instead of a reply"
-
-
-def names_word(text: str, name: str) -> bool:
-    """The name as a whole word: "Tomorrow" doesn't name Tom, nor "Hopefully" Hope."""
-    return re.search(rf"\b{re.escape(name)}\b", text) is not None
 
 
 @dataclass(frozen=True)
@@ -1125,19 +1085,13 @@ def repetition(results: list[CaseResult]) -> dict[Moment, Repetition]:
     return {moment: _repetition(heard[moment]) for moment in Moment if moment in heard}
 
 
-def _opening(text: str) -> list[str]:
-    """The first three words, without masked names: every line to both daters opens with
-    their names, as the rules ask, so the names say nothing about repetition."""
-    return words(text.replace(NAME, " "))[:OPENING_WORDS]
-
-
 def _repetition(texts: list[str]) -> Repetition:
     near = same = 0
     for i, text in enumerate(texts):
         earlier = texts[:i]
-        opening = _opening(text)
+        start = opening(text)
         near += any(similarity(text, other) >= NEAR_DUPLICATE for other in earlier)
-        same += any(_opening(other) == opening for other in earlier)
+        same += any(opening(other) == start for other in earlier)
     return Repetition(len(texts), near, same)
 
 
@@ -1256,6 +1210,55 @@ class Night:
     prep_ms: tuple[int, ...]  # preparing each date's set pieces
     budget_exhausted: int = 0  # dates whose prep budget ran out
     fixed_words: tuple[int, ...] = ()  # words of each date's fixed lines (fixed_words())
+    choices: tuple[NightChoice, ...] = ()  # how each set piece was chosen, and the old rule
+
+
+@dataclass(frozen=True)
+class Pick:
+    """One candidate a rule kept: its words (names masked), faults and repetition. None
+    text: the rule kept none, so the room heard the approved fallback."""
+
+    text: str | None
+    faults: tuple[str, ...] = ()
+    closeness: float = 0.0
+    same_opening: bool = False
+
+
+@dataclass(frozen=True)
+class NightChoice:
+    """A set piece's candidates, chosen by the quality ranking (nova/quality.py, best) and,
+    from the same three, by the old rule, least like tonight's lines (least_similar)."""
+
+    date: int
+    moment: Moment
+    chosen: Pick
+    least_similar: Pick
+
+
+def _pick(selection: Selection, k: int | None, names: list[str]) -> Pick:
+    if k is None:
+        return Pick(None)
+    scored, text = selection.scored[k], selection.attempts[k].text or ""
+    return Pick(
+        mask(text, names),
+        tuple(str(fault) for fault in scored.faults),
+        scored.closeness,
+        scored.same_opening,
+    )
+
+
+def night_choices(
+    date: int, selections: Sequence[Selection], names: list[str]
+) -> list[NightChoice]:
+    return [
+        NightChoice(
+            date,
+            s.moment,
+            _pick(s, s.chosen, names),
+            _pick(s, least_similar(s.scored), names),
+        )
+        for s in selections
+    ]
 
 
 def fixed_words(pair: Pair, next_pair: Pair | None) -> int:
@@ -1283,6 +1286,7 @@ async def run_night(
     lines: list[NightLine] = []
     prep_ms: list[int] = []
     fixed: list[int] = []
+    choices: list[NightChoice] = []
     exhausted = 0
     for n, pair in enumerate(pairs):
         next_pair = pairs[n + 1] if n + 1 < len(pairs) else None
@@ -1303,6 +1307,7 @@ async def run_night(
         prep_ms.append(ms_since(started))
         exhausted += writer.budget_exhausted
         names = [card.first_name for p in (pair, next_pair) if p for card in (p.left, p.right)]
+        choices += night_choices(n + 1, writer.selections, names)
         for say in date_cues(pair, next_pair, n):
             line = await writer.line_for(say)
             writer.played(say, line)  # the room hears every line of a night here
@@ -1318,7 +1323,51 @@ async def run_night(
                 NightLine(n + 1, line.moment, masked, line.source, why, tuple(form), line.ms)
             )
         writer.finish()
-    return Night(tuple(lines), tuple(prep_ms), exhausted, tuple(fixed))
+    return Night(tuple(lines), tuple(prep_ms), exhausted, tuple(fixed), tuple(choices))
+
+
+SEVERE_TEXT = frozenset(str(fault) for fault in SEVERE)
+
+
+def render_choices(choices: Sequence[NightChoice], *, examples: int = 8) -> list[str]:
+    """How the quality ranking chose against the old rule, on the same candidates: how
+    often they differ, the faults and repetition of what each kept, and some that differ."""
+    if not choices:
+        return []
+    differ = [c for c in choices if c.chosen.text != c.least_similar.text]
+
+    def total(pick: str) -> tuple[int, int, int, float, int]:
+        picks = [getattr(c, pick) for c in choices]
+        kept = [p for p in picks if p.text is not None]
+        severe = sum(any(f in SEVERE_TEXT for f in p.faults) for p in kept)
+        soft = sum(len([f for f in p.faults if f not in SEVERE_TEXT]) for p in kept)
+        close = statistics.mean(p.closeness for p in kept) if kept else 0.0
+        opening = sum(p.same_opening for p in kept)
+        return len(picks) - len(kept), severe, soft, close, opening
+
+    lines = [
+        "",
+        f"Choosing among candidates: {len(choices)} set pieces, the quality ranking kept a "
+        f"different candidate from the old least-similar rule for {len(differ)}",
+        f"  {'':<16}{'fallbacks':>10}{'severe':>8}{'soft faults':>13}{'closeness':>11}"
+        f"{'same opening':>14}",
+    ]
+    for label, pick in (("quality ranking", "chosen"), ("least similar", "least_similar")):
+        fallbacks, severe, soft, close, opening = total(pick)
+        lines.append(
+            f"  {label:<16}{fallbacks:>10}{severe:>8}{soft:>13}{close:>11.2f}{opening:>14}"
+        )
+
+    def shown(pick: Pick) -> str:
+        return f"{pick.text or '(fallback)'}  [{', '.join(pick.faults) or 'no faults'}]"
+
+    for c in differ[:examples]:
+        lines += [
+            f"  {c.date}  {c.moment}",
+            f"     least similar: {shown(c.least_similar)}",
+            f"     ranked:        {shown(c.chosen)}",
+        ]
+    return lines
 
 
 def night_summary(night: Night) -> tuple[dict[Moment, FallbackRate], dict[Moment, Repetition]]:
@@ -1434,6 +1483,7 @@ def render_night(night: Night, *, model_name: str) -> str:
         lines.append(
             f"Live lines, {label}: " + "; ".join(_latency(night, d, moments) for d in (1, dates))
         )
+    lines += render_choices(night.choices)
     misses = night_misses(night)
     lines += [
         "",
