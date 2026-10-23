@@ -315,6 +315,12 @@ class Rehearsal:
         self.warm_up_ms: int | None = None
         self.warmed: list[tuple[str, Warmed]] = []  # each model warmed up: what for, and how
         self.yields: list[Yield] = []  # each line Nova stopped for a dater, numbers only
+        # Every line that played, in order, words and all: in memory for the date benchmark
+        # (nova/benchmark.py), never logged or written anywhere.
+        self.lines: list[Line] = []
+        # Lines Nova started while a dater was speaking (not replies, which answer them, nor
+        # safety lines, which never wait): the benchmark's talk-over count.
+        self.talked_over = 0
         self._yield_hold = yield_hold
         # When the dater speaking now began, as the voice detector heard: None while quiet.
         self._speech_since: float | None = None
@@ -392,7 +398,13 @@ class Rehearsal:
         )
         return warmed
 
-    async def prepare(self) -> None:
+    async def prepare(self, *, like: Rehearsal | None = None) -> None:
+        """like: another rehearsal of the same pair whose set pieces to use, unwritten (the
+        date benchmark's two versions of a run, nova/benchmark.py)."""
+        if like is not None:
+            self._writer.prepare_from(like._writer)
+            self.prep_ms = like.prep_ms
+            return
         started = self._clock()
         await self._writer.prepare()
         self.prep_ms = ms(self._clock() - started)
@@ -826,6 +838,9 @@ class Rehearsal:
                 return
             if waited is not None:  # measured from when the dater finished, as the runner does
                 cue_at = picked = max(cue_at, waited)
+            waits = item.kind is Kind.LIVE or waits_for_speech(item.say)
+            if item.kind is not Kind.REPLY and waits and not self._quiet.is_set():
+                self.talked_over += 1
             try:
                 first: float | None = None  # when the line's first audio played
                 text, again = line.text, False
@@ -854,6 +869,7 @@ class Rehearsal:
             if started is not None:  # only what played is billed, counted and remembered
                 self.characters_spoken += len(line.text)
                 self._writer.played(item.say, line)
+                self.lines.append(line)
             spoken = Spoken(
                 moment=line.moment,
                 kind=item.kind,

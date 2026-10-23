@@ -69,6 +69,14 @@ class OllamaModel:
     async def write(self, *, system: str, prompt: str) -> str:
         return await self._complete(system, prompt, max_tokens=self.MAX_TOKENS, temperature=0.8)
 
+    async def sample(self, *, system: str, prompt: str, temperature: float, seed: int) -> str:
+        """Words at the caller's temperature and seed: the date benchmark's actors, each
+        dater sampled its own way, the same on every run (nova/benchmark.py). One call, as
+        write() is; Nova's own lines always use write()."""
+        return await self._complete(
+            system, prompt, max_tokens=self.MAX_TOKENS, temperature=temperature, seed=seed
+        )
+
     async def label(
         self, *, system: str, prompt: str, schema: Mapping[str, object] | None = None
     ) -> str:
