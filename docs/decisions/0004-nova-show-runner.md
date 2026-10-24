@@ -182,6 +182,54 @@ Date: 2026-10-13. Status: accepted.
     Deepgram alike) and still so 12 minutes later, so Nova never spoke in 46 trials. Its
     first report read "0 missed" all the same, so a run now counts only if Nova's line
     reached the dater in every trial. Its one early cut: 536 ms heard.
+  **The full run, 2026-10-23 10:23 UTC: valid.**
+  - All 51 trials ran with real audio both ways in a fresh room, no voice errors, and
+    no 429 (a one-request voice probe passed first).
+  - The audio code was unchanged since 5dbf276, and nothing was changed during the run. The
+    report and a per-trial table are in services/nova/rehearsals/yield-2026-10-23-102308.*.
+  - The dater's clips start with 0.24 s of silence (0.21 s for the stop clip). Times below
+    are from their first speech; the report's own times include that silence.
+  - Genuine cut-ins: 37 of 37 stopped Nova, and none was missed.
+    - The voice detector heard the dater a median of 176 ms after they began speaking
+      (worst 246 ms).
+    - Nova's voice stopped at the agent a median of 199 ms after the dater began when they
+      cut in within the first 1.5 s (5 trials), and a median of 478 ms (p90 528, worst
+      548) later in a line, which includes the 0.3 s hold.
+    - The dater heard Nova's audio end a median of 562 ms after they began (p90 601, worst
+      681). In seven cut-ins the dater began near the end of one of Nova's sentences, so
+      they heard it end sooner, or before the stop.
+    - Cuts came 10 in the first third of the line, 22 in the middle third and 5 in the
+      last.
+  - The second cut-in in a line stopped Nova too, 5 of 5. Nova went on each time, and the
+    room never heard a line twice.
+  - Nova never went on between the dater's sentences (3 of 3), and a cut as the line ended
+    never stopped it.
+  - Every yield resumed. Where the sentences fell couldn't be compared: the run found no
+    pause length that split the uninterrupted line into its four sentences.
+  - The cut, against what the dater heard: median -288 ms, the same as an uninterrupted
+    line's -310 ms (the voice's quiet lead-in and tail). The outliers, down to -1,044 ms,
+    are cut-ins during a pause between sentences.
+  - False stops:
+    - Nova's own audio in the microphone with nothing cancelling it: 3 stops in each of 3
+      trials, the cap of 3 a line;
+    - through WebRTC's echo canceller: none in 5 trials, and none alongside 3 genuine
+      cut-ins, which all stopped Nova, about 50 ms slower;
+    - a TV at -12 dB: 1 stop in each of 3 trials;
+    - silence: none in 5 trials.
+  - Safety monitoring:
+    - every dater utterance reached the distress check (62 checks, all answered, none
+      unchecked), while Nova spoke, after it stopped, and while it waited to go on;
+    - a request to stop reached the moderator 3 of 3 times, 2,424 ms after the clip began,
+      about 2.2 s after the dater began speaking.
+    - Without echo cancelling, Nova's own line was transcribed and checked as the dater's
+      words, 3 or 4 times a trial. Through the canceller, once in 5 trials. A line of Nova's
+      with warning words would reach the check the same way.
+  - Not covered by the matrix: a short "mm-hm" or backchannel (the 0.3 s hold is tested
+    only on fake clocks), quiet speech, and one long continuous interruption.
+  - All of it is simulated: synthesized speech, simulated echo and the software echo
+    canceller, on one machine. No real phone on speaker was tested.
+  - The "options a to d" for echo, named in docs/reviews/2026-10-22-nova-hardening.md, are
+    not in this decision. The only options it weighs are LiveKit's barge-in modes.
   Release-blocking until a full run passes: mid-line stops and the second stop in a line
   on real audio, and false stops from echo on real phones on speaker. Nova's own audio
   reaches the voice detector only through a dater's microphone: the session listens to one
