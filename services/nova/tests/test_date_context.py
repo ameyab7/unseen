@@ -28,6 +28,7 @@ from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
 from nova.guardrails import Violation
 from nova.lines import Line, LineWriter, Source
 from nova.on_air import MAX_UTTERANCE, OnAirListener
+from nova.privacy import PrivacyPolicy
 from nova.show_runner import NoVotes, ShowRunner
 from nova.timing import FULL
 from nova.tonight import Tonight
@@ -44,6 +45,7 @@ class Fake:
     keeps every prompt it was given."""
 
     name = "fake/model"
+    endpoint = "http://localhost:11434"  # on this machine: it may see this date
 
     def __init__(self, line: str = "Maya, Theo, over to you.", label: str = "no") -> None:
         self.line, self.answer = line, label
@@ -556,21 +558,28 @@ def test_a_rehearsal_makes_one_context_for_its_date_shared_by_listener_and_write
     assert len(made) == 1
 
 
-# --- A model that isn't local sees none of it unless approved (decision 0005) ---------------
+# --- A model that isn't local sees none of it unless approved (decision 0010) ---------------
 
 
-async def test_a_model_that_isnt_local_sees_none_of_this_date_unless_approved():
-    model = Fake("Maya, ask Theo what the sea feels like in winter.")
+class Hosted(Fake):
+    """A model at a provider: not an approved-local endpoint (nova/privacy.py)."""
+
+    endpoint = "https://models.example.com"
+
+
+@pytest.mark.parametrize(("approved", "shown"), [(False, False), (True, True)])
+async def test_a_model_that_isnt_local_sees_none_of_this_date_unless_approved(approved, shown):
+    model = Hosted("Maya, ask Theo what the sea feels like in winter.")
     kept = LineWriter(
         model,
         REHEARSAL_PAIR,
         next_pair=NEXT_PAIR,
         live_timeout=1.0,
         context=context((RIGHT, SWIM)),
-        share_context=False,
+        privacy=PrivacyPolicy(dialogue_to_provider=approved),
     )
     await kept.line_for(ASKED)
-    assert '"this_date"' not in model.prompts[-1] and SWIM not in model.prompts[-1]
+    assert ('"this_date"' in model.prompts[-1]) is shown and (SWIM in model.prompts[-1]) is shown
 
 
 async def test_kept_back_from_the_model_it_still_guards_the_line():
@@ -578,12 +587,11 @@ async def test_kept_back_from_the_model_it_still_guards_the_line():
     machine for it."""
     line = "Maya, Theo, since you both swim in the sea every morning, who's braver?"
     writer = LineWriter(
-        Fake(line),
+        Hosted(line),
         REHEARSAL_PAIR,
         next_pair=NEXT_PAIR,
         live_timeout=1.0,
         context=context((LEFT, SWIM), (RIGHT, FREEZING)),
-        share_context=False,
     )
     said = await writer.line_for(SILENCE)
     assert said.source is Source.FALLBACK and Violation.COMMON_GROUND in said.violations

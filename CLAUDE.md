@@ -6,7 +6,8 @@ Photos unlock only if both daters choose reveal.
 
 Expo app in apps/mobile, moderator console in apps/console, Supabase backend in
 supabase/, AI host agent in services/nova (Python). Built so far: the pnpm monorepo,
-the design tokens (packages/tokens), the Expo app's shell (three placeholder tabs and
+the design tokens (packages/tokens), the shared message schemas (packages/shared: so far
+the moderator's mute), the Expo app's shell (three placeholder tabs and
 routing), and Nova: its show runner, lines and guardrails, distress and conduct checks,
 a measured rehearsal in LiveKit's Agents Playground and an evaluation against the real
 model (services/nova/CLAUDE.md). Not built yet: the moderator console, Supabase, and
@@ -43,9 +44,9 @@ components and say so in the pull request.
 - services/nova (Python 3.14, uv): uv sync; uv run pytest; uv run ruff check;
   uv run ruff format. Settings come from services/nova/.env (see .env.example)
 - services/nova: uv run python -m nova.evaluation [--repeat N] runs Nova's show moments,
-  attacks, the distress dev set and the conduct dev half against the real model in
-  NOVA_LLM, and exits non-zero if any gate fails; --distress and --conduct run one set
-  alone; --held-out runs the held-out sets, once, as the measure (counts only);
+  attacks, the distress dev set, the conduct dev half and the meaning check's dev half
+  against the real model in NOVA_LLM, and exits non-zero if any gate fails; --distress,
+  --conduct and --meaning run one set alone; --held-out runs the held-out sets, once, as the measure (counts only);
   --independent runs the independent held-out set someone other than the developer wrote
   (services/nova/independent/README.md; never open its file); --safety is the frozen
   safety report (dev, held-out and independent sets, each across --fresh N model reloads,
@@ -57,7 +58,9 @@ components and say so in the pull request.
 - services/nova: uv run python -m nova.agent dev runs Nova in LiveKit for one measured
   rehearsal date in the Agents Playground; uv run python -m nova.voices writes voice
   samples; uv run python -m nova.yield_live runs the yield rehearsal, a scripted dater
-  cutting Nova off in a real LiveKit room (decision 0004). All use LiveKit credit
+  cutting Nova off in a real LiveKit room (decision 0004); uv run python -m
+  nova.mute_live runs the mute rehearsal, a moderator muting Nova through the console's
+  control path in a real LiveKit room (decision 0005). All use LiveKit credit
   (docs/spike-results.md)
 
 Install app packages from apps/mobile with
@@ -120,6 +123,10 @@ the root scripts call pnpm themselves and fail when it is not on PATH.
 - No code, test or script calls production.
 - Keys live only in untracked .env files, next to the .env.example that names them.
   Never put a secret in an EXPO_PUBLIC_ variable: those are built into the app.
+- docs/privacy/nova-data-flows.md lists every flow of daters' data and who receives it;
+  docs/privacy/dater-notice-draft.md is the dater notice, DRAFT / NOT SHIPPED. A change
+  that sends data somewhere new updates both, and decision 0010, in the same change. Never
+  state a provider's retention or training terms that a contract or their terms don't.
 
 ## Workflow
 - For changes touching more than 3 files, propose a plan and wait for approval.

@@ -61,6 +61,7 @@ class OllamaModel:
         self, model: str, *, base_url: str = "http://localhost:11434", client: Any = None
     ) -> None:
         self.name = f"ollama/{model}"
+        self.endpoint = base_url  # where requests go: local or not (nova/privacy.py)
         self._model = model
         self._client = client or AsyncOpenAI(
             base_url=f"{base_url.rstrip('/')}/v1", api_key="ollama", max_retries=0

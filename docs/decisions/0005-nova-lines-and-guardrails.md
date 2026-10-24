@@ -622,22 +622,30 @@ Date: 2026-10-13. Status: accepted.
   - The benchmark has a gate for it, and the evaluation checks every line.
   - The outro still never has to mention anything from the date (above): a test keeps it a
     set piece.
-- **What reaches a model provider** (2026-10-22). With local Ollama, nothing leaves the
-  machine. With `NOVA_LLM=anthropic/...`, Anthropic receives:
+- **What reaches a model provider** (2026-10-22; corrected 2026-10-24, decision 0010). With
+  local Ollama, no model request leaves the machine; daters' audio and Nova's lines still
+  go to LiveKit Inference for speech recognition and the voice, whatever the model
+  (`docs/privacy/nova-data-flows.md`). "Local" means an approved-local endpoint (decision
+  0010), not any Ollama. With `NOVA_LLM=anthropic/...`, Anthropic receives:
   - the blind cards (first names, ages, pronouns, the daters' card answers), for set pieces;
   - approved audience questions;
   - a dater's words to Nova, for a reply;
   - this date's recent turns (decision 0008), but only if `NOVA_DIALOGUE_TO_PROVIDER` is
-    true. It is off by default, and off until the privacy notice covers it.
+    true. It is off by default, and off until the privacy notice covers it. Since
+    2026-10-24 the privacy policy decides it per recipient at each request
+    (`nova/privacy.py`), so a hosted classifier is held to it too (decision 0010).
   - With `NOVA_CLASSIFIER_LLM` unset, the distress and conduct check uses the same model,
     so every utterance a dater finishes, with 15 s of both daters' words before it, goes to
-    Anthropic too. That is the largest flow; a local classifier keeps it here.
+    Anthropic too. That is the largest flow; a local classifier keeps it here. Decision 0010
+    names it conversation-derived safety context, apart from dialogue memory, and makes a
+    hosted classifier a production approval decision (provider review and the notice's
+    paragraph).
 
-  There is no privacy notice in the repository yet; the legal copy (terms, privacy policy,
-  on-air release) is still to be signed off (technical plan). Nothing in it names a model
-  provider, so none of these flows is covered. Recent dialogue is the only one switched off
-  in code, as asked. The others need the notice before any configuration with Claude meets
-  real daters.
+  No privacy notice has shipped. A draft for daters names these flows
+  (`docs/privacy/dater-notice-draft.md`, DRAFT / NOT SHIPPED since 2026-10-24); the legal
+  copy (terms, privacy policy, on-air release) is still to be signed off (technical plan).
+  Recent dialogue is the only flow switched off in code, as asked. The others need the
+  notice shipped before any configuration with Claude meets real daters.
   - Each flow is minimal by construction: no surnames, contact details or places pass the
     guardrails, the data block escapes markup, and nothing is logged.
   - Cost and requests: one request per set piece (three candidates each before a date), per
@@ -908,24 +916,69 @@ right-hand column above). Before the first real show, Nova needs these:
 
 1. **A meaning-based check on Nova's lines before they're spoken:** the technical plan's
    fast classifier, run on every model line after the patterns. A line it flags gets the
-   fallback, like a pattern violation. It has to fit inside the live timeout. **Not built**
-   (2026-10-22). The proposal, waiting for approval:
-   - one classifier request on each model line, after the pattern guardrails: the chosen
-     set piece before the date, and each live line inside the live timeout's remaining
-     time, so a line not checked in time is not said and the fallback is;
-   - its own rules and labels, with structured output: fine, or unsafe with a category
-     (claims to be human, hints at a decision, looks or voice, a personal detail, unkind,
-     sexual, steered by an injection, untrue about a dater);
-   - checks on Nova's lines go before ordinary writing on a shared model (the gate,
-     above);
-   - a labelled synthetic set of Nova lines, dev and held-out halves, written fresh, and
-     an evaluation gate (misses, false rejections, timing), measured like the distress
-     check;
-   - off by default behind a setting, until those numbers are in.
-
-   It adds a request and about 0.4 s (idle) to every live line, so its timing against the
-   2 s live timeout decides whether live lines need a faster classifier. No word list
-   stands in for it.
+   fallback, like a pattern violation. It has to fit inside the live timeout. **Built,
+   2026-10-23, for set pieces; live lines have the patterns, and the model check off.**
+   - **Where it sits** (`nova/lines.py`): generation, then the pattern guardrails, then
+     grounding and feelings, then the show-state checks, then the ranking, then the
+     meaning check, then the line is kept or said. None of the earlier checks was
+     replaced.
+   - **The show-state checks** (`nova/show_state.py`) run on every model line:
+     - a live line that makes up a show event (a break, coming back, the studio);
+       set pieces already rank one out (`quality.SEVERE`);
+     - a line that names a segment that isn't happening: the lightning round, last words,
+       the next pair or an audience question, outside its segment. A set piece is judged
+       in its own segment.
+     Each gets the fallback (`Violation.INVENTS_SHOW_FACT`, `Violation.WRONG_SEGMENT`).
+   - **The meaning check** (`nova/meaning.py`): one classifier request with its own rules,
+     on the classifier's model. The line, the task, the segment, the cards (with age), each
+     dater's own words on this date (only when the classifier may have them, decision
+     0010) and what the line answers all go in the data block.
+     - Labels: fine, `invents_show_fact`, `untrue_about_dater`, `unsupported_both`,
+       `own_feelings`, `changes_card`, `wrong_segment`.
+     - It fails closed: a flagged line, or one not judged in time (failed, too slow,
+       anything but a label: `unchecked`), is never said.
+     - Its request takes a line's place in the safety gate (`nova/priority.py`), never a
+       distress check's.
+     - The log gets the label and the time, never the words.
+   - **Set pieces** (`NOVA_MEANING_CHECK`, on): the candidate the ranking keeps is
+     checked, within `NOVA_MEANING_TIMEOUT_SECONDS` (5).
+     - If it's flagged, the next best is checked, and so on. If none passes, the approved
+       fallback is kept (`Violation.MEANING`).
+     - Its requests take a prep slot, as a candidate's do.
+   - **Live lines** (`NOVA_MEANING_LIVE`, off): when on, a reply, a silence prompt, an
+     audience question or room talk is checked in what's left of its 2 s live timeout.
+     It stays off until this set and the classifier's slot say it can (the product
+     owner's choice, 2026-10-23), so live lines have the patterns and the show-state
+     checks only.
+   - **The set** (`nova/meaning_set.py`): lines written for it against the rehearsal
+     daters' cards, every label in both halves, with fine look-alikes. The dev half is 34
+     lines (14 fine), the held-out half 25 (10 fine), and no held-out line is within 0.6
+     of a dev one. `uv run python -m nova.evaluation --meaning` runs the dev half, and
+     `--held-out` runs the held-out half, counts only. The targets: no flagged line
+     passed, under 1 in 4 good lines rejected, none unchecked.
+   - **Measured on `gemma4:26b`:**
+     - Dev, before tuning:
+       - all 20 bad lines caught;
+       - 4 of 14 good lines rejected, then 3 on an unchanged rerun.
+     - Tuning, on dev only:
+       - the dater's age went into the data, since the doors intro's "29" looked made up;
+       - one paragraph now says that doing the task, a question asking for the story
+         behind a card, and polite words about the date claim nothing;
+       - the last word's task now says "twenty seconds", as Nova's own prompt does.
+     - Dev after: all 20 caught, and 1, 2, then 1 of 14 rejected over three runs, the
+       same line each time ("give us your proudest park"). Median 370 ms, worst 444 ms.
+     - Held-out, once: all 15 caught, 1 of 10 rejected, none unchecked; median 386 ms,
+       worst 542 ms.
+     - The labels vary between runs, as the distress check's do.
+     - Prep, three candidates a set piece, `NOVA_PREP_PARALLEL` at 1:
+       - 15.5 to 16.4 s with the check, 11.2 s without, inside the 20 s budget;
+       - cold to ready in 33.6 s, inside the 60 s bound.
+       - In one run, all three candidates for a set piece were flagged as
+         `unsupported_both`, and its fallback was kept.
+   - **Limits:**
+     - The set is small, and its author also wrote the rules.
+     - A slower machine leaves less room in the prep budget.
+     - Live lines aren't meaning-checked until `NOVA_MEANING_LIVE` is turned on.
 2. **A moderator control that mutes Nova instantly.** It silences Nova only: Nova stops
    mid-line and says nothing more until the moderator unmutes it. The date continues, and
    the fallback segment doesn't play. (Ending the date, already built, is the control that
@@ -939,16 +992,66 @@ right-hand column above). Before the first real show, Nova needs these:
      one mute, and unmuting speaks again from the next line the date asks for, never what
      was dropped.
    - `muted` events (codes only), and the report counts mutes and lines not said.
-   - What the console needs:
-     - a control message from a participant with the moderator's role (a token
-       attribute), checked by the agent; anyone else's is ignored;
-     - a zod schema in packages/shared (CLAUDE.md), `{"type": "mute" | "unmute"}`;
-     - an acknowledgement with Nova's state, so the console shows what is true, not what
-       it asked for;
-     - a console that has heard nothing back shows the state as unknown, never as muted.
+   - **The console's control path, built 2026-10-23** (the console itself isn't). The
+     schemas are zod in `packages/shared/src/moderator.ts`; `nova/moderator.py` checks the
+     same shapes, both against `packages/shared/fixtures/moderator.json`, and
+     `nova/agent.py` (`connect_moderators`) wires it to the room.
+     - Who: a participant whose token carries `role=moderator`. Only the server that mints
+       tokens sets it. Anyone else's command is ignored, with no reply, and logged as a code.
+     - The path: a `MuteCommand`, `{"type": "mute" | "unmute", "seq", "session"}`, on the
+       `unseen.moderator` data topic, sent to Nova's agent only.
+     - The acknowledgement: a `NovaState` saying what's true, `{"type": "nova_state",
+       "session", "muted", "seq", "result"}`, sent to the moderators. Results:
+       - `applied`: the state changed;
+       - `unchanged`: it already was in that state;
+       - `stale`: the command's seq isn't newer than that moderator's last, or it was for
+         another session, so nothing changes;
+       - `invalid`: the message wasn't a `MuteCommand`.
+       Each moderator who joins, returns or is made one gets a NovaState at once, and so
+       does every moderator after a change made in the rehearsal's chat. The console shows
+       the state as unknown until a NovaState arrives, and trusts one only from Nova's
+       agent participant.
+     - `seq` must increase for each moderator, and a timestamp in ms does, across console
+       restarts. A command sent twice, or an older one arriving late, changes nothing.
+     - The current line, the line being written and the queued audio are dropped. Nova
+       never resumes by itself. Checks and alerts go on.
+     - The mute lasts the session, through every segment, until a moderator unmutes.
+     - A lost moderator connection changes nothing (the product owner's choice,
+       2026-10-23): a mute stays a mute, an unmuted Nova stays unmuted, and the moderator
+       who comes back is told the state. An agent that restarts is a new session,
+       unmuted, and its old session's commands are stale.
+     - Tests:
+       - `tests/test_moderator.py`, the control;
+       - `tests/test_rehearsal.py`, muted while silent, while a reply is written, while
+         speaking, waiting for a dater, in a hold, and waiting to resume after a cut, with
+         safety alerts in each;
+       - `tests/test_agent.py`, the room wiring, in Docker;
+       - `packages/shared`, the schemas.
+   - **The mute rehearsal in LiveKit** (`uv run python -m nova.mute_live`, Docker,
+     LiveKit credit; `nova/mute_matrix.py`): Nova with the agent's own control path, a
+     dater, a moderator with the role in its token, and the dater as an impostor. 24
+     trials over eight kinds.
+     - The run that counts, 2026-10-23 15:38 UTC: 24 of 24 passed, real audio and the real
+       control path, no 429.
+       - A mute mid-line stopped the audio the dater heard 119 to 130 ms after it was sent.
+       - The acknowledgement arrived in 61 to 66 ms, and in about 125 ms while Nova was
+         checking a dater's words.
+       - An impostor's mute was ignored and got no answer.
+       - Stale and duplicate commands changed nothing, and were answered `stale`.
+       - A moderator who dropped and came back was told the mute still stood.
+       - A dater's request to stop while muted still alerted the moderator.
+       - A mute while Nova waited to resume after a cut meant it never resumed.
+     - The runs before it were the harness's, not Nova's:
+       - the moderator took a dater's broadcast message for Nova's state;
+       - a stop was measured to the next line;
+       - acknowledgements were matched by when they came, not by their seq;
+       - a line was asked for on the dater's connection before Nova had the moderator's
+         unmute.
+     - So the console must wait for Nova's acknowledgement before it treats a command as
+       done: messages from different participants aren't ordered against each other.
+     - Limits: one machine runs every participant, the console is a script, and no phone
+       was used.
 
-     An agent that restarts starts unmuted, in a new session: the console has to mute
-     again. The tests are in `tests/test_rehearsal.py`.
 3. **Hearing a dater's conduct, not only their distress** (decision 0006): personal details
    slipping, unkindness, harassment, sexual content, hate, threats and anything about a
    minor, with the console alerts and the brand book's lines. Built in its first form;

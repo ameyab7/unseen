@@ -11,7 +11,9 @@ the listener delay (proposed), 0008 this date's context for live replies and sil
 tonight's memory: one date, only what the checks cleared, never logged), 0009 the date
 benchmark (whether a change makes a date better: `uv run python -m nova.benchmark`, on
 demand with local Ollama, never in CI; its hard gates fail the run, its indicators hint,
-and only people's blind ratings say whether it helped: `uv run python -m nova.ratings`).
+and only people's blind ratings say whether it helped: `uv run python -m nova.ratings`),
+0010 privacy at the request boundary (who may receive what: nova/privacy.py; every flow:
+nova/data_flows.py, `uv run python -m nova.data_flows`, and docs/privacy/).
 Iterate on the benchmark's development set; its comparison set is the scorecard, never
 tuned against. Read the one a change touches first, and update it in the same change. Lines
 waiting for the product owner are in docs/sign-off/ and nova/sign_off.py.
@@ -24,11 +26,17 @@ waiting for the product owner are in docs/sign-off/ and nova/sign_off.py.
   nova/script.py.
 - No text in logs: nova/events.py accepts codes, numbers and flags only. Never log what a
   dater, listener or Nova said.
+- Every model request goes through the privacy policy (nova/privacy.py, decision 0010): a
+  model a Rehearsal or LineWriter guarded, never a bare one where real daters are heard.
+  This date's turns reach a model only at an approved-local endpoint (loopback, or
+  NOVA_APPROVED_LOCAL_HOSTS) or with NOVA_DIALOGUE_TO_PROVIDER. Only the evaluation and
+  the benchmark, on made-up daters, use `PrivacyPolicy.for_synthetic_data()`.
 - Before any model change (a prompt, the model, the guardrails it's measured against), run
   `uv run python -m nova.evaluation` against local Gemma, before and after, and put both
   summaries in the pull request. It covers the cases and the distress and conduct dev sets,
   each a gate (missed distress, false pauses, false alerts, unchecked checks, conduct
-  recall). `--night` is the number we track and a gate. Tune on dev only; `--held-out`
+  recall, and the meaning check on Nova's lines, `--meaning`). `--night` is the number we
+  track and a gate. Tune on dev only; `--held-out`
   runs the held-out sets once a change is settled, and prints counts, never sentences
   (the first held-out set was consulted on 2026-10-23, decision 0005). `--independent`
   runs the independent held-out set, written by someone other than the developer: never
@@ -55,6 +63,13 @@ waiting for the product owner are in docs/sign-off/ and nova/sign_off.py.
   in Docker only, and costs LiveKit credit: `docker compose -f services/nova/compose.yaml run
   --rm --build nova uv run python -m nova.yield_live`. Its report (numbers only) lands in
   services/nova/rehearsals/yield-*.txt.
+- The mute rehearsal (decision 0005, launch requirement 2) runs Nova with the agent's own
+  moderator control, a dater, a moderator and an impostor in a real LiveKit room, in Docker
+  only, at LiveKit credit: `docker compose -f services/nova/compose.yaml run --rm --build nova
+  uv run python -m nova.mute_live`. Its report lands in services/nova/rehearsals/mute-*.txt.
+- The moderator's messages are zod schemas in packages/shared (src/moderator.ts);
+  nova/moderator.py checks the same shapes, and both are tested on
+  packages/shared/fixtures/moderator.json. Change them together.
 - The evaluation and rehearsals need services/nova/.env (see .env.example). Open
   .env.example by its exact path: Claude Code's Glob and Grep can't see it under the Read
   deny rules for .env files. A rehearsal and voice samples cost LiveKit credit; the

@@ -2,6 +2,7 @@
 connection: the real thing runs in the Agents Playground (docs/spike-results.md)."""
 
 import asyncio
+import json
 import logging
 from dataclasses import replace
 from types import SimpleNamespace
@@ -11,7 +12,9 @@ from livekit.agents.voice import io as voice_io
 
 from nova import agent
 from nova.agent import RedactPii, SessionSpeaker, new_session, time_played_words, voice_parts
-from nova.config import LlmChoice, Settings
+from nova.config import ConfigError, LlmChoice, Settings
+from nova.moderator import ModeratorControl
+from nova.privacy import PrivacyPolicy
 
 SETTINGS = Settings(
     livekit_url="wss://example.invalid",
@@ -248,6 +251,21 @@ class FakeRehearsal:
         await self.listening.wait()  # a dater may speak while set pieces are prepared
 
     opens = True  # what the moderator chose, if Nova wasn't ready
+    muted = False
+
+    def mute(self) -> None:
+        self.muted = True
+
+    def unmute(self) -> None:
+        self.muted = False
+
+    def command(self, text: str):
+        from nova.rehearsal import Command
+
+        if text not in ("mute", "unmute"):
+            return None
+        self.mute() if text == "mute" else self.unmute()
+        return Command(text)
 
     async def hold_until_ready(self) -> bool:
         self.order.append("hold")
@@ -258,8 +276,30 @@ class FakeRehearsal:
         self.listening_at_the_start = self.listening.is_set() and not self.stopped_listening
 
 
+class FakeRoom:
+    """The parts of rtc.Room the moderator's control path uses."""
+
+    def __init__(self, *participants) -> None:
+        self.name = "rehearsal"
+        self.handlers: dict[str, list] = {}
+        self.remote_participants = {p.identity: p for p in participants}
+        self.sent: list[tuple[dict, list[str], str]] = []
+        self.local_participant = SimpleNamespace(publish_data=self._publish)
+
+    def on(self, event: str, handler) -> None:
+        self.handlers.setdefault(event, []).append(handler)
+
+    def emit(self, event: str, *args) -> None:
+        for handler in self.handlers.get(event, []):
+            handler(*args)
+
+    async def _publish(self, payload, *, reliable, destination_identities, topic) -> None:
+        assert reliable, "a mute must not be lost"
+        self.sent.append((json.loads(payload), list(destination_identities), topic))
+
+
 class FakeContext:
-    room = SimpleNamespace(name="rehearsal")
+    room = FakeRoom()
 
     async def wait_for_participant(self) -> None:
         pass
@@ -353,12 +393,12 @@ def test_redaction_is_added_once_however_often_the_agent_starts():
         logging.getLogger().removeHandler(handler)
 
 
-async def test_a_session_makes_one_rehearsal_and_keeps_its_turns_from_an_unapproved_provider(
+async def test_a_session_makes_one_rehearsal_with_the_privacy_policy_its_settings_give(
     monkeypatch, tmp_path
 ):
-    """One Rehearsal a session, so one DateContext a date (decision 0008). With Claude and no
-    NOVA_DIALOGUE_TO_PROVIDER, a real date's recent turns never go into its prompts (decision
-    0005); with local Ollama they do."""
+    """One Rehearsal a session, so one DateContext a date (decision 0008), and every request
+    it sends goes through the policy from the settings (decision 0010): who may receive a
+    real date's recent turns is decided per model, at each request (tests/test_privacy.py)."""
     made: list[FakeRehearsal] = []
     real = FakeRehearsal.__init__
 
@@ -368,14 +408,33 @@ async def test_a_session_makes_one_rehearsal_and_keeps_its_turns_from_an_unappro
 
     monkeypatch.setattr(FakeRehearsal, "__init__", counted)
     await rehearse(monkeypatch, tmp_path)
-    assert len(made) == 1 and made[0].options["share_context"] is True
-    claude = replace(SETTINGS, llm=LlmChoice("anthropic", "claude-haiku-5-5"))
+    assert len(made) == 1 and made[0].options["privacy"] == PrivacyPolicy()
+    approved = replace(
+        SETTINGS,
+        llm=LlmChoice("anthropic", "claude-haiku-5-5"),
+        dialogue_to_provider=True,
+        approved_local_hosts=frozenset({"gpu.lan"}),
+    )
     monkeypatch.setattr(agent, "build_classifier", lambda settings: SimpleNamespace(name="fake"))
     session = StartedSession(Clock())
-    monkeypatch.setattr(agent, "load_settings", lambda: claude)
+    monkeypatch.setattr(agent, "load_settings", lambda: approved)
     monkeypatch.setattr(agent, "new_session", lambda settings: session)
     await agent.rehearse(FakeContext())
-    assert len(made) == 2 and made[1].options["share_context"] is False
+    assert len(made) == 2 and made[1].options["privacy"] == PrivacyPolicy(
+        dialogue_to_provider=True, approved_hosts=frozenset({"gpu.lan"})
+    )
+
+
+async def test_a_session_never_starts_with_logs_that_would_write_prompts(monkeypatch, tmp_path):
+    """The agent hears real people: diagnostics meant for synthetic runs are refused before
+    the session starts, as is any SDK logger at DEBUG (nova/privacy.py)."""
+    diagnostics = replace(SETTINGS, synthetic_diagnostics=True)
+    session = StartedSession(Clock())
+    monkeypatch.setattr(agent, "load_settings", lambda: diagnostics)
+    monkeypatch.setattr(agent, "new_session", lambda settings: session)
+    with pytest.raises(ConfigError, match="never the agent"):
+        await agent.rehearse(FakeContext())
+    assert getattr(session, "started", None) is None, "no session was started"
 
 
 async def test_a_date_nova_isnt_ready_for_never_opens_unless_the_moderator_says(
@@ -388,3 +447,87 @@ async def test_a_date_nova_isnt_ready_for_never_opens_unless_the_moderator_says(
     rehearsal = FakeRehearsal.last
     assert rehearsal is not None and rehearsal.order == ["warm_up", "prepare", "hold"]
     assert list(tmp_path.glob("*.txt")), "the report is written all the same"
+
+
+# --- The moderator's mute from the console (launch requirement 2) ---------------------------------
+
+MODERATOR = SimpleNamespace(identity="mod-1", attributes={"role": "moderator"})
+DATER_PARTICIPANT = SimpleNamespace(identity="dater-1", attributes={"role": "dater"})
+
+
+def mute_packet(
+    who, kind: str = "mute", seq: int = 1, session: str = "s1", topic: str = "unseen.moderator"
+):
+    payload = json.dumps({"type": kind, "seq": seq, "session": session}).encode()
+    return SimpleNamespace(topic=topic, participant=who, data=payload)
+
+
+async def test_a_moderators_mute_reaches_nova_and_every_moderator_hears_the_state():
+    target = FakeRehearsal()
+    room = FakeRoom(MODERATOR, DATER_PARTICIPANT)
+    agent.connect_moderators(room, ModeratorControl(target, session="s1"))
+    await asyncio.sleep(0)
+    assert room.sent == [
+        (
+            {"type": "nova_state", "session": "s1", "muted": False, "seq": 0, "result": "state"},
+            ["mod-1"],
+            "unseen.moderator",
+        ),
+    ], "a moderator already in the room is told at once; the dater never is"
+    room.emit("data_received", mute_packet(MODERATOR))
+    await asyncio.sleep(0)
+    assert (
+        target.muted and room.sent[-1][0]["result"] == "applied" and room.sent[-1][1] == ["mod-1"]
+    )
+
+
+async def test_a_daters_mute_message_is_ignored_and_answered_with_nothing():
+    target = FakeRehearsal()
+    room = FakeRoom(MODERATOR, DATER_PARTICIPANT)
+    agent.connect_moderators(room, ModeratorControl(target, session="s1"))
+    await asyncio.sleep(0)
+    before = len(room.sent)
+    room.emit("data_received", mute_packet(DATER_PARTICIPANT))
+    room.emit("data_received", mute_packet(MODERATOR, topic="lk.chat"))
+    room.emit(
+        "data_received", SimpleNamespace(topic="unseen.moderator", participant=None, data=b"{}")
+    )
+    await asyncio.sleep(0)
+    assert not target.muted and len(room.sent) == before
+
+
+async def test_a_moderator_who_comes_back_is_told_the_mute_still_stands():
+    target = FakeRehearsal()
+    room = FakeRoom(MODERATOR)
+    agent.connect_moderators(room, ModeratorControl(target, session="s1"))
+    room.emit("data_received", mute_packet(MODERATOR))
+    del room.remote_participants["mod-1"]  # the console's connection drops
+    room.emit("participant_connected", MODERATOR)  # and comes back
+    await asyncio.sleep(0)
+    assert target.muted and room.sent[-1][0] == {
+        "type": "nova_state",
+        "session": "s1",
+        "muted": True,
+        "seq": 0,
+        "result": "state",
+    }
+
+
+async def test_someone_made_a_moderator_mid_session_is_told_the_state():
+    room = FakeRoom()
+    agent.connect_moderators(room, ModeratorControl(FakeRehearsal(), session="s1"))
+    room.emit("participant_attributes_changed", {"role": "moderator"}, MODERATOR)
+    await asyncio.sleep(0)
+    assert room.sent[-1][1] == ["mod-1"]
+
+
+async def test_the_agent_tells_the_consoles_when_the_chat_mutes_nova(monkeypatch, tmp_path):
+    room = FakeRoom(MODERATOR)
+    monkeypatch.setattr(FakeContext, "room", room)
+    session = await rehearse(monkeypatch, tmp_path)
+    await asyncio.sleep(0)
+    assert len(room.sent) == 1, "the moderator in the room heard the state when the session began"
+    on_chat = session.started["room_options"].text_input.text_input_cb
+    on_chat(session, SimpleNamespace(text="mute"))
+    await asyncio.sleep(0)
+    assert room.sent[-1][0]["muted"] is True and room.sent[-1][0]["result"] == "state"
