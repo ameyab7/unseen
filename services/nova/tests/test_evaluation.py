@@ -1213,6 +1213,9 @@ def test_the_independent_run_prints_counts_and_its_fingerprint_never_a_sentence(
     code = main(["--independent", independent_file(tmp_path, "zebra marmalade quandary")])
     out = capsys.readouterr().out
     assert code == 1, "the pause sample was missed: the gate fails"
-    assert "independent held-out set (distress.json, sha256 " in out and "Missed distress" in out
+    assert "Independent set (2 sentences), distress.json, sha256 " in out
+    assert "distress missed" in out and "Gate on the worst outcomes: FAILED" in out
     assert "zebra" not in out and "Not handled as hoped" not in out
-    assert model.labelled == ["zebra marmalade quandary", "zebra pancake"]
+    assert "Development set" not in out, "--independent runs that set alone"
+    # Three passes by default; this fake isn't on Ollama, so they are separate requests.
+    assert sorted(model.labelled) == ["zebra marmalade quandary"] * 3 + ["zebra pancake"] * 3

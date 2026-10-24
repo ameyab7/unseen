@@ -1107,7 +1107,10 @@ def render_distress(
         "(failed or too slow, so the moderator was alerted)",
     ]
     if runs > 1:
-        lines.append(f"{t.changed} of {len(sentences)} sentences changed outcome across runs")
+        lines.append(
+            f"{t.changed} of {len(sentences)} sentences changed outcome across runs in one model "
+            "session (fresh reloads: --safety)"
+        )
     lines += [
         "",
         "Targets",
@@ -1746,47 +1749,93 @@ def render_night(night: Night, *, model_name: str) -> str:
     return "\n".join(lines)
 
 
-def independent(path: Path, classifier: LineModel, settings: Settings, *, repeat: int) -> int:
-    """The independent held-out set (nova/independent_set.py): never written by the
-    developer, never tuned against, and reported as counts only. It isn't run if a sample
-    paraphrases anything the check was built or tuned on; that report names positions in
-    the file, never words, so its author can rewrite them."""
+def usable_independent(path: Path) -> tuple[tuple[Sample, ...] | None, str]:
+    """The independent set's samples, or None and why it can't be run: missing, unreadable,
+    or a sample paraphrasing anything the check was built or tuned on. Every reason names
+    positions in the file, never words, so its author can rewrite them."""
     if not path.exists():
-        print(
+        return None, (
             f"No independent set at {path}. Someone other than the developer writes it "
             "(decision 0005): services/nova/independent/README.md says how."
         )
-        return 2
     try:
         samples = independent_set.load(path)
     except independent_set.IndependentSetError as error:
-        print(f"The independent set can't be used: {error}")
-        return 2
+        return None, f"The independent set can't be used: {error}"
     close = independent_set.separation(samples)
     if close:
         listed = ", ".join(f"{c.position} ({c.score:.2f})" for c in close)
-        print(
+        return None, (
             f"Not run: {len(close)} of {len(samples)} samples paraphrase what the check was "
             f"built or tuned on (similarity {independent_set.NEAR} or more), so they would "
             f"measure nothing. Samples by position, with their scores: {listed}."
         )
-        return 1
+    return samples, ""
 
-    async def evaluate() -> list[DistressResult]:
+
+def safety(
+    classifier: LineModel,
+    settings: Settings,
+    *,
+    passes: int,
+    independent_path: Path,
+    only_independent: bool = False,
+) -> int:
+    """The frozen safety evaluation (nova/safety_report.py): the dev and held-out sets, and
+    the independent set when it exists and is usable, each across fresh model reloads,
+    reported as counts, with positions only for the protected sets. only_independent: the
+    independent set alone (--independent), which exits 2 if it can't be run."""
+    from nova import safety_report  # it builds on this module
+
+    samples, why = usable_independent(independent_path)
+    if only_independent and samples is None:
+        print(why)
+        return 2 if "Not run" not in why else 1
+
+    async def warm() -> None:
         await warm_up(classifier, deadline=settings.warm_up)  # else every 2 s check times out
-        return await run_distress(
-            classifier,
-            timeout=settings.distress_timeout,
-            grace=settings.utterance_grace,
-            max_wait=settings.utterance_max_wait,
-            repeat=repeat,
-            samples=samples,
-        )
 
-    results = asyncio.run(evaluate())
-    name = f"independent held-out set ({path.name}, sha256 {independent_set.fingerprint(path)})"
-    print(render_distress(results, model_name=classifier.name, set_name=name, show_sentences=False))
-    return 0 if distress_summary(results).passed else 1
+    reload = safety_report.ollama_reload(classifier, settings.ollama_base_url, warm)
+    common = {
+        "passes": passes,
+        "reload": reload,
+        "timeout": settings.distress_timeout,
+        "grace": settings.utterance_grace,
+        "max_wait": settings.utterance_max_wait,
+    }
+    sets: list[tuple[str, bool, tuple[Sample, ...], Sequence[conduct_set.ConductSample]]] = []
+    if not only_independent:
+        sets += [
+            ("dev", False, DEV_SET, conduct_set.DEV_HALF),
+            ("held-out", True, DISTRESS_SET, conduct_set.HELD_OUT_HALF),
+        ]
+    if samples is not None:
+        sets.append(("independent", True, samples, ()))
+
+    async def evaluate() -> dict[str, safety_report.SetRun | None]:
+        if reload is None:
+            await warm()
+        runs: dict[str, safety_report.SetRun | None] = {}
+        for name, protected, distress, conduct in sets:
+            runs[name] = await safety_report.run_set(
+                classifier,
+                name=name,
+                protected=protected,
+                samples=distress,
+                conduct=conduct,
+                **common,
+            )
+        if samples is None:
+            runs["independent"] = None
+        return runs
+
+    runs = asyncio.run(evaluate())
+    notes = {"independent": why} if samples is None else {}
+    if samples is not None:
+        fingerprint = independent_set.fingerprint(independent_path)
+        notes["independent"] = f", {independent_path.name}, sha256 {fingerprint}"
+    print(safety_report.render(runs, model_name=classifier.name, notes=notes))
+    return 0 if all(safety_report.passed(r) for r in runs.values() if r is not None) else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1810,6 +1859,18 @@ def main(argv: list[str] | None = None) -> int:
         metavar="PATH",
         help="run the independent held-out set someone else wrote (decision 0005): counts only",
     )
+    mode.add_argument(
+        "--safety",
+        action="store_true",
+        help="the frozen safety report: dev, held-out and independent sets across fresh reloads",
+    )
+    parser.add_argument(
+        "--fresh",
+        type=int,
+        default=3,
+        metavar="N",
+        help="--safety and --independent: passes per set, each after a model reload (default 3)",
+    )
     args = parser.parse_args(argv)
 
     settings = load_settings()
@@ -1831,8 +1892,12 @@ def main(argv: list[str] | None = None) -> int:
         print(render_night(tonight, model_name=model.name))
         return 1 if night_misses(tonight) else 0
 
-    if args.independent is not None:
-        return independent(Path(args.independent), classifier, settings, repeat=args.repeat)
+    if args.independent is not None or args.safety:
+        path = Path(args.independent or independent_set.DEFAULT_PATH)
+        only = args.independent is not None
+        return safety(
+            classifier, settings, passes=args.fresh, independent_path=path, only_independent=only
+        )
 
     held_out = args.held_out
     cases = not (args.distress or args.conduct or held_out)

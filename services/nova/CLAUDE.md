@@ -33,6 +33,10 @@ waiting for the product owner are in docs/sign-off/ and nova/sign_off.py.
   (the first held-out set was consulted on 2026-10-23, decision 0005). `--independent`
   runs the independent held-out set, written by someone other than the developer: never
   open services/nova/independent/distress.json, and never tune against its counts.
+- The safety check is frozen (decision 0005, 2026-10-23; tests/test_safety_freeze.py pins
+  it). Its numbers come from `--safety`: every set across fresh model reloads (`--fresh N`,
+  default 3), each sentence counted at its worst. `--repeat` repeats within one model
+  session, which overstates stability: never report it as the safety result.
   Run it with nothing else busy: part of Gemma runs on the CPU, and a test run alongside
   times the 2 s checks out.
 - Nothing here calls production, and the tests never call LiveKit, Ollama or Claude.
