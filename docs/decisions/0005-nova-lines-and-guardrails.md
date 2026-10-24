@@ -330,6 +330,62 @@ Date: 2026-10-13. Status: accepted.
   next daters. Room talk works only from safe facts about the show (the segment, whether
   the poll is open, how many audience questions so far), and never mentions the outcome,
   spending or anyone's looks.
+- **Nova's voice, natural and grounded** (2026-10-21). The brand book's "asks rather than
+  remarks" stays: when someone has just spoken to Nova, a line may open with a short
+  reaction to what they actually said, then hands the floor back. Specific, never generic
+  (no "that's interesting"), contractions, varied openings, teasing only where the moment
+  invites it, and energy from words, never exclamation marks. No line invents anything
+  about the show (a studio, a break, what comes next), or hints at how well the daters are
+  getting on. The first question is built on the dater's own answer, not the card's prompt
+  ("what is it that you claim you can do?"), asked directly (not "should we start with
+  your first prompt?") and to them alone, in under 20 words; the last word is the date's
+  last moment ("before we take a break" came up on two of two nights); the doors intro
+  and Next up ask nobody anything (a first version had Nova quizzing the next pair before
+  they were on); lightning questions have no names or lead-in, and the outro is one
+  sentence. The evaluation's form check now also reports an invented show fact, a first
+  question that asks leave or doubts the dater, and an introduction that asks a dater a
+  question; reported, not gated. Five rounds against Gemma, two nights each; before (two
+  nights on the same line code) and after the last:
+  fallbacks 7% and 8%, then 2% and 1% (lightning 4 of 24 twice, then none; outro 3 and 5
+  of 8, then none); near-duplicates 9% and 10%, then 3% and 1%; same three-word opening
+  29% and 27%, then 18% and 20%; moment targets missed 12 and 11, then 5 and 3; invented
+  show facts 3 and 7, then none; first questions off their form 13 and 13, then 6 and 4
+  (most of the rest ask about the dater's answer in other words, "juggling" for "juggle";
+  the check is lexical); Nova's airtime 19% and 20% (at most 21%), then 20% and 20% (at
+  most 21%). Earlier rounds show what each rule is for: without word limits, first
+  questions doubled and airtime reached 23%. Still open: on a claim card ("I claim I
+  can"), the first question sometimes doubts the dater ("do you really think...?"; one
+  default run of one, and three lines in two nights); silence prompts open alike more
+  often (same opening 8 and 10 of 16, from 5 and 8); and replies speak of Nova's own
+  feelings more ("I'm having a wonderful time").
+- **Choosing among a set piece's candidates** (2026-10-21, `nova/quality.py`). Before, of
+  the three candidates that passed the guardrails, Nova kept the least like tonight's lines,
+  so a fresh line that missed its moment's job beat a good one that echoed an earlier
+  date. Now it ranks in tiers, so novelty can never rescue a worse line: the guardrails stay
+  the hard gate; a candidate with a severe fault (an invented show fact, or a question to a
+  dater in an introduction) is never kept; then the fewest soft faults (a first question not
+  built on the dater's answer, asking leave first, doubting the dater, three or more
+  questions, a lightning question off its form, doors or outro not naming both, longer than
+  the word count its prompt asks for, empty praise); then the least repetition (closeness to
+  tonight's lines, plus 0.3 if it opens with the same three words as one: enough to break a
+  near tie towards a fresh opening, never to override a clearly closer line); then the first
+  written. If none passes the guardrails, or every one that does is severe, the approved
+  fallback (`ErrorKind.QUALITY` for the second). The checks are the evaluation's form check,
+  moved so what the evaluation measures is what chooses, with a light word stem
+  ("juggling" for a card's "juggle"). Choosing is a few word comparisons: no model call, the
+  same candidates, prep budget and slots, nothing queued in front of a distress check. No
+  model judges a line: one more request per set piece would add about 10 a date on the same
+  Ollama, against a prep median of 12 s and the distress checks' slot; worth measuring only
+  if these checks leave clear gaps. `--night` now also scores what the old rule would have
+  kept from the same three candidates. Two nights, Gemma: the ranking kept a different
+  candidate for 9 and 5 of 79 set pieces; the kept lines had 0 and 1 soft faults where the
+  old rule's had 7 and 3, no severe fault either way, the same fallbacks (one each, from
+  the guardrails), and the same closeness (0.34 against 0.33, 0.35 against 0.35); same
+  openings 21 against 20 and 16 against 19, so no gain there. Across the nights (two before,
+  two after): fallbacks 2% and 0%, then 1% and 2%; same opening 24% and 28%, then 28% and
+  25%; prep median 11.7 to 11.8 s, then 11.9 to 12.0 s; airtime 20%, then 19% and 20%. The
+  checks are word patterns: no fault is not a good line, and some faults are wrong (one kept
+  first question was about the dater's answer in other words).
 - **Fixed fallbacks take turns across the night.** Silence, lightning and outro
   fallbacks each use the option said least often tonight, then the one said longest ago,
   then the one least like anything Nova has said, so a night doesn't hear the same

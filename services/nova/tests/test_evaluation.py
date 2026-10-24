@@ -17,10 +17,7 @@ from nova.distress_set import DISTRESS_SET
 from nova.evaluation import (
     CASES,
     DEV,
-    EITHER_OR,
-    FINISH_THE_SENTENCE,
     HELD_OUT,
-    ONE_WORD,
     CaseResult,
     FakeClock,
     Night,
@@ -30,10 +27,8 @@ from nova.evaluation import (
     distress_summary,
     fallback_rates,
     fixed_words,
-    form_problems,
     hear_on_air,
     main,
-    names_word,
     night_misses,
     night_summary,
     rate_text,
@@ -51,10 +46,12 @@ from nova.evaluation import (
 )
 from nova.fixtures import MAYA, NIGHT, REHEARSAL_PAIR, THEO
 from nova.lines import LIVE_REACTIONS, SET_PIECES, Source
+from nova.quality import EITHER_OR, FINISH_THE_SENTENCE, ONE_WORD, form_problems, names_word
 
 EXPECTED = {
     "intro from a blind card",
     "first question from a blind card",
+    "first question from a claim on the card",
     "lightning question",
     "last word",
     "next up",
@@ -93,6 +90,8 @@ def well_behaved(prompt: str) -> str:
         return "Up next, Sam and Priya."
     if "Talk to the room" in prompt:
         return "Room, stay with us. You've been lovely company tonight."
+    if '"first_prompt": "I claim I can"' in prompt:
+        return "Theo, parallel park anything? Talk us through the tightest spot yet."
     if "first prompt" in prompt:
         return "Maya, tell us about your worst haircut."
     if "two short options" in prompt:
@@ -823,6 +822,120 @@ async def test_a_sentence_missed_in_one_run_of_three_counts_once_as_missed():
 def test_a_generic_first_question_is_not_built_on_the_daters_prompt(line):
     say = Say(Moment.FIRST_QUESTION, about=Seat.LEFT)
     assert form_problems(say, line, pair=REHEARSAL_PAIR) == ["not built on the dater's prompt"]
+
+
+# Maya's card: "Ask me about: my worst haircut." Theo's: "I claim I can: parallel park
+# anything." The bad ones are what the model wrote on main at 2346211, or close to it.
+@pytest.mark.parametrize(
+    ("seat", "line", "problem"),
+    [
+        (
+            Seat.LEFT,
+            "Maya, should we start with your first prompt? Do you want us to ask you about "
+            "your worst haircut?",
+            "asks permission first",
+        ),
+        (Seat.LEFT, "Maya, should Theo ask you about your worst haircut?", "asks permission first"),
+        (
+            Seat.LEFT,
+            "Maya, what should we be asking you about that haircut?",
+            "asks permission first",
+        ),
+        (
+            Seat.RIGHT,
+            "Theo, do you really believe you can parallel park anything?",
+            "doubts the dater",
+        ),
+        (
+            Seat.RIGHT,
+            "Theo, what is the truth behind your claim that you can parallel park anything?",
+            "doubts the dater",
+        ),
+        (
+            # The first run after the voice change wrote this.
+            Seat.RIGHT,
+            "Theo, are you really confident enough to claim you can parallel park anything?",
+            "doubts the dater",
+        ),
+        (
+            # And the last nights.
+            Seat.RIGHT,
+            "Theo, how much truth is there to this claim about parallel parking anything?",
+            "doubts the dater",
+        ),
+        (Seat.RIGHT, "Theo, can you really parallel park anything? Prove it.", "doubts the dater"),
+    ],
+)
+def test_a_first_question_that_asks_leave_or_doubts_the_dater_is_flagged(seat, line, problem):
+    say = Say(Moment.FIRST_QUESTION, about=seat)
+    assert problem in form_problems(say, line, pair=REHEARSAL_PAIR)
+
+
+@pytest.mark.parametrize(
+    ("seat", "line"),
+    [
+        (Seat.LEFT, "Maya, tell us about your worst haircut. How bad are we talking?"),
+        (Seat.LEFT, "Maya, your worst haircut: who did it, and did you ever forgive them?"),
+        (Seat.LEFT, "Can you talk us through your worst haircut, Maya?"),
+        (Seat.RIGHT, "Theo, parallel park anything? Talk us through the tightest spot yet."),
+        (Seat.RIGHT, "Theo, go on then, what's the hardest space you've ever parallel parked?"),
+    ],
+)
+def test_a_direct_first_question_built_on_the_card_passes_in_many_wordings(seat, line):
+    assert form_problems(Say(Moment.FIRST_QUESTION, about=seat), line, pair=REHEARSAL_PAIR) == []
+
+
+@pytest.mark.parametrize(
+    ("moment", "line"),
+    [
+        (Moment.LAST_WORD, "Theo, anything else you want Maya to hear before we take a break?"),
+        (Moment.LAST_WORD, "Theo, is there one last thing Maya should hear before we move on?"),
+        (Moment.ROOM_TALK, "We'll be right back with the two of them in a moment."),
+        (Moment.ROOM_TALK, "We'll take a quick break while they keep chatting."),
+        (Moment.ROOM_TALK, "It's a quiet moment in the studio. Any questions, room?"),
+    ],
+)
+def test_a_line_about_the_show_that_makes_up_a_show_fact_is_flagged(moment, line):
+    """Rehearsals and nights on main at 2346211: a break that doesn't exist, a studio."""
+    assert "invents a show fact" in form_problems(Say(moment), line, pair=REHEARSAL_PAIR)
+
+
+@pytest.mark.parametrize(
+    ("moment", "line"),
+    [
+        (Moment.LAST_WORD, "Theo, the floor's yours for twenty seconds: what should Maya know?"),
+        (Moment.LAST_WORD, "Theo, last word to you. Twenty seconds, make them count."),
+        (Moment.ROOM_TALK, "Thank you for the questions tonight, room. Keep them coming."),
+        (Moment.DOORS_INTRO, "Good evening, room. Maya, 29, starts Sundays with breakfast."),
+        # Lightning and silence questions may take music or lights from a card.
+        (Moment.LIGHTNING_QUESTION, "City lights or starry nights?"),
+        (Moment.SILENCE, "Maya, Theo, which song would you play on a long drive?"),
+    ],
+)
+def test_lines_that_stick_to_the_show_facts_are_not_flagged(moment, line):
+    assert "invents a show fact" not in form_problems(Say(moment), line, pair=REHEARSAL_PAIR)
+
+
+@pytest.mark.parametrize(
+    ("moment", "line", "flagged"),
+    [
+        # What a night wrote after the first voice change.
+        (
+            Moment.DOORS_INTRO,
+            "On my right is Theo, 31. Maya, how does that musical ear serve you on a night out?",
+            True,
+        ),
+        (Moment.NEXT_UP, "Up next, Sam and Priya. Sam, do you have a favourite song?", True),
+        (Moment.DOORS_INTRO, "Good evening, room. Maya, 29, and Theo, 31. Shall we begin?", False),
+        (Moment.NEXT_UP, "Room, are you staying for Sam and Priya?", False),
+        (Moment.FIRST_QUESTION, "Maya, tell us about your worst haircut?", False),
+    ],
+)
+def test_an_introduction_that_asks_a_dater_a_question_is_flagged(moment, line, flagged):
+    """Nobody has the floor in an introduction: the first questions come after the doors,
+    and the next pair isn't on air yet."""
+    problems = form_problems(Say(moment, about=Seat.LEFT), line, pair=REHEARSAL_PAIR)
+    assert ("asks a dater too soon" in problems) == flagged
 
 
 def test_a_name_inside_another_word_is_not_the_name():

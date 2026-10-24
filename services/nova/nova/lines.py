@@ -3,7 +3,8 @@
 - Approved lines (cue text) are spoken as written.
 - Set pieces (the Doors intro, first questions, lightning questions, last words, the outro
   and Next up) are written before the date by prepare(), three candidates each; the one
-  kept passes the guardrails and is least like what Nova has said tonight. Different
+  kept passes the guardrails, then does its moment's job best (nova/quality.py), then is
+  least like what Nova has said tonight. Different
   moments are written at the same time, within one budget for the whole date
   (NOVA_PREP_BUDGET_SECONDS). The model is never called for them during the date;
   anything missing uses its fallback.
@@ -22,10 +23,10 @@ import random
 import re
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
-from nova import prompts, running_order, script
+from nova import prompts, quality, running_order, script
 from nova.cards import BlindCard, Pair, Seat
 from nova.config import Settings
 from nova.cues import Moment, RoomFacts, Say, Situation
@@ -43,7 +44,7 @@ from nova.guardrails import (
 from nova.measure import ms_since
 from nova.models import WARM_UP_TIMEOUT, LineModel, ModelRefused, Warmed, warm_up
 from nova.text import plain
-from nova.tonight import SHOWN, SHOWN_LIVE, Remembered, Tonight
+from nova.tonight import SHOWN, SHOWN_LIVE, Remembered, Tonight, mask
 
 SET_PIECES = frozenset(
     {
@@ -86,6 +87,9 @@ class ErrorKind(StrEnum):
     ERROR = "error"
     NOT_PREPARED = "not_prepared"
     DECLINED = "declined"  # an audience question Nova won't read
+    # Every candidate that passed the guardrails made something up about the show, or
+    # asked a dater a question too soon (nova/quality.py, SEVERE).
+    QUALITY = "quality"
 
 
 @dataclass(frozen=True)
@@ -147,6 +151,17 @@ class Attempt:
         return self.text is not None and not self.violations and self.error is None
 
 
+@dataclass(frozen=True)
+class Selection:
+    """How one set piece was chosen: its candidates as written, how each scored, and the
+    one kept (None: the fallback). In memory for the evaluation, never logged."""
+
+    moment: Moment
+    attempts: tuple[Attempt, ...]
+    scored: tuple[quality.Scored, ...]
+    chosen: int | None
+
+
 def fallback_lines(pair: Pair, next_pair: Pair | None) -> list[tuple[Moment, str]]:
     """Every fixed fallback line for this pair, for sign-off and for tests."""
     lines = [
@@ -206,6 +221,7 @@ class LineWriter:
         # Set pieces in tonight's memory as planned: kept once spoken, dropped by finish().
         self._planned: dict[_Key, Remembered] = {}
         self.budget_exhausted = False  # the prep budget ran out before every piece was ready
+        self.selections: list[Selection] = []  # how each set piece was chosen (evaluation)
         self._fallback_in_hold = False  # the room-talk fallback was said in this hold
 
     # --- Before the date ------------------------------------------------------------------
@@ -333,16 +349,34 @@ class LineWriter:
         return say.moment is Moment.FROM_THE_ROOM and question_is_off_limits(say.detail or "")
 
     async def _prepare_one(self, say: Say) -> Line:
-        """Three candidates at once; keeps the one that passes the guardrails and is least
-        like what Nova has said tonight for this moment. If none passes, the fallback."""
+        """Three candidates at once, then the best (nova/quality.py, best): only one that
+        passes the guardrails and makes nothing up about the show; then the one that does
+        its moment's job best; then the least like what Nova has said tonight. If none
+        qualifies, the approved fallback. Choosing is a few word comparisons, no model."""
         attempts = await asyncio.gather(*(self._prepare_attempt(say) for _ in range(CANDIDATES)))
-        passing = [attempt for attempt in attempts if attempt.ok]
-        best = min(
-            passing,
-            key=lambda a: self._tonight.closeness(say.moment, a.text or "", names=self._names),
-            default=attempts[0],
+        scored = [self._score(say, attempt) for attempt in attempts]
+        chosen = quality.best(scored)
+        self.selections.append(Selection(say.moment, tuple(attempts), tuple(scored), chosen))
+        if chosen is None:
+            passed = next((attempt for attempt in attempts if attempt.ok), None)
+            if passed is None:  # none passed the guardrails: their reasons, as before
+                return self._settle(say, attempts[0], Source.PREPARED)
+            return self._fallback(say, replace(passed, error=ErrorKind.QUALITY))
+        return self._settle(say, attempts[chosen], Source.PREPARED)
+
+    def _score(self, say: Say, attempt: Attempt) -> quality.Scored:
+        """A candidate's faults and repetition, for choosing among them."""
+        if not attempt.ok or attempt.text is None:
+            return quality.Scored(ok=False)
+        text, moment = attempt.text, say.moment
+        form = self.lightning_form(say.number) if moment is Moment.LIGHTNING_QUESTION else None
+        heard = {tuple(quality.opening(line)) for line in self._tonight.said(moment)}
+        return quality.Scored(
+            ok=True,
+            faults=quality.faults(say, text, pair=self._pair, form=form),
+            closeness=self._tonight.closeness(moment, text, names=self._names),
+            same_opening=tuple(quality.opening(mask(text, self._names))) in heard,
         )
-        return self._settle(say, best, Source.PREPARED)
 
     async def _prepare_attempt(self, say: Say) -> Attempt:
         """One candidate, taking a slot if NOVA_PREP_PARALLEL limits them, so a distress
