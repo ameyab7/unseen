@@ -52,7 +52,9 @@ components and say so in the pull request.
   (docs/decisions/0005-nova-lines-and-guardrails.md)
 - services/nova: uv run python -m nova.agent dev runs Nova in LiveKit for one measured
   rehearsal date in the Agents Playground; uv run python -m nova.voices writes voice
-  samples. Both use LiveKit credit (docs/spike-results.md)
+  samples; uv run python -m nova.yield_live runs the yield rehearsal, a scripted dater
+  cutting Nova off in a real LiveKit room (decision 0004). All use LiveKit credit
+  (docs/spike-results.md)
 
 Install app packages from apps/mobile with
 `node ../../node_modules/expo/bin/cli install <pkg>`, not `npx expo install`, then
@@ -62,7 +64,8 @@ On Windows, Smart App Control (Windows 11's reputation check for apps and DLLs) 
 blocks unsigned files that few machines run, and re-checks each file about once a day, so a
 tool can work one day and be blocked the next (the Code Integrity event log names what it
 blocks). It currently blocks PyAV's DLLs, so nothing that imports LiveKit runs natively
-(Nova's agent and voice samples, tests/test_agent.py, tests/test_voices.py), and pnpm 12's
+(Nova's agent, voice samples and yield rehearsal, tests/test_agent.py, tests/test_voices.py,
+tests/test_yield_live.py), and pnpm 12's
 native binary. Never turn it off or change other security settings; use these instead:
 - Nova: with Docker Desktop running, from the repository root, this runs a rehearsal
   (LiveKit credit), and the second runs every test (compose.yaml lists more):
@@ -71,7 +74,8 @@ native binary. Never turn it off or change other security settings; use these in
   Ollama on Windows is reached at host.docker.internal; the keys stay in
   services/nova/.env and never go in the image.
   Natively, the tests that don't import LiveKit still run:
-  `uv run pytest --ignore=tests/test_agent.py --ignore=tests/test_voices.py`.
+  `uv run pytest --ignore=tests/test_agent.py --ignore=tests/test_voices.py
+  --ignore=tests/test_yield_live.py`.
 - The app: `node node_modules/expo/bin/cli start apps/mobile --dev-client` from the
   repository root does what `pnpm dev` does, without pnpm. Run pnpm itself (installs, root
   scripts) in WSL or a container while it is blocked.

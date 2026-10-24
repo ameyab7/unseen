@@ -96,6 +96,14 @@ Limits: they ran on the code of 2026-10-18, before the changes since (the warm-u
 arc, this date's context, the yield, the checks), with one person playing both daters
 through one microphone. No Playground rehearsal has run on the current code.
 
+The yield rehearsal (decision 0004, `nova.yield_live`) ran in a real LiveKit room on
+2026-10-22, as a smoke run of one trial each:
+- A dater cutting in as Nova started was heard to stop Nova 485 ms after their first frame
+  (agent 400 ms); a later run gave 536 ms.
+- Its full run is invalid: LiveKit Inference refused every voice request with 429 Too Many
+  Requests from the sixth trial on, for every voice tried, and still did 12 minutes later.
+- Mid-line yielding stays release-blocking until a full run passes.
+
 ### The model's lifecycle on the development PC (2026-10-21)
 
 Measured against local Ollama (`gemma4:26b`) through the OpenAI SDK Nova uses, outside

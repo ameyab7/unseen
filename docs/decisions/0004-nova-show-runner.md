@@ -107,7 +107,88 @@ Date: 2026-10-13. Status: accepted.
   Nova handing a line to its voice goes first: Nova stops, lets them finish (the turn gap
   of quiet, not their first pause: a first version came back in between two of Theo's
   sentences), and says the line again, once (`yielded` in the log). Only lines that wait for a dater anyway, never
-  a reply, a safety line or the result. The rehearsal logs each start and stop
+  a reply, a safety line or the result. **Later in a line too** (2026-10-21): before, a
+  dater who began more than 1.5 s into a line was talked over for the rest of it, though
+  Nova's voice can be stopped at any point (`AgentSession.interrupt(force=True)`, as a
+  safety stop does). Now a dater who begins anywhere in such a line and keeps going for
+  0.3 s (`YIELD_HOLD`, so a "mm-hm" or a cough never does) stops Nova, and after the same
+  turn gap Nova goes on.
+  **Hardened after a real LiveKit run** (2026-10-22, `nova/yield_live.py`, below):
+  - *Up to three stops a line* (`MAX_YIELDS`), the part Nova goes on with included. Before,
+    a line stopped once at most, so a dater who started again, or the other dater, was
+    talked over because Nova had already stopped once. The waits after a line's stops share
+    one `SPEECH_CAP` from its first stop, and past it the line no longer stops: a TV that
+    keeps starting and stopping can't hold one line back for more than 30 s.
+  - *Going on only from where the cut is known* (`after_a_cut`). Nova's voice (Cartesia)
+    now times its words (`add_timestamps`), and LiveKit's transcript synchronizer turns those
+    timings, against the audio actually sent, into the words that had played when the line
+    stopped (`PlaybackFinishedEvent.synchronized_transcript`). Its text output goes nowhere,
+    so nothing is published to the room (`agent.time_played_words`). With those words, Nova
+    says the sentence the first unplayed word is in and every one after it (`resumed`), or
+    nothing if every word had played. Without them (a voice that doesn't time its words),
+    nothing is guessed from a speaking rate, as `rest_of` did before: a line cut within
+    `RESTART_WITHIN` (2 s) is said again from its start (`restarted`), so at most 2 s is
+    heard twice, and a later cut drops the rest (`dropped`).
+  - *A newer line goes first.* If a line was queued after the cut (a reply to what the
+    dater said, "Let's keep it kind."), the rest of the stale line is dropped
+    (`superseded`); lines queued before the cut, the rest of a beat, don't count. Before,
+    the rest played first, and a reply waited behind it.
+  - A line waiting to go on is still dropped if Nova is told to stop (`stopped`). Safety
+    lines all come with a stop cue, which ends the wait at once; the tests check the kind
+    line after a cut comes with only the grace and the voice's start.
+  - *A bug the fake clock hid*: the hold compared the clock read when the voice detector
+    heard the dater with a second reading a moment later. On a real clock the two never
+    match, so no dater ever stopped Nova after a line's first 1.5 s. Every fake-clock test
+    passed; the first LiveKit run showed it. It now reuses the one reading, with a test on a
+    clock that moves between reads.
+  The `yielded` event carries the moment, `stop_ms` (from when the voice detector heard the
+  dater start to when the line had stopped, at the agent), `played_ms`, the sentence (`-`
+  when not known) and how many there were, and `then`; the report sums them up. Options weighed
+  (livekit-agents 1.8.6): LiveKit's own barge-in (`InterruptionOptions`, `mode: "vad"`)
+  pauses after 0.5 s and resumes the exact audio only for a false interruption, cancelling
+  the line on a real one, inside turn-taking built for an agent with a language model,
+  which this session hasn't got; its `"adaptive"` mode and the cloud turn detector would
+  send daters' audio to another LiveKit service; the local end-of-turn model
+  (`turn-detector-v1-mini`, through `livekit-local-inference`, already installed with
+  livekit-agents) judges when a dater has finished, not when they began, so it could only
+  shorten the wait before Nova resumes, a separate change to measure.
+  **The yield rehearsal in LiveKit** (`uv run python -m nova.yield_live`, Docker only,
+  LiveKit credit): Nova's side is a rehearsal's (AgentSession, SessionSpeaker, Rehearsal),
+  the date not started, playing a fixed four-sentence test line. A second participant plays
+  the dater: it publishes speech synthesized in another voice and receives Nova's audio over
+  WebRTC. Both run on one machine with one clock. The matrix (`nova/yield_matrix.py`) has no
+  interruption, cuts early, halfway, late and twice in one line, pauses between the dater's
+  sentences, a TV at -12 dB, a cut as the line ends, uplink audio sent 0.4 s late, a request
+  to stop, and Nova's own audio looped into the microphone with and without WebRTC's echo
+  canceller (`rtc.AudioProcessingModule`, as a phone runs it). The report (numbers only,
+  services/nova/rehearsals/yield-*.txt) times each stop from the dater's first frame to the
+  last of Nova's audio received, and at the agent; it counts missed and false stops,
+  duplicate lines, and where the agent placed each cut against the pauses heard. A run
+  counts only with the proof LiveKit gives: a room id, an agent participant and its track,
+  Nova's audio received over WebRTC, the agent's voice detector hearing the dater's track,
+  and Nova's line heard in every trial.
+  Results so far, 2026-10-22, all of it **not yet enough to call yielding validated**:
+  - A smoke run, one trial of each kind, before the hold fix: real audio both ways.
+    - Cut as Nova starts: Nova stopped 485 ms after the dater's first frame, as heard
+      (agent 400 ms, voice detector 394 ms), and went on from the right sentence.
+    - Every mid-line cut was missed: the hold bug above.
+    - Nova's own audio looped back with nothing cancelling it stopped the line 3 times in
+      one trial. Through WebRTC's echo canceller it stopped it none.
+    - A TV at -12 dB through the line stopped Nova once, and Nova went on after: speech
+      the voice detector hears counts as a dater's, up to the cap (above).
+    - A request to stop reached the moderator's alert 2.4 s after the dater began.
+  - The full run (51 trials) is invalid. From the sixth trial on, LiveKit Inference refused
+    every voice request with 429 Too Many Requests. That was account-wide (Cartesia and
+    Deepgram alike) and still so 12 minutes later, so Nova never spoke in 46 trials. Its
+    first report read "0 missed" all the same, so a run now counts only if Nova's line
+    reached the dater in every trial. Its one early cut: 536 ms heard.
+  Release-blocking until a full run passes: mid-line stops and the second stop in a line
+  on real audio, and false stops from echo on real phones on speaker. Nova's own audio
+  reaches the voice detector only through a dater's microphone: the session listens to one
+  remote participant's microphone track and never its own, so nothing on the server can
+  tell that echo from the dater's speech. During LiveKit's 3 s echo warm-up only speech
+  recognition gets silence (agent_activity.py `push_audio`); the voice detector still
+  hears the real audio, and the doors intro can yield. The rehearsal logs each start and stop
   the voice detector hears (`speech`, the seat only), to check turn-taking afterwards. The schedule gives far more time in a full date, so
   this matters when Nova runs late and in rehearsals. Unpaced (the evaluation, the
   runner's own tests), every beat goes by the clock as before.

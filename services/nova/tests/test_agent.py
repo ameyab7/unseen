@@ -3,10 +3,14 @@ connection: the real thing runs in the Agents Playground (docs/spike-results.md)
 
 import asyncio
 import logging
+from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
+from livekit.agents.voice import io as voice_io
+
 from nova import agent
-from nova.agent import RedactPii, SessionSpeaker, new_session, voice_parts
+from nova.agent import RedactPii, SessionSpeaker, new_session, time_played_words, voice_parts
 from nova.config import LlmChoice, Settings
 
 SETTINGS = Settings(
@@ -54,6 +58,75 @@ def test_what_people_said_or_typed_is_redacted_from_every_log_record():
 def test_the_voice_setting_splits_into_model_and_voice():
     assert voice_parts("cartesia/sonic-3:abc-123") == ("cartesia/sonic-3", "abc-123")
     assert voice_parts("deepgram/aura-2") == ("deepgram/aura-2", None)
+
+
+def keys(monkeypatch) -> None:
+    monkeypatch.setenv("LIVEKIT_API_KEY", "test-key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "test-secret")
+
+
+async def test_nova_s_voice_times_its_words_so_a_cut_line_goes_on_from_its_sentence(monkeypatch):
+    """Decision 0004: Cartesia's word timestamps, through LiveKit's transcript synchronizer,
+    say which words had played when a dater cut Nova off; without them nothing is guessed."""
+    keys(monkeypatch)
+    session = new_session(SETTINGS)  # the default voice: Cartesia
+    assert session.tts.capabilities.aligned_transcript
+    assert session.options.use_tts_aligned_transcript is True
+    other = new_session(replace(SETTINGS, voice="deepgram/aura-2:odysseus"))
+    assert not other.tts.capabilities.aligned_transcript
+    assert agent.word_timings("deepgram/aura-2") == {}
+
+
+class Sink(voice_io.AudioOutput):
+    """The room's audio output, as RoomIO sets it once the session starts."""
+
+    def __init__(self) -> None:
+        super().__init__(label="sink", capabilities=voice_io.AudioOutputCapabilities(pause=True))
+
+    async def capture_frame(self, frame) -> None:
+        await super().capture_frame(frame)
+
+    def flush(self) -> None:
+        super().flush()
+
+    def clear_buffer(self) -> None:
+        pass
+
+
+def chain(output) -> list:
+    """An output and every one it passes on to (LiveKit puts a proxy between some)."""
+    found = []
+    while output is not None:
+        found.append(output)
+        output = output.next_in_chain
+    return found
+
+
+async def test_the_words_played_are_timed_with_nothing_published_to_the_room(monkeypatch):
+    keys(monkeypatch)
+    session = new_session(SETTINGS)
+    sink = Sink()
+    session.output.audio = sink
+    assert time_played_words(session) is True
+    audio = chain(session.output.audio)
+    assert audio[0].label == "TranscriptSynchronizer" and audio[-1] is sink
+    text = chain(session.output.transcription)
+    assert text[-1].label == "TranscriptSynchronizer", "its text goes no further: nowhere"
+
+
+async def test_without_word_timings_no_synchronizer_guesses_the_words(monkeypatch):
+    keys(monkeypatch)
+    session = new_session(replace(SETTINGS, voice="deepgram/aura-2:odysseus"))
+    sink = Sink()
+    session.output.audio = sink
+    assert time_played_words(session) is False and session.output.audio is sink
+
+
+@pytest.mark.parametrize(("timed", "words"), [(True, "Here is"), (False, None)])
+def test_the_speaker_keeps_the_words_played_only_when_the_voice_timed_them(timed, words):
+    speaker = SessionSpeaker(FakeSession(Clock()), timed=timed)
+    speaker._on_played(SimpleNamespace(playback_position=1.25, synchronized_transcript="Here is"))
+    assert (speaker.played, speaker.played_text) == (1.25, words)
 
 
 class FakeHandle:
