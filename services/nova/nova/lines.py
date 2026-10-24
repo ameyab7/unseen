@@ -36,6 +36,7 @@ from nova.cues import Moment, RoomFacts, Say, Segment, Situation
 from nova.date_context import DateContext
 from nova.distress import has_warning, is_unmistakable
 from nova.events import Event, EventLog
+from nova.grounding import dramatized, unsupported
 from nova.guardrails import (
     SENTENCE_END,
     SHOW_NAME,
@@ -495,7 +496,27 @@ class LineWriter:
             absent = self._pair.card(away).first_name
             if re.search(rf"\b{re.escape(absent)}\b", text):
                 found = tuple(v for v in Violation if v in {*found, Violation.UNKNOWN_NAME})
+        evidence = self._evidence(say, cards)
+        if unsupported(text, evidence):
+            found = tuple(v for v in Violation if v in {*found, Violation.COMMON_GROUND})
+        if say.moment is not Moment.LIGHTNING_QUESTION and dramatized(text, evidence):
+            found = tuple(v for v in Violation if v in {*found, Violation.DRAMATIZED})
         return found
+
+    def _evidence(self, say: Say, cards: Sequence[BlindCard]) -> dict[str, list[str]]:
+        """What each dater the line is about said themselves (decision 0005): their card,
+        their turns on this date, and, for a reply, what the one who spoke to Nova said.
+        Never one dater's words for the other."""
+        own = {card.first_name: [p.text for p in card.prompts] for card in cards}
+        for seat in Seat:
+            name = self._pair.card(seat).first_name
+            if name not in own:
+                continue
+            if self._context is not None and say.moment in WITH_THIS_DATE:
+                own[name] += self._context.said_by(seat)
+            if say.moment is Moment.REPLY and say.about is seat and say.detail:
+                own[name].append(say.detail)
+        return own
 
     def _settle(self, say: Say, attempt: Attempt, success: Source) -> Line:
         if attempt.ok and attempt.text is not None:

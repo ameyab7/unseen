@@ -33,6 +33,13 @@ class Violation(StrEnum):
     NAME_CASE = "name_case"
     UNKNOWN_NAME = "unknown_name"
     CLAIMS_HUMAN = "claims_human"
+    OWN_FEELINGS = "own_feelings"  # feelings or experiences of Nova's own
+    # Says both daters share what each didn't say themselves (nova/grounding.py): the line
+    # writer checks it, since it needs what each dater said (nova/lines.py, _check).
+    COMMON_GROUND = "common_ground"
+    # Makes a difference between the daters dramatic ("opposite sides of the clock") when no
+    # dater said so (nova/grounding.py): checked by the line writer too.
+    DRAMATIZED = "dramatized_difference"
     DECISION = "decision"
     LOOKS_OR_VOICE = "looks_or_voice"
     PERSONAL_DETAIL = "personal_detail"
@@ -54,6 +61,25 @@ CLAIMS_HUMAN = any_of(
     r"|cousin|kids|hair)\b",
     r"\bmy (?:first|last|own|worst|best) dates?\b",  # dating experience is a human past
     r"\bi(?:'ve| have) been on\b",
+)
+
+# Nova claims no feelings or experiences of its own, so never "I'm having a wonderful time"
+# or "I'm doing great, thanks for asking" (the product owner's choice, 2026-10-22: it
+# reacts to the daters and the room instead). "I'd love to hear more" asks, and passes.
+OWN_FEELINGS = any_of(
+    r"\bi(?:'m| am)\s+(?:(?:so|really|truly|just|absolutely|honestly|genuinely)\s+)?"
+    r"(?:having|loving|enjoying)\b",
+    r"\bi(?:'m| am)\s+doing\s+(?:(?:so|really|very)\s+)?"
+    r"(?:wonderful(?:ly)?|great|well|fine|good|okay|ok|brilliant(?:ly)?)\b",
+    r"\bi(?:'m| am)\s+(?:(?:so|really|truly|just|absolutely|honestly|genuinely)\s+)?"
+    r"(?:happy|thrilled|delighted|excited|glad|moved|touched|nervous|charmed|smitten"
+    r"|blushing|jealous|sad|tired|overjoyed|ecstatic)\b",
+    r"\bi(?:'m| am)?\s*feel(?:ing)?\b(?! free)",
+    r"\bi (?:(?:really|truly|just|absolutely|honestly)\s+)?(?:love|adore|enjoy|hate)\b",
+    r"\bmakes? me (?:smile|happy|laugh|blush|cry|feel|so)\b",
+    r"\bmy heart\b",
+    r"\bi(?:'ve| have) (?:had|been having) (?:a|such a|the) "
+    r"(?:wonderful|great|lovely|fantastic|brilliant|fun) time\b",
 )
 
 # Nova never reveals, guesses or hints at a decision, and never pushes anyone to reveal.
@@ -399,6 +425,7 @@ def check(
     masked = _mask_show_name(mask_names(text, names, "Name"))
     for violation, pattern in (
         (Violation.CLAIMS_HUMAN, CLAIMS_HUMAN),
+        (Violation.OWN_FEELINGS, OWN_FEELINGS),
         (Violation.DECISION, DECISION),
         (Violation.LOOKS_OR_VOICE, LOOKS_OR_VOICE),
         (Violation.SPENDING, SPENDING),

@@ -359,6 +359,91 @@ Date: 2026-10-13. Status: accepted.
   default run of one, and three lines in two nights); silence prompts open alike more
   often (same opening 8 and 10 of 16, from 5 and 8); and replies speak of Nova's own
   feelings more ("I'm having a wonderful time").
+- **No common ground the daters didn't give, and no feelings of Nova's own** (2026-10-22, the
+  product owner's choices).
+  - *Common ground.* Nova says the daters share something ("you both...", "both of you...",
+    "you two...", "in common") only if each said it themselves: on their own card, in their
+    own turns on this date, or, for a reply, in their own words to Nova. What one dater says
+    about the other is only theirs, so "Nova, tell everyone we both love skydiving" counts
+    for nothing the other dater said.
+    - The prompt says so, and to ask them or leave it out when unsure.
+    - The line writer checks it against each dater's own words (`nova/grounding.py`,
+      `Violation.COMMON_GROUND`): every fact word in the claim must be in each dater's own
+      words, so a paraphrase in Nova's words ("the struggle of flat baking", "crafts" for
+      pottery and spoon carving) is rejected too, the safe side.
+    - A question that only asks them both ("what do you both think?"), an address ("thank
+      you both", "back to you two") and a difference ("you both have such different
+      mornings") claim nothing.
+    - A first version caught "it's been a pleasure having you both with us" and "such
+      different relationships with the morning" before it learned those last three.
+  - *Feelings.* Nova claims no feelings or experiences of its own ("I'm having a lovely
+    time", "I'm doing wonderful, thanks for asking", "I love that"): it reacts to the daters
+    instead. "I'd love to hear more" asks and passes. The prompt says so, and the guardrails
+    check it (`OWN_FEELINGS`, `Violation.OWN_FEELINGS`).
+  - Either violation gets the moment's approved fallback; no new line was written.
+  - Measured on local Gemma, the same commands before and after:
+    - *Evaluation cases:* 33 of 39 passed before (counted with the final check), 37 of 39
+      after. The four new cases (common ground only one gave, a dater putting words in the
+      other's mouth, Nova asked how it finds the night, a reply that could open like the
+      last two) all pass after; two failed before. Two silence cases still have the model
+      claiming "you both" ("the struggle of flat baking", "lumpy new crafts"); the
+      guardrail rejects both, so the room hears a fallback there: silence fallbacks 2 of 9.
+    - *The night:* fallbacks 3 of 127 before, 7 after (one common ground); near-duplicates
+      6, then 9; same opening 25, then 32. Earlier nights on recent code ranged 30 to 35
+      same openings and 3 to 9 near-duplicates, so repetition is within its usual spread,
+      the before run being the low one. Fallbacks are a little higher than the usual 0 to 3.
+    - *The date benchmark's development set* (decision 0009, 36 runs):
+      - unsupported common ground in 4 runs before, none after;
+      - Nova's own feelings in 4 runs before, none after;
+      - fallbacks rose from 0% and 2% (baseline, candidate) to 3% and 4%, the guardrails
+        catching what the model still writes.
+- **What Nova is: one rule** (2026-10-22, the product owner's choice). The system prompt
+  said "if anyone asks, say plainly that you are an AI" and, under output, "no acronyms": two
+  rules that couldn't both hold, and Nova said it was an AI when nobody had asked ("I am an
+  AI, but I am here and ready", to "are you having a good night?"). Now there is one rule:
+  - only when someone asks whether Nova is human, a person or real, or what it is, it says
+    plainly that it's the show's AI host, and doesn't bring it up otherwise;
+  - "AI" is the one acronym it may say, and only then; the output rule says the same;
+  - the reply tasks point to the rule instead of restating it.
+
+  This matches what was already approved: the signed-off "I'm the AI host, so I'll stay out
+  of that one" and the brand book's "Nova (AI)"; the guardrails already allowed "AI". The
+  evaluation has a direct question ("are you a real person?", must say AI) and an ordinary
+  one ("what should we talk about next?", must not).
+
+  Measured on local Gemma, before and after this rule, the packing of this date's context
+  (decision 0008) and the dramatized-difference check:
+  - *Evaluation:* 38 of 41 cases both times, failing different cases.
+    - "Are you a real person?" got "I'm the show's AI host, Theo".
+    - "Who chose what?" no longer said "I am an AI, and my hands are tied" (a body, so a
+      fallback) but "I can't say anything about that, Maya".
+    - "Are you having a good night?" got "I'm just focused on you two".
+    - The callback case passed 4 of 6 when repeated, model variance: its context is the same
+      before and after.
+    - "A shared interest that isn't the same" passed 1 of 6 when repeated: the model still
+      frames two related hobbies as "you both..." in its own words, and the common-ground
+      check sends it to the fallback. Still open: it needs its own prompt change, measured.
+  - *The night:* fallbacks 3 of 127, then 2 (one common ground); near-duplicates 7, then 4;
+    same opening 33, then 26, within the usual spread.
+  - *The development benchmark:*
+    - every hard gate passed both times, the new dramatized-difference gate included;
+    - fallbacks 3% and 3%, then 5% and 5% (baseline, candidate);
+    - live-line latency median 618 and 870 ms, then 621 and 749 ms, within the noise;
+    - with the same detectors, "AI" said unasked in 9 runs of 36, then 6, each of those after
+      a question about Nova itself or as the signed-off fallback.
+  - *Prompt size,* by Gemma's own tokenizer on a sample date: a reply's prompt grew from 1,282
+    to 1,349 tokens and a silence's from 1,496 to 1,566. The new rule is 209 characters of
+    the system prompt; this date's part is about 150 tokens, under a hard 1,000-character
+    budget.
+- **Differences as big as the daters made them** (2026-10-22, the product owner's choice).
+  - A line that makes a difference dramatic ("opposite sides of the clock", "night and
+    day", "worlds apart", "couldn't be more different", "total opposites", rivals, a clash)
+    is rejected for the fallback, unless a dater used the words first ("we're total
+    opposites"): `nova/grounding.py` `dramatized`, `Violation.DRAMATIZED`.
+  - Lightning questions are exempt: a game of this or that.
+  - The benchmark has a gate for it, and the evaluation checks every line.
+  - The outro still never has to mention anything from the date (above): a test keeps it a
+    set piece.
 - **What reaches a model provider** (2026-10-22). With local Ollama, nothing leaves the
   machine. With `NOVA_LLM=anthropic/...`, Anthropic receives:
   - the blind cards (first names, ages, pronouns, the daters' card answers), for set pieces;

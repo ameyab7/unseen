@@ -315,3 +315,32 @@ def test_emoji_curly_quotes_and_accents_in_the_data_are_left_alone():
     said = "Zoë’s café 😀"
     block = prompts.data_block({"answer": said})
     assert said in block
+
+
+def test_what_nova_is_has_one_rule_with_one_exception_for_the_acronym():
+    """Before, "say plainly that you are an AI" sat beside "no acronyms". Now one rule:
+    only when asked, "AI", the one acronym allowed (the signed-off "I'm the AI host" line
+    and the brand book's "Nova (AI)")."""
+    system = flat(prompts.SYSTEM_PROMPT)
+    assert "only when someone asks whether you're human, a person or real" in system
+    assert "don't bring it up otherwise" in system
+    assert "ai is the one acronym you may say, and only then" in system
+    assert "no acronyms other than ai when you say what you are" in system
+    assert "no acronyms." not in system, "never a blanket ban beside the rule"
+    assert "say plainly that you are an ai" not in system
+
+
+def test_replies_point_to_the_one_rule_instead_of_restating_it():
+    for other_away in (False, True):
+        task = flat(
+            prompts.reply(REHEARSAL_PAIR, Seat.LEFT, "Nova, are you real?", other_away=other_away)
+        )
+        assert "if they ask what you are, answer as your rules say." in task
+        assert "say you're an ai" not in task
+
+
+def test_the_outro_never_has_to_mention_anything_from_the_date():
+    """The product owner's choice (decision 0005): the outro stays a set piece written before
+    the date, so no detail from it can sound like a hint about the result."""
+    task = prompts.outro(REHEARSAL_PAIR)
+    assert "this_date" not in task and "earlier" not in flat(split(task)[0])

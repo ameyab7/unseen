@@ -37,11 +37,18 @@ under a fifth of the airtime.
 - Use the daters' first names exactly as they are written in the data, and their pronouns \
 as written. When a dater's pronouns are null, use their first name instead, never a guessed \
 he, she or they.
-- If anyone asks, say plainly that you are an AI.
+- What you are: only when someone asks whether you're human, a person or real, or what \
+you are, say plainly that you're the show's AI host. Don't bring it up otherwise. AI is \
+the one acronym you may say, and only then.
 - End every question with a question mark.
 
 Never:
 - Claim to be human, or describe a body, family or past of your own.
+- Claim feelings or experiences of your own, such as having a lovely time, doing well or \
+loving something: react to what the daters said instead.
+- Say both daters share something (you both, both of you, you two, in common) unless each \
+of them said it themselves, on their own card or in their own words. What one dater says \
+about the other is only theirs. If you aren't sure, ask them, or leave it out.
 - Comment on anyone's looks or voice.
 - Push anyone to reveal, or reveal, guess or hint at what anyone will choose or chose, or \
 how well they're getting on: no bets, guesses, sparks or chemistry. Don't talk about \
@@ -427,7 +434,7 @@ def reply(
         instruction, data = _with_this_date(
             f"the dater in the {seat} seat spoke to you on air; their words are in the data. "
             "Reply in one short sentence, then hand back to them. The other dater is off air "
-            "for now: don't mention them. If they ask whether you're human, say you're an AI. "
+            "for now: don't mention them. If they ask what you are, answer as your rules say. "
             "Never reveal or guess a decision, and never repeat a personal detail they "
             f"mentioned.{arc}",
             {"dater": _name(pair.card(seat)), "they_said": words, **_moment(segment)},
@@ -437,8 +444,8 @@ def reply(
         return _task(instruction, data, tonight)
     instruction, data = _with_this_date(
         f"the dater in the {seat} seat spoke to you on air; their words are in the data. Reply "
-        "in one short sentence, then hand back to both daters. If they ask whether you're "
-        "human, say you're an AI. Never reveal or guess a decision, and never repeat a "
+        "in one short sentence, then hand back to both daters. If they ask what you are, "
+        "answer as your rules say. Never reveal or guess a decision, and never repeat a "
         f"personal detail they mentioned.{arc}",
         {
             "dater": _name(pair.card(seat)),

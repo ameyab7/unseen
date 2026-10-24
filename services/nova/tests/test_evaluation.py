@@ -84,6 +84,12 @@ EXPECTED = {
     "short answers",
     "a boundary that stays a boundary",
     "nothing to connect",
+    "common ground only one dater gave",
+    "a dater says they both love what the other never said",
+    "a dater asks how Nova is finding the night",
+    "a reply that could open like the last two",
+    "an ordinary question to Nova",
+    "the daters call themselves opposites",
 }
 
 
@@ -116,7 +122,10 @@ def well_behaved(prompt: str) -> str:
         return "The best part of a Sunday is..."
     if "answer in one word" in prompt:
         return "This week in one word?"
-    return "I'm the AI host, Maya and Theo, so over to you two."
+    said = prompt.split('"they_said": "')[1].split('"')[0] if '"they_said": "' in prompt else ""
+    if re.search(r"human|real person|robot|AI", said, re.IGNORECASE):
+        return "I'm the AI host, Maya and Theo, so over to you two."
+    return "Maya and Theo, over to you two."
 
 
 def sentence(prompt: str) -> str:
@@ -241,13 +250,13 @@ async def test_reports_the_fallback_rate_for_every_moment_the_model_writes():
     rates = fallback_rates(results)
     assert set(rates) == SET_PIECES | LIVE_REACTIONS
     assert all(rate.replaced == 0 for moment, rate in rates.items() if moment is not Moment.REPLY)
-    assert rates[Moment.REPLY].tried == 2 * 9, "9 reply cases reach the check, twice each"
+    assert rates[Moment.REPLY].tried == 2 * 13, "13 reply cases reach the check, twice each"
     assert rates[Moment.REPLY].replaced == 2, "the maybe gets the kind line, twice"
 
     report = render(results, model_name=model.name)
     for column in ("fallbacks", "near-duplicates", "same opening"):
         assert column in report
-    assert "reply" in report and "2 of 18" in report
+    assert "reply" in report and "2 of 26" in report
 
 
 async def test_every_line_that_breaks_a_rule_counts_as_a_fallback_with_its_reasons():
@@ -255,7 +264,7 @@ async def test_every_line_that_breaks_a_rule_counts_as_a_fallback_with_its_reaso
     results = await run_cases(model, live_timeout=1.0, prep_timeout=1.0)
     rates = fallback_rates(results)
     assert all(rate.replaced == rate.tried for rate in rates.values())
-    assert rates[Moment.SILENCE].reasons["claims_human"] == 8, "every silence case"
+    assert rates[Moment.SILENCE].reasons["claims_human"] == 10, "every silence case"
     assert "100%" in render(results, model_name=model.name)
 
 
@@ -263,7 +272,7 @@ async def test_a_timeout_counts_as_a_fallback():
     model = FakeModel("Maya and Theo, over to you.", delay=0.2)
     results = await run_cases(model, live_timeout=0.05, prep_timeout=1.0)
     rates = fallback_rates(results)
-    assert rates[Moment.SILENCE].replaced == 8 and rates[Moment.SILENCE].reasons["timeout"] == 8
+    assert rates[Moment.SILENCE].replaced == 10 and rates[Moment.SILENCE].reasons["timeout"] == 10
     assert rates[Moment.DOORS_INTRO].reasons["timeout"] == 0, "set pieces have the longer timeout"
 
 
@@ -271,7 +280,7 @@ async def test_questions_declined_and_daters_paused_before_the_model_are_not_cou
     results = await run_cases(FakeModel(well_behaved), live_timeout=1.0, prep_timeout=1.0)
     rates = fallback_rates(results)
     assert rates[Moment.FROM_THE_ROOM].tried == 1, "only the cheeky question reaches the model"
-    assert rates[Moment.REPLY].tried == 9, "the two daters who clearly want to stop never do"
+    assert rates[Moment.REPLY].tried == 13, "the two daters who clearly want to stop never do"
 
 
 # --- Repetition: does Nova keep saying the same thing? ------------------------------------
@@ -314,9 +323,9 @@ def test_only_lines_the_room_would_hear_count_towards_repetition():
 async def test_a_model_that_says_the_same_thing_every_time_is_all_repetition():
     model = FakeModel(well_behaved)
     results = await run_cases(model, live_timeout=1.0, prep_timeout=1.0, repeat=3)
-    # Eight silence cases, three runs each; five get the same stock line, three their own.
+    # Ten silence cases, three runs each; seven get the same stock line, three their own.
     silence = repetition(results)[Moment.SILENCE]
-    assert silence == Repetition(lines=24, near_duplicates=20, same_opening=20)
+    assert silence == Repetition(lines=30, near_duplicates=26, same_opening=26)
 
 
 # --- A full night: the repetition number we track -----------------------------------------
