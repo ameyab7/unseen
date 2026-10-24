@@ -353,6 +353,31 @@ def test_redaction_is_added_once_however_often_the_agent_starts():
         logging.getLogger().removeHandler(handler)
 
 
+async def test_a_session_makes_one_rehearsal_and_keeps_its_turns_from_an_unapproved_provider(
+    monkeypatch, tmp_path
+):
+    """One Rehearsal a session, so one DateContext a date (decision 0008). With Claude and no
+    NOVA_DIALOGUE_TO_PROVIDER, a real date's recent turns never go into its prompts (decision
+    0005); with local Ollama they do."""
+    made: list[FakeRehearsal] = []
+    real = FakeRehearsal.__init__
+
+    def counted(self, *args, **options) -> None:
+        real(self, *args, **options)
+        made.append(self)
+
+    monkeypatch.setattr(FakeRehearsal, "__init__", counted)
+    await rehearse(monkeypatch, tmp_path)
+    assert len(made) == 1 and made[0].options["share_context"] is True
+    claude = replace(SETTINGS, llm=LlmChoice("anthropic", "claude-haiku-5-5"))
+    monkeypatch.setattr(agent, "build_classifier", lambda settings: SimpleNamespace(name="fake"))
+    session = StartedSession(Clock())
+    monkeypatch.setattr(agent, "load_settings", lambda: claude)
+    monkeypatch.setattr(agent, "new_session", lambda settings: session)
+    await agent.rehearse(FakeContext())
+    assert len(made) == 2 and made[1].options["share_context"] is False
+
+
 async def test_a_date_nova_isnt_ready_for_never_opens_unless_the_moderator_says(
     monkeypatch, tmp_path
 ):

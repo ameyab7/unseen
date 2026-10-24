@@ -35,8 +35,10 @@ the end of the date, finish() closes whatever is still open and waits for the ch
 flight; a check that can't finish in time alerts the moderator as unchecked.
 
 What daters say stays in memory: an utterance until it closes, and the Listener 15
-seconds of it, pruned as time passes and cleared when the date is over. Nothing here logs
-or stores it.
+seconds of it, pruned as time passes and cleared when the date is over. If the date has a
+DateContext (decision 0008), a whole utterance the check cleared (no distress, no conduct,
+no personal detail) joins it once the verdict is in, for Nova's live replies and silence
+prompts; it's cleared when the date is over too. Nothing here logs or stores it.
 """
 
 import asyncio
@@ -52,6 +54,7 @@ from nova.cards import Seat
 from nova.conduct import Slipped, personal_detail
 from nova.config import Settings
 from nova.cues import Conduct, Cue
+from nova.date_context import DateContext
 from nova.distress import Checked, DistressCheck, Listener, Verdict
 from nova.show_runner import FLAGGED, ShowRunner
 from nova.text import straight_quotes
@@ -207,9 +210,12 @@ class OnAirListener:
         clock: Callable[[], float] = time.monotonic,
         grace: float = Settings.utterance_grace,
         max_wait: float = Settings.utterance_max_wait,
+        context: DateContext | None = None,
     ) -> None:
+        """context: this date's (decision 0008), which hears each turn the check cleared."""
         self._runner = runner
         self._listener = Listener(check)
+        self._context = context
         self._deliver = deliver
         self._clock = clock
         self.grace, self.max_wait = grace, max_wait
@@ -351,6 +357,8 @@ class OnAirListener:
                 self._send(self._runner.distress_check(self._clock(), seat, Verdict.UNCHECKED))
         self._checks.clear()
         self._listener.clear()
+        if self._context is not None:
+            self._context.clear()
         for dater in self._daters.values():
             dater.utterance, dater.ended = None, None
 
@@ -403,12 +411,20 @@ class OnAirListener:
         if self._listener.unmistakable(now, seat, utterance.words, loose=True) is not None:
             self._possible_request(now, seat, utterance)
         hold: asyncio.Future[ReplyAction] | None = None
+        to_nova = addresses_nova(*utterance.words)
         if hearing.check is not None:
             hold = asyncio.get_running_loop().create_future()
             self._act_later(
-                hearing.check, seat, ended, now, hold, slipped, alerted=utterance.alerted
+                hearing.check,
+                seat,
+                ended,
+                now,
+                hold,
+                slipped,
+                alerted=utterance.alerted,
+                turn=None if capped else (words, to_nova),  # a capped one isn't whole
             )
-        if not capped and addresses_nova(*utterance.words):  # one reply, to the whole utterance
+        if not capped and to_nova:  # one reply, to the whole utterance
             asked = runner.dater_asked_nova(now, seat, words, wants_to_stop=False)
             self._send(asked, ended, hold, now)
 
@@ -458,6 +474,8 @@ class OnAirListener:
         runner = self._runner
         said = runner.dater_asked_nova if addresses_nova(*utterance.words) else runner.dater_said
         self._send(said(now, seat, heard, wants_to_stop=True), ended, closed_at=now)
+        if self._context is not None:
+            self._context.spoke(seat)  # never the words of a request to stop
 
     def _conduct_instant(self, now: float, seat: Seat, words: str) -> Slipped | None:
         """Conduct's instant layer (decision 0006), on every utterance acted on."""
@@ -478,6 +496,7 @@ class OnAirListener:
         *,
         alerted: bool = False,
         distress: bool = True,
+        turn: tuple[str, bool] | None = None,
     ) -> None:
         act = self._act_on(
             check,
@@ -488,6 +507,7 @@ class OnAirListener:
             heard_detail=slipped is not None,
             alerted=alerted,
             distress=distress,
+            turn=turn,
         )
         task = asyncio.ensure_future(act)
         self._checks[task] = (seat, hold, check)
@@ -507,6 +527,7 @@ class OnAirListener:
         heard_detail: bool = False,
         alerted: bool = False,
         distress: bool = True,
+        turn: tuple[str, bool] | None = None,
     ) -> None:
         """The verdict's cues are handed on first, then the hold resolves; then the conduct
         label from the same call, unless it's a personal detail the instant layer already
@@ -514,7 +535,8 @@ class OnAirListener:
         so a maybe isn't sent twice. distress: False for a check made only for its conduct
         label, after the instant layer acted on a request to stop. A dater who may be
         distressed, or who has asked to stop, may be describing what was done to them, which
-        the runner never holds against them."""
+        the runner never holds against them. turn: a whole utterance's words, and whether it
+        was said to Nova, for this date's context if the check clears it (decision 0008)."""
         verdict = Verdict.UNCHECKED
         conduct: Conduct | None = None
         try:
@@ -524,6 +546,15 @@ class OnAirListener:
             if distress and not (alerted and verdict is Verdict.MAYBE):
                 cues = self._runner.distress_check(self._clock(), seat, verdict)
                 self._send(cues, sentence_end, closed_at=closed_at)
+            # Never one the moderator heard of (a possible request), or with a detail in it.
+            cleared = verdict is Verdict.NO and conduct in (None, Conduct.NONE)
+            cleared = cleared and not alerted and not heard_detail
+            if turn is not None and self._context is not None:
+                words, to_nova = turn
+                if cleared:
+                    self._context.heard(seat, words, to_nova=to_nova)
+                else:  # only that they spoke: what they declined is never an open loop
+                    self._context.spoke(seat)
         finally:
             if hold is not None and not hold.done():
                 hold.set_result(reply_after(verdict, conduct))

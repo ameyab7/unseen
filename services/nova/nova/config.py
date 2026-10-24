@@ -96,6 +96,10 @@ class Settings:
     # Nova's voice as "provider/model:voice", and the speech recognition that hears daters.
     voice: str = DEFAULT_VOICE
     stt: str = DEFAULT_STT
+    # This date's recent turns (decision 0008) go to a model that isn't local only when this
+    # is true: off until the privacy notice covers that provider and data flow (decision
+    # 0005). A local model (Ollama on this machine) always sees them.
+    dialogue_to_provider: bool = False
 
     REQUIRED: ClassVar[tuple[str, ...]] = (
         "LIVEKIT_URL",
@@ -118,6 +122,7 @@ class Settings:
         "NOVA_UTTERANCE_MAX_WAIT_SECONDS",
         "NOVA_VOICE",
         "NOVA_STT",
+        "NOVA_DIALOGUE_TO_PROVIDER",
     )
 
     @classmethod
@@ -165,7 +170,14 @@ class Settings:
             utterance_max_wait=max_wait,
             voice=_voice(env.get("NOVA_VOICE", "").strip() or cls.voice),
             stt=_stt(env.get("NOVA_STT", "").strip() or cls.stt),
+            dialogue_to_provider=_flag(env, "NOVA_DIALOGUE_TO_PROVIDER"),
         )
+
+    @property
+    def shares_dialogue(self) -> bool:
+        """Whether a live date's recent turns may go into Nova's prompts: always to a local
+        model, to another only once NOVA_DIALOGUE_TO_PROVIDER says the notice covers it."""
+        return self.llm.provider == "ollama" or self.dialogue_to_provider
 
 
 def _voice(value: str) -> str:
@@ -181,6 +193,15 @@ def _stt(value: str) -> str:
     if not provider or not model or ":" in value:
         raise ConfigError('NOVA_STT must look like "provider/model"')
     return value
+
+
+def _flag(env: Mapping[str, str], name: str) -> bool:
+    raw = env.get(name, "").strip().lower()
+    if raw in ("", "false", "0", "no"):
+        return False
+    if raw in ("true", "1", "yes"):
+        return True
+    raise ConfigError(f"{name} must be true or false")
 
 
 def _count(env: Mapping[str, str], name: str, default: int) -> int:

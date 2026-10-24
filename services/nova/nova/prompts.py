@@ -13,7 +13,7 @@ import json
 from collections.abc import Mapping, Sequence
 
 from nova.cards import BlindCard, Pair, Seat
-from nova.cues import RoomFacts, Situation
+from nova.cues import RoomFacts, Segment, Situation
 from nova.text import nfkc
 
 SYSTEM_PROMPT = """\
@@ -226,28 +226,118 @@ def next_up(pair: Pair, *, shape: str, tonight: Sequence[str] = ()) -> str:
 
 # --- Live reactions, during the date ----------------------------------------------------
 
+# This date's context (nova/date_context.py, decision 0008), when there is any: what was said
+# earlier on this date, as data, and how to use it, and not.
+THIS_DATE = (
+    " this_date in the data holds what was said earlier on this date: the daters' recent "
+    "turns, each under the name of the dater who said it, questions still unanswered, and "
+    "your own last lines. Use it only for a genuine, specific link: never put one dater's "
+    "words in the other's mouth, never invent something they share or play up a difference "
+    "between them, never suggest they suit each other, and never repeat a line of yours."
+)
+REPLY_THIS_DATE = (
+    f"{THIS_DATE} A callback to something said earlier, or a link to what the other dater "
+    "said, is welcome when it fits what they just said; if nothing fits, just reply simply."
+)
+# A silence prompt builds on the cards, or with this date's context, on what was said.
+CARDS = "built on a light detail from each of their blind cards"
+TALKED_ABOUT = (
+    "built on what they talked about earlier, in your own words, if they both spoke about "
+    "the same thing or one asked the other something still unanswered; otherwise on a light "
+    "detail from each of their blind cards"
+)
+ONE_TALKED_ABOUT = " You may build it on something they said earlier, if it fits."
 
-def silence(pair: Pair, *, tonight: Sequence[str] = ()) -> str:
-    return _task(
+# The date's soft arc (decision 0005): guidance for the moment a live line comes in, never a
+# script. The running order is the show runner's; this only shapes the words of a line it
+# already asked for, and the line writer hears the segment as it starts (LineWriter.entered).
+REPLY_BRIEF = (
+    " Keep it brief: if they're in the middle of a story or a good back-and-forth, a few words "
+    "and hand straight back."
+)
+FREE_TALK_AIM = (
+    " It's free talk: follow up on a specific detail, or link it to what the other dater "
+    "said, only when it genuinely fits."
+)
+CLOSING_AIM = " The date is nearly over: brief and warm; don't sum it up or hint at how it went."
+REPLY_AIMS: Mapping[Segment, str] = {
+    Segment.DOORS: " It's the very start of the date: keep it light.",
+    Segment.FIRST_QUESTION: (
+        " It's early in the date: if it helps, invite the story behind what they said."
+    ),
+    Segment.FREE_TALK: FREE_TALK_AIM,
+    Segment.FROM_THE_ROOM: FREE_TALK_AIM,
+    Segment.LIGHTNING_ROUND: " It's the lightning round: keep its quick, playful pace.",
+    Segment.LAST_WORD: CLOSING_AIM,
+    Segment.TIME: CLOSING_AIM,
+    Segment.RESULT: CLOSING_AIM,
+    Segment.NEXT_UP: CLOSING_AIM,
+}
+SILENCE_AIM = (
+    " Choose the way back in from what they've said: a follow-up on a specific detail, a link "
+    "between their answers when there's a real one, or a small playful choice if they've been "
+    "joking. Go a little deeper only when their own answers have opened that door, never into "
+    "anything personal or painful; after short answers, ask something easier; and when "
+    "nothing links them, one open question."
+)
+
+
+def _moment(segment: Segment | None) -> dict[str, object]:
+    """Where the date is, as data: the segment the show runner last started."""
+    return {"moment": {"segment": segment.replace("_", " ")}} if segment is not None else {}
+
+
+def _with_this_date(
+    instruction: str, data: Mapping[str, object], this_date: Mapping[str, object] | None, how: str
+) -> tuple[str, Mapping[str, object]]:
+    """The instruction and data, with this date's context and how to use it, if there is any."""
+    if not this_date:
+        return instruction, data
+    return instruction + how, {**data, "this_date": this_date}
+
+
+def silence(
+    pair: Pair,
+    *,
+    tonight: Sequence[str] = (),
+    this_date: Mapping[str, object] | None = None,
+    segment: Segment | None = None,
+) -> str:
+    """segment: where the date is, as data. With this_date, the arc's way back in
+    (SILENCE_AIM): from what they've said, or else the cards."""
+    built_on = TALKED_ABOUT if this_date else CARDS
+    instruction, data = _with_this_date(
         "there's been a long silence in free talk. Give both daters one open, light question "
-        "to talk about, built on a light detail from each of their blind cards, addressed to "
-        "both by first name. Don't single either of them out. One or two sentences.",
-        _seats(pair),
-        tonight,
+        f"to talk about, {built_on}, addressed to both by first name. Don't single either of "
+        "them out. One or two sentences.",
+        {**_seats(pair), **_moment(segment)},
+        this_date,
+        THIS_DATE + SILENCE_AIM,
     )
+    return _task(instruction, data, tonight)
 
 
-def silence_to_one(pair: Pair, seat: Seat, *, tonight: Sequence[str] = ()) -> str:
+def silence_to_one(
+    pair: Pair,
+    seat: Seat,
+    *,
+    tonight: Sequence[str] = (),
+    this_date: Mapping[str, object] | None = None,
+    segment: Segment | None = None,
+) -> str:
     """A long silence while the other dater is away (the moderator resumed without them):
-    their card isn't in the data, so their name can't come up."""
-    return _task(
+    their card isn't in the data, so their name can't come up, and this_date leaves out
+    whatever they said."""
+    instruction, data = _with_this_date(
         "there's been a long silence in free talk, and one of the daters is off air for now. "
         f"Give the dater in the {seat} seat one open, light question to talk about, addressed "
         "only to them by first name. Don't mention the other dater or why they're away. One "
         "or two sentences.",
-        {"dater": _card(pair.card(seat))},
-        tonight,
+        {"dater": _card(pair.card(seat)), **_moment(segment)},
+        this_date,
+        ONE_TALKED_ABOUT + THIS_DATE,
     )
+    return _task(instruction, data, tonight)
 
 
 def from_the_room(
@@ -320,29 +410,43 @@ def room_talk(facts: RoomFacts, *, opening: str, tonight: Sequence[str] = ()) ->
 
 
 def reply(
-    pair: Pair, seat: Seat, words: str, *, other_away: bool = False, tonight: Sequence[str] = ()
+    pair: Pair,
+    seat: Seat,
+    words: str,
+    *,
+    other_away: bool = False,
+    tonight: Sequence[str] = (),
+    this_date: Mapping[str, object] | None = None,
+    segment: Segment | None = None,
 ) -> str:
     """other_away: the other dater is away (the moderator resumed without them), so they
-    aren't in the data and Nova hands back to the dater who spoke."""
+    aren't in the data, this_date leaves out whatever they said, and Nova hands back to the
+    dater who spoke. segment: where the date is, as data, with the arc's aim for it."""
+    arc = REPLY_BRIEF + REPLY_AIMS.get(segment, "") if segment is not None else ""
     if other_away:
-        return _task(
+        instruction, data = _with_this_date(
             f"the dater in the {seat} seat spoke to you on air; their words are in the data. "
             "Reply in one short sentence, then hand back to them. The other dater is off air "
             "for now: don't mention them. If they ask whether you're human, say you're an AI. "
             "Never reveal or guess a decision, and never repeat a personal detail they "
-            "mentioned.",
-            {"dater": _name(pair.card(seat)), "they_said": words},
-            tonight,
+            f"mentioned.{arc}",
+            {"dater": _name(pair.card(seat)), "they_said": words, **_moment(segment)},
+            this_date,
+            REPLY_THIS_DATE,
         )
-    return _task(
+        return _task(instruction, data, tonight)
+    instruction, data = _with_this_date(
         f"the dater in the {seat} seat spoke to you on air; their words are in the data. Reply "
         "in one short sentence, then hand back to both daters. If they ask whether you're "
         "human, say you're an AI. Never reveal or guess a decision, and never repeat a "
-        "personal detail they mentioned.",
+        f"personal detail they mentioned.{arc}",
         {
             "dater": _name(pair.card(seat)),
             "other_dater": _name(pair.card(seat.other)),
             "they_said": words,
+            **_moment(segment),
         },
-        tonight,
+        this_date,
+        REPLY_THIS_DATE,
     )
+    return _task(instruction, data, tonight)
