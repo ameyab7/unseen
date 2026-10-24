@@ -47,7 +47,9 @@ components and say so in the pull request.
   NOVA_LLM, and exits non-zero if any gate fails; --distress and --conduct run one set
   alone; --held-out runs the held-out sets, once, as the measure (counts only);
   --independent runs the independent held-out set someone other than the developer wrote
-  (services/nova/independent/README.md; never open its file); --night
+  (services/nova/independent/README.md; never open its file); --safety is the frozen
+  safety report (dev, held-out and independent sets, each across --fresh N model reloads,
+  default 3, gated on each sentence's worst outcome); --night
   runs a full night of eight dates and reports repetition across it (the number we
   track). On demand only, never in CI, and with the machine otherwise idle (the model
   shares the CPU, so a busy machine times checks out); run it before any model change
