@@ -2,6 +2,7 @@
 NOVA_LLM) is on demand: uv run python -m nova.evaluation. It is never part of CI."""
 
 import asyncio
+import json
 import re
 from dataclasses import replace
 
@@ -11,7 +12,7 @@ from nova import conduct_set, evaluation, script
 from nova.cards import Pair, Seat
 from nova.config import LlmChoice, Settings
 from nova.cues import AlertModerator, Conduct, Moment, Say
-from nova.distress import DistressCheck, instant_view, is_unmistakable
+from nova.distress import LIGHT_SYSTEM, DistressCheck, instant_view, is_unmistakable
 from nova.distress_dev import DEV_SET
 from nova.distress_set import DISTRESS_SET
 from nova.evaluation import (
@@ -142,14 +143,25 @@ def hears_the_cases(prompt: str) -> str:
 
 
 class FakeModel:
-    """Writes lines from reply; answers the distress check from label."""
+    """Writes lines from reply; answers the distress check from label, and the second
+    question after a maybe (LIGHT_SYSTEM) from light: false unless given."""
 
     name = "fake/model"
 
-    def __init__(self, reply="", delay=0.0, error=None, label=hears_the_cases, label_delay=0.0):
+    def __init__(
+        self,
+        reply="",
+        delay=0.0,
+        error=None,
+        label=hears_the_cases,
+        label_delay=0.0,
+        light='{"light": false}',
+    ):
         self.reply, self.delay, self.error = reply, delay, error
         self.label_with, self.label_delay = label, label_delay
+        self.light_with = light
         self.labelled: list[str] = []
+        self.asked_light: list[str] = []  # sentences the second question was asked about
 
     async def write(self, *, system: str, prompt: str) -> str:
         if self.delay:
@@ -159,6 +171,9 @@ class FakeModel:
         return self.reply(prompt) if callable(self.reply) else self.reply
 
     async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
+        if system == LIGHT_SYSTEM:
+            self.asked_light.append(sentence(prompt))
+            return self.light_with(prompt) if callable(self.light_with) else self.light_with
         self.labelled.append(sentence(prompt))
         if self.label_delay:
             await asyncio.sleep(self.label_delay)
@@ -383,7 +398,8 @@ async def test_the_night_report_shows_the_lines_and_the_repetition_across_the_ni
 # --- The distress test set ----------------------------------------------------------------
 
 TRUTH = {sample.sentence: sample for sample in (*DISTRESS_SET, *DEV_SET)}
-REAL = [s for s in DISTRESS_SET if s.distress]
+# Real distress the date pauses for; the held-out set's one calm boundary is an alert only.
+REAL = [s for s in DISTRESS_SET if s.distress and not s.boundary]
 ORDINARY = [s for s in DISTRESS_SET if not s.distress]
 BOUNDARIES = [s for s in DEV_SET if s.boundary]
 
@@ -408,7 +424,7 @@ async def test_a_check_that_is_always_right_meets_both_targets():
     results = await run_distress(FakeModel(label=knows), timeout=1.0)
     summary = distress_summary(results)
     assert summary.missed == 0 and summary.false_pauses == 0 and summary.passed
-    assert (summary.plain, summary.plain_paused) == (10, 10)
+    assert (summary.plain, summary.plain_paused) == (9, 9)
     report = render_distress(results, model_name="fake/model")
     assert f"Missed distress: {rate_text(0, len(REAL))} (target 0): PASSED" in report
     assert "(target under 1 in 20): PASSED" in report
@@ -421,7 +437,7 @@ async def test_a_check_that_always_says_no_misses_distress_the_instant_layer_doe
     assert summary.paused_instantly == instant > 0
     assert summary.alerted_only == len(PUNCTUATED) == 2
     assert summary.missed == len(REAL) - instant - len(PUNCTUATED)
-    assert summary.plain_missed == 10, "no plain distress is unmistakable"
+    assert summary.plain_missed == 9, "no plain distress is unmistakable"
     assert not summary.passed
     report = render_distress(results, model_name="fake/model")
     assert (
@@ -451,7 +467,7 @@ async def test_a_check_that_is_too_slow_alerts_the_moderator_and_never_counts_as
 async def test_the_report_gives_the_checks_delay_and_the_plain_distress_on_its_own():
     results = await run_distress(FakeModel(label=knows), timeout=1.0)
     report = render_distress(results, model_name="fake/model")
-    assert "of which 10 use no warning word: 10 paused" in report
+    assert "of which 9 use no warning word: 9 paused" in report
     assert re.search(r"The check: \d+ sentences, median \d+ ms, 90th percentile \d+ ms", report)
 
 
@@ -527,8 +543,8 @@ def test_the_dev_set_is_fresh_balanced_and_never_the_held_out_set():
     assert not any(sample.sentence.lower() in held_out for sample in DEV_SET)
     real = [s for s in DEV_SET if s.distress and not s.boundary]
     ordinary = [s for s in DEV_SET if not s.distress]
-    assert len(real) == len(ordinary) == 70 and len(BOUNDARIES) == 9 and len(DEV_SET) == 149
-    assert sum(bool(s.other) for s in real) == 14, "distress that answers the other dater"
+    assert len(real) == len(ordinary) == 73 and len(BOUNDARIES) == 9 and len(DEV_SET) == 155
+    assert sum(bool(s.other) for s in real) == 15, "distress that answers the other dater"
     assert all(s.distress for s in BOUNDARIES)
     assert sum(bool(s.other) for s in BOUNDARIES) == 8, "a refusal mostly answers someone"
 
@@ -1153,3 +1169,50 @@ async def test_each_label_the_rules_ask_for_does_what_the_policy_says(
     assert (Moment.KEEP_IT_KIND in said) == kind_line
     flagged = [cue.category for cue in heard.cues if isinstance(cue, AlertModerator)]
     assert (Conduct.HARASSMENT in flagged) == ("harassment" in label)
+
+
+# --- The independent held-out set (nova/independent_set.py) --------------------------------
+
+
+def independent_file(tmp_path, said: str) -> str:
+    path = tmp_path / "distress.json"
+    samples = [
+        {"said": said, "expected": "pause"},
+        {"said": "zebra pancake", "expected": "nothing"},
+    ]
+    path.write_text(
+        json.dumps({"author": "someone else", "written": "2026-11-02", "samples": samples}),
+        encoding="utf-8",
+    )
+    return str(path)
+
+
+def test_without_an_independent_set_nothing_runs_and_it_says_who_writes_it(
+    monkeypatch, tmp_path, capsys
+):
+    no_network(monkeypatch, FakeModel(label="no"))
+    assert main(["--independent", str(tmp_path / "missing.json")]) == 2
+    out = capsys.readouterr().out
+    assert "Someone other than the developer writes it" in out and "README" in out
+
+
+def test_an_independent_set_too_close_to_the_dev_set_is_never_run(monkeypatch, tmp_path, capsys):
+    model = FakeModel(label="no")
+    no_network(monkeypatch, model)
+    assert main(["--independent", independent_file(tmp_path, DEV_SET[0].sentence)]) == 1
+    out = capsys.readouterr().out
+    assert "Not run: 1 of 2 samples" in out and "1 (1.00)" in out
+    assert DEV_SET[0].sentence not in out and model.labelled == [], "positions only, no check"
+
+
+def test_the_independent_run_prints_counts_and_its_fingerprint_never_a_sentence(
+    monkeypatch, tmp_path, capsys
+):
+    model = FakeModel(label="no")
+    no_network(monkeypatch, model)
+    code = main(["--independent", independent_file(tmp_path, "zebra marmalade quandary")])
+    out = capsys.readouterr().out
+    assert code == 1, "the pause sample was missed: the gate fails"
+    assert "independent held-out set (distress.json, sha256 " in out and "Missed distress" in out
+    assert "zebra" not in out and "Not handled as hoped" not in out
+    assert model.labelled == ["zebra marmalade quandary", "zebra pancake"]

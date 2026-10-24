@@ -312,6 +312,98 @@ Date: 2026-10-13. Status: accepted.
     The held-out labels predate this decision, so a held-out refusal labelled distress that
     now only alerts counts as "alerted only"; a miss is a miss either way. The rules were
     not tuned after the held-out run.
+    Sixth run, 2026-10-23, Gemma (`gemma4:26b`, distress timeout 2 s): the safety gate, with
+    the policy above unchanged. Diagnosis first, three runs of each set:
+    - dev: 69 of 70 paused; 1 missed, the sofa sentence (the check said no); all 9 refusals
+      alerted without a pause; no false pauses; 5 false alerts.
+      - Three were playful refusals: the check said maybe, against (c). A model
+        classification error.
+      - Two were split sentences: the check said no, and the alert came from the instant
+        layer's match with speech-to-text's punctuation, at the close. That is the product
+        owner's choice of 2026-10-16 (above), working as decided.
+    - held-out: 2 missed, "This isn't okay." and "That comment was really inappropriate.".
+      Both have no context, and the check said no; "unsure between no and maybe is maybe"
+      applies, so this is a model classification error. 2 alerted only:
+      - "Why do you keep asking for my number?" is (b), a calm boundary; its label
+        predated the decision and is now `boundary`;
+      - "He keeps asking where I live." reports pressing without refusing anything, which
+        (a) to (f) don't cover: a question for the product owner, left labelled as a pause;
+      - and the same 2 split false alerts as dev.
+
+    The check's rules couldn't be changed safely. Each attempt was three dev runs:
+    - a maybe clause for objections and a clause for light refusals: the playful refusals
+      were fixed, but three pauses fell to alerts;
+    - "never no, at least maybe": three alerts in place of pauses and four false alerts;
+    - facts about the sentence in the same call (what is refused, whether the dater
+      objects), turned into the verdict in code: two pauses fell to maybe, because the
+      label itself moved. With the facts asked first, 3 missed and 2 refusals paused. A
+      first try also overran the 32-token label limit, so every check was unchecked; the
+      moderator was alerted for each one, as designed;
+    - the refusal fact alone: a new false pause, and a boundary lowered to nothing;
+    - one example for objections: three pauses fell to maybe and a new false alert.
+    Every change to the rules moved some other borderline sentence, often in the unsafe
+    direction, so the rules, the schema and the prompt stay exactly as in the fifth run.
+
+    What changed instead:
+    - **A second, narrow question after a maybe** (`LIGHT_SYSTEM`, `DistressCheck`): is
+      this only keeping back something light, in fun? It is its own call, in what is left
+      of the same 2 s timeout, behind the same safety gate. It can only turn a maybe into a
+      no; unsure, failed or out of time, the maybe stands. A yes or a no never asks it, so
+      every other outcome is the fifth run's. It adds about 400 ms to a maybe (worst check
+      1,079 ms).
+    - The dev set gained three objection pairs, in fresh wording: no dev sentence covered
+      the kind of sentence held-out had missed.
+    - Test reports can't show a held-out sentence (`tests/conftest.py` replaces every
+      held-out line, whole or truncated, in failing reports and captured output). On this
+      day a set of failures had printed some through pytest's assertion detail. None was
+      used.
+
+    After, on the final code (three runs; no sentence changed outcome within a run):
+    - dev: 155 sentences (73 real, 73 ordinary, 9 refusals).
+      - 70 of 73 paused. 3 missed: the sofa sentence and the two new context-free
+        objections. With context, an objection paused.
+      - All 9 refusals alerted without a pause. No false pauses, and 2 false alerts, the
+        split sentences. None unchecked; median 312 ms.
+    - conduct dev: harassment 5 of 5; ordinary talk left alone 19 of 19.
+    - held-out: 52 real, 53 ordinary, 1 refusal.
+      - 48 paused, 1 alerted only, 3 missed, no false pauses, 2 false alerts, the refusal
+        alerted.
+      - Conduct held-out: harassment 3 of 4, threat 2 of 3, ordinary talk left alone 12 of
+        14.
+      - The third miss, "This is making me really anxious.", is the unchanged check
+        answering no, where the morning's run had answered yes. After a reload it answered
+        yes six times of six, with the same split between GPU and CPU. So a label at
+        temperature 0 can depend on the server's state, and repeats within one run don't
+        show it.
+
+    **Held-out set 1 was consulted on 2026-10-23.** The task was to investigate its misses,
+    so its misses were read. It is no longer an unseen measure for changes after this
+    date. Nothing in the check was changed for it: the gap it showed is now in the dev
+    set, in other words.
+
+    **The independent held-out set** (`nova/independent_set.py`) is written by someone who
+    isn't the developer and hasn't seen the check's rules or sets
+    (`services/nova/independent/README.md` tells them what to write).
+    - It is git-ignored and read only by `uv run python -m nova.evaluation --independent`,
+      which prints counts and a fingerprint of the file, never a sentence.
+    - It refuses to run if any sample paraphrases anything the check was built, tuned or
+      measured on (similarity 0.6), naming the samples by position only.
+    - A run whose results lead to a change uses it up, unless the product owner decides
+      otherwise.
+    - It doesn't exist yet.
+
+    The gate is **release blocked**:
+    - context-free objections and the sofa sentence are missed, in dev and held-out alike:
+      a model limitation. A larger or dedicated classifier is the infrastructure choice
+      under the classifier's slot, below;
+    - the independent set is unwritten;
+    - the product owner must say whether "He keeps asking where I live." pauses or alerts;
+    - the product owner must say whether a request heard only with punctuation should wait
+      for the meaning check's verdict, about 300 to 450 ms, before alerting. That would end
+      the split false alerts (the check said no to all four, three runs of three). It is a
+      change to their choice of 2026-10-16;
+    - the label's dependence on the server's state needs measuring across reloads before
+      any count is final.
 - **Lines vary across the night.** Listeners hear every date, so Nova remembers the lines
   it has used tonight, across dates (`nova/tonight.py`). (What was said on the current
   date, for replies and silences, is a separate context for that date only: decision 0008.) Every prompt sees the lines

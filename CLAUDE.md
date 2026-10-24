@@ -45,7 +45,9 @@ components and say so in the pull request.
 - services/nova: uv run python -m nova.evaluation [--repeat N] runs Nova's show moments,
   attacks, the distress dev set and the conduct dev half against the real model in
   NOVA_LLM, and exits non-zero if any gate fails; --distress and --conduct run one set
-  alone; --held-out runs the held-out sets, once, as the measure (counts only); --night
+  alone; --held-out runs the held-out sets, once, as the measure (counts only);
+  --independent runs the independent held-out set someone other than the developer wrote
+  (services/nova/independent/README.md; never open its file); --night
   runs a full night of eight dates and reports repetition across it (the number we
   track). On demand only, never in CI, and with the machine otherwise idle (the model
   shares the CPU, so a busy machine times checks out); run it before any model change

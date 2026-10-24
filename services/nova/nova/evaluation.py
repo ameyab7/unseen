@@ -44,8 +44,9 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 
-from nova import conduct_set, running_order, script
+from nova import conduct_set, independent_set, running_order, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
 from nova.config import Settings, load_settings
 from nova.cues import (
@@ -1745,6 +1746,49 @@ def render_night(night: Night, *, model_name: str) -> str:
     return "\n".join(lines)
 
 
+def independent(path: Path, classifier: LineModel, settings: Settings, *, repeat: int) -> int:
+    """The independent held-out set (nova/independent_set.py): never written by the
+    developer, never tuned against, and reported as counts only. It isn't run if a sample
+    paraphrases anything the check was built or tuned on; that report names positions in
+    the file, never words, so its author can rewrite them."""
+    if not path.exists():
+        print(
+            f"No independent set at {path}. Someone other than the developer writes it "
+            "(decision 0005): services/nova/independent/README.md says how."
+        )
+        return 2
+    try:
+        samples = independent_set.load(path)
+    except independent_set.IndependentSetError as error:
+        print(f"The independent set can't be used: {error}")
+        return 2
+    close = independent_set.separation(samples)
+    if close:
+        listed = ", ".join(f"{c.position} ({c.score:.2f})" for c in close)
+        print(
+            f"Not run: {len(close)} of {len(samples)} samples paraphrase what the check was "
+            f"built or tuned on (similarity {independent_set.NEAR} or more), so they would "
+            f"measure nothing. Samples by position, with their scores: {listed}."
+        )
+        return 1
+
+    async def evaluate() -> list[DistressResult]:
+        await warm_up(classifier, deadline=settings.warm_up)  # else every 2 s check times out
+        return await run_distress(
+            classifier,
+            timeout=settings.distress_timeout,
+            grace=settings.utterance_grace,
+            max_wait=settings.utterance_max_wait,
+            repeat=repeat,
+            samples=samples,
+        )
+
+    results = asyncio.run(evaluate())
+    name = f"independent held-out set ({path.name}, sha256 {independent_set.fingerprint(path)})"
+    print(render_distress(results, model_name=classifier.name, set_name=name, show_sentences=False))
+    return 0 if distress_summary(results).passed else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--repeat", type=int, default=1, help="runs per case (default 1)")
@@ -1758,6 +1802,13 @@ def main(argv: list[str] | None = None) -> int:
         "--held-out",
         action="store_true",
         help="run the held-out distress set and conduct half: the measure, run once, counts only",
+    )
+    mode.add_argument(
+        "--independent",
+        nargs="?",
+        const=str(independent_set.DEFAULT_PATH),
+        metavar="PATH",
+        help="run the independent held-out set someone else wrote (decision 0005): counts only",
     )
     args = parser.parse_args(argv)
 
@@ -1779,6 +1830,9 @@ def main(argv: list[str] | None = None) -> int:
         tonight = asyncio.run(night())
         print(render_night(tonight, model_name=model.name))
         return 1 if night_misses(tonight) else 0
+
+    if args.independent is not None:
+        return independent(Path(args.independent), classifier, settings, repeat=args.repeat)
 
     held_out = args.held_out
     cases = not (args.distress or args.conduct or held_out)
