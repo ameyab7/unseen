@@ -21,6 +21,7 @@ class Event(StrEnum):
     COMMAND = "command"  # a rehearsal chat command (the command only, never its text)
     SPEECH = "speech"  # the voice detector heard a dater start or stop: the seat only
     YIELDED = "yielded"  # Nova stopped a line for a dater, and what it did next: numbers only
+    MUTED = "muted"  # the moderator muted or unmuted Nova (launch requirement 2)
 
 
 def _allowed(value: object) -> bool:

@@ -94,6 +94,8 @@ class Command(StrEnum):
     LEAVE = "leave"  # the speaking dater leaves
     REPORT = "report"  # the speaking dater presses Report
     START = "start"  # moderator: open a date Nova isn't ready for, with the approved fallbacks
+    MUTE = "mute"  # moderator: Nova stops at once and says nothing until unmuted
+    UNMUTE = "unmute"  # moderator: Nova speaks again, from the next line the date asks for
 
 
 def parse_command(text: str) -> tuple[Command, str] | None:
@@ -325,6 +327,10 @@ class Rehearsal:
         # When the dater speaking now began, as the voice detector heard: None while quiet.
         self._speech_since: float | None = None
         self._holds: set[asyncio.Task[None]] = set()  # mid-line starts, waiting out the hold
+        # The moderator's mute (launch requirement 2): how often, and the lines never said.
+        self.muted = False
+        self.mutes = 0
+        self.unsaid = 0
         # Nova not ready to open the date: the moderator's choice, and how long it took.
         self._decided = asyncio.Event()
         self._start_anyway = False
@@ -435,6 +441,27 @@ class Rehearsal:
         self.held_for = self._clock() - held
         return self._start_anyway
 
+    def mute(self) -> None:
+        """The moderator's mute (launch requirement 2): Nova stops mid-line, nothing it
+        had queued is said, and nothing more until unmute(), safety lines included: the
+        moderator has the date. The date goes on: the show clock, every check, and every
+        alert to the moderator; the fallback segment doesn't play. Muting twice is one
+        mute."""
+        if self.muted:
+            return
+        self.muted = True
+        self.mutes += 1
+        self._stop()
+        self._events.emit(Event.MUTED, muted=True)
+
+    def unmute(self) -> None:
+        """Nova speaks again, from the next line the date asks for: nothing said while
+        muted comes back."""
+        if not self.muted:
+            return
+        self.muted = False
+        self._events.emit(Event.MUTED, muted=False)
+
     def start(self) -> None:
         self._started_at = self._clock()
         self._queue_cues(self._runner.start(self._started_at))
@@ -524,6 +551,10 @@ class Rehearsal:
             case Command.START:
                 self._start_anyway = True
                 self._decided.set()
+            case Command.MUTE:
+                self.mute()
+            case Command.UNMUTE:
+                self.unmute()
             case Command.LEAVE:
                 self._queue_cues(runner.dater_left(now, seat))
             case Command.REPORT:
@@ -721,6 +752,10 @@ class Rehearsal:
             if isinstance(cue, SegmentStarted) and self._live_context:
                 self._writer.entered(cue.segment)  # where the date is, for the arc
             if not isinstance(cue, Say):
+                continue
+            if self.muted:  # never said, and the date's turns never wait for it
+                self.unsaid += 1
+                self._runner.line_done(now, cue)
                 continue
             if reply_due and (cue.moment is Moment.REPLY or cue.text == script.DISTRESS_PAUSE):
                 kind, reply_due = Kind.REPLY, False  # the line that answers the dater
@@ -1043,6 +1078,8 @@ def render_report(rehearsal: Rehearsal) -> str:
             f"Nova wasn't ready: the doors held {r.held_for:.1f} s for the moderator, who "
             + ("opened the date with the approved fallbacks." if r.started else "ended it.")
         )
+    if r.mutes:
+        lines.append(f"Nova muted {r.mutes} times by the moderator: {r.unsaid} lines not said.")
     lines += [
         "",
         "Targets, as set (from the cue; replies from the end of the dater's sentence, grace "
