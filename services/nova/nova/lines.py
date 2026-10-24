@@ -294,6 +294,16 @@ class LineWriter:
             budget_exhausted=self.budget_exhausted,
         )
 
+    def prepare_from(self, other: LineWriter) -> None:
+        """The set pieces another writer prepared for the same pair, with no model call:
+        for the date benchmark (nova/benchmark.py), so a pair's two versions start from
+        the same doors and first questions and differ only where the change under test
+        acts. A show never calls it."""
+        for key, line in other._prepared.items():
+            self._prepared[key] = line
+            self._planned[key] = self._tonight.plan(line.moment, line.text, names=self._names)
+        self.budget_exhausted = other.budget_exhausted
+
     # --- During the date ------------------------------------------------------------------
 
     async def line_for(self, say: Say) -> Line:

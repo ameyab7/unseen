@@ -7,9 +7,14 @@ model only writes the lines inside its beats. Python 3.14, uv.
 
 docs/decisions/0004 onwards: 0004 the show runner (running order, pauses, holds, the
 result), 0005 lines, guardrails, fallbacks and the distress check, 0006 dater conduct, 0007
-the listener delay (proposed). Read the one a change touches first, and update it in the
-same change. Lines waiting for the product owner are in docs/sign-off/ and
-nova/sign_off.py.
+the listener delay (proposed), 0008 this date's context for live replies and silences (not
+tonight's memory: one date, only what the checks cleared, never logged), 0009 the date
+benchmark (whether a change makes a date better: `uv run python -m nova.benchmark`, on
+demand with local Ollama, never in CI; its hard gates fail the run, its indicators hint,
+and only people's blind ratings say whether it helped: `uv run python -m nova.ratings`).
+Iterate on the benchmark's development set; its comparison set is the scorecard, never
+tuned against. Read the one a change touches first, and update it in the same change. Lines
+waiting for the product owner are in docs/sign-off/ and nova/sign_off.py.
 
 ## Rules
 
