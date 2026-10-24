@@ -24,14 +24,23 @@ from typing import Protocol
 from nova import script
 from nova.cards import Pair, Seat
 from nova.config import Settings
-from nova.cues import AlertModerator, Cue, Moment, QuestionSkipped, Say, StopSpeaking
+from nova.cues import (
+    AlertModerator,
+    Cue,
+    ModeratorAlert,
+    Moment,
+    QuestionSkipped,
+    Say,
+    StopSpeaking,
+)
 from nova.decisions import Choice, DecisionError, InMemoryDecisionDesk
 from nova.distress import Checked, DistressCheck, Verdict
 from nova.events import Event, EventLog
 from nova.lines import LIVE_REACTIONS, Line, LineWriter, Source
 from nova.measure import ms
-from nova.models import WARM_UP_TIMEOUT, LineModel, Warmed, warm_up
+from nova.models import LineModel, Warmed, warm_up
 from nova.on_air import Closed, OnAirCues, OnAirListener, ReplyAction
+from nova.priority import SafetyFirst
 from nova.questions import AudienceQuestion, QuestionStatus
 from nova.show_runner import SPEECH_CAP, NoVotes, ShowRunner, waits_for_speech
 from nova.timing import REHEARSAL, Timing
@@ -67,6 +76,7 @@ class Command(StrEnum):
     END = "end"  # moderator: end the date
     LEAVE = "leave"  # the speaking dater leaves
     REPORT = "report"  # the speaking dater presses Report
+    START = "start"  # moderator: open a date Nova isn't ready for, with the approved fallbacks
 
 
 def parse_command(text: str) -> tuple[Command, str] | None:
@@ -150,6 +160,7 @@ class Rehearsal:
         prep_timeout: float = Settings.prep_timeout,
         prep_budget: float = Settings.prep_budget,
         prep_parallel: int | None = Settings.prep_parallel,
+        warm_up: float = Settings.warm_up,
         distress_timeout: float = Settings.distress_timeout,
         utterance_grace: float = Settings.utterance_grace,
         utterance_max_wait: float = Settings.utterance_max_wait,
@@ -157,8 +168,13 @@ class Rehearsal:
     ) -> None:
         self.speaker = speaker
         self._model, self._classifier = model, classifier
+        # Safety checks before lines on a model both use (nova/priority.py): two Ollama
+        # models share one server, which serves one request at a time.
+        both = {(classifier or model).name.split("/")[0], model.name.split("/")[0]}
+        self._gate = SafetyFirst() if both == {"ollama"} else None
         self.voice, self.stt, self.model_name = voice, stt, model.name
         self.prep_budget = prep_budget
+        self.warm_up_deadline = warm_up  # the warm-up's one deadline (NOVA_WARM_UP_SECONDS)
         self._distress_timeout = distress_timeout
         self.utterance_grace, self.utterance_max_wait = utterance_grace, utterance_max_wait
         self._clock = clock
@@ -184,10 +200,16 @@ class Rehearsal:
             prep_parallel=prep_parallel,
             events=self._events,
             tonight=Tonight(),
+            gate=self._gate,
         )
         self._on_air = OnAirListener(
             self._runner,
-            DistressCheck(classifier or model, timeout=distress_timeout, events=self._events),
+            DistressCheck(
+                classifier or model,
+                timeout=distress_timeout,
+                events=self._events,
+                gate=self._gate,
+            ),
             deliver=self._take,
             clock=clock,
             grace=utterance_grace,
@@ -216,6 +238,10 @@ class Rehearsal:
         self.prep_ms = 0
         self.warm_up_ms: int | None = None
         self.warmed: list[tuple[str, Warmed]] = []  # each model warmed up: what for, and how
+        # Nova not ready to open the date: the moderator's choice, and how long it took.
+        self._decided = asyncio.Event()
+        self._start_anyway = False
+        self.held_for: float | None = None
 
     @property
     def finished(self) -> bool:
@@ -256,30 +282,65 @@ class Rehearsal:
 
     # --- The date ---------------------------------------------------------------------------
 
-    async def warm_up(self, *, timeout: float = WARM_UP_TIMEOUT) -> None:
-        """One tiny request to the model before anything else (nova/lines.py), so a cold
-        model loads before prepare() and its budget start; and to the distress check's own
-        model too, at the same time, if it's another model, so its first checks don't time
-        out on the load. The same model is warmed once: twice, one after the other, held a
-        date for two warm-up timeouts when the model hung."""
-        warming = [self._writer.warm_up(timeout=timeout)]
+    async def warm_up(self, *, deadline: float | None = None) -> None:
+        """A tiny request to the model before anything else (nova/models.py, warm_up), held
+        up to one deadline, so a cold model loads before prepare() and its budget start; and
+        to the distress check's own model too, at the same time, if it's another model, so
+        its first checks don't time out on the load. The same model is warmed once: twice,
+        one after the other, held a date for two warm-up timeouts when the model hung. A
+        warm-up that fails says so in the report and the log; the date still prepares within
+        its budget, and anything not ready uses its approved fallback."""
+        deadline = self.warm_up_deadline if deadline is None else deadline
+        warming = [self._writer.warm_up(deadline=deadline)]
         separate = self._classifier is not None and self._classifier.name != self._model.name
         if separate:
-            warming.append(self._warm_classifier(timeout))
+            warming.append(self._warm_classifier(deadline))
         warmed = await asyncio.gather(*warming)
         self.warm_up_ms = warmed[0].ms
         self.warmed = list(zip(("model", "classifier"), warmed, strict=False))
 
-    async def _warm_classifier(self, timeout: float) -> Warmed:
+    async def _warm_classifier(self, deadline: float) -> Warmed:
         assert self._classifier is not None
-        warmed = await warm_up(self._classifier, timeout=timeout)
-        self._events.emit(Event.WARMUP, ms=warmed.ms, error=warmed.error, classifier=True)
+        warmed = await warm_up(self._classifier, deadline=deadline)
+        self._events.emit(
+            Event.WARMUP,
+            ms=warmed.ms,
+            error=warmed.error,
+            attempts=warmed.attempts,
+            classifier=True,
+        )
         return warmed
 
     async def prepare(self) -> None:
         started = self._clock()
         await self._writer.prepare()
         self.prep_ms = ms(self._clock() - started)
+
+    @property
+    def ready(self) -> bool:
+        """Nova can open the date: every model it uses warmed up, and its set pieces aren't
+        all fallbacks. Otherwise the doors hold for the moderator (hold_until_ready)."""
+        warmed = all(warmed.error is None for _, warmed in self.warmed)
+        return warmed and not self._writer.all_fallbacks
+
+    @property
+    def started(self) -> bool:
+        return self._started_at is not None
+
+    async def hold_until_ready(self) -> bool:
+        """Whether to open the date (decision 0005; the product owner's bound, 2026-10-22:
+        Nova ready within 60 s of the session starting, the warm-up's 40 s and the prep
+        budget's 20). Ready: at once. Not ready: the moderator is alerted (NOVA_NOT_READY)
+        and the doors hold until they choose. `start` opens it with the approved fallbacks,
+        `end` ends it before it opens. Never a silent date of fallbacks, and never an
+        automatic wait with nobody told."""
+        if self.ready:
+            return True
+        held = self._clock()
+        self._queue_cues([AlertModerator(ModeratorAlert.NOVA_NOT_READY)])
+        await self._decided.wait()
+        self.held_for = self._clock() - held
+        return self._start_anyway
 
     def start(self) -> None:
         self._started_at = self._clock()
@@ -356,6 +417,10 @@ class Rehearsal:
                 self._queue_cues(runner.moderator_resume(now))
             case Command.END:
                 self._queue_cues(runner.moderator_end(now))
+                self._decided.set()  # before the date: it ends, never opens
+            case Command.START:
+                self._start_anyway = True
+                self._decided.set()
             case Command.LEAVE:
                 self._queue_cues(runner.dater_left(now, seat))
             case Command.REPORT:
@@ -751,6 +816,11 @@ def render_report(rehearsal: Rehearsal) -> str:
             f"{ms_text(s.grace_ms):>9}{ms_text(s.model_ms or None):>8}"
         )
     lines += ["", _utterance_row(r), _airtime_row(r)]
+    if r.held_for is not None:
+        lines.append(
+            f"Nova wasn't ready: the doors held {r.held_for:.1f} s for the moderator, who "
+            + ("opened the date with the approved fallbacks." if r.started else "ended it.")
+        )
     lines += [
         "",
         "Targets, as set (from the cue; replies from the end of the dater's sentence, grace "
@@ -784,9 +854,10 @@ def render_report(rehearsal: Rehearsal) -> str:
 def _warm_up_text(what: str, warmed: Warmed) -> str:
     """The warm-up of the model (or the classifier): a failure says so, never "warmed up"."""
     name = "Model" if what == "model" else "Distress check's model"
+    tries = f"{warmed.attempts} attempt" + ("s" if warmed.attempts != 1 else "")
     if warmed.error is not None:
-        return f"{name} warm-up failed ({warmed.error}) after {warmed.ms / 1000:.1f} s. "
-    return f"{name} warmed up in {warmed.ms / 1000:.1f} s. "
+        return f"{name} warm-up failed ({warmed.error}) after {warmed.ms / 1000:.1f} s, {tries}. "
+    return f"{name} warmed up in {warmed.ms / 1000:.1f} s ({tries}). "
 
 
 def _utterance_row(r: Rehearsal) -> str:

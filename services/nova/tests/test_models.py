@@ -212,5 +212,5 @@ class Down:
 )
 async def test_a_warm_up_says_when_the_model_cant_answer(model, error):
     """A dead or misconfigured model used to look warm: 0 ms and no error."""
-    warmed = await warm_up(model, timeout=0.05)
+    warmed = await warm_up(model, deadline=0.05)
     assert warmed.error is error

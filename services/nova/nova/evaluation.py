@@ -1517,7 +1517,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.night:
 
         async def night() -> Night:
-            await warm_up(model)  # a cold load would use up date 1's prep budget
+            await warm_up(model, deadline=settings.warm_up)  # not in date 1's prep budget
             return await run_night(
                 model,
                 live_timeout=settings.live_timeout,
@@ -1545,7 +1545,7 @@ def main(argv: list[str] | None = None) -> int:
         list[tuple[str, list[ConductResult]]],
     ]:
         for warming in {model.name: model, classifier.name: classifier}.values():
-            await warm_up(warming)  # a cold load would time out every 2 s check
+            await warm_up(warming, deadline=settings.warm_up)  # else every 2 s check times out
         results = []
         if cases:
             results = await run_cases(

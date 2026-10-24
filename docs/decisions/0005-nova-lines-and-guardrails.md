@@ -417,7 +417,97 @@ Date: 2026-10-13. Status: accepted.
   same time (`warm_up`, its answer ignored, its time and any failure logged as a `warmup`
   event and shown in the report), so a cold load happens before the budget starts; the
   check's model is warmed separately only if it is another model. A model that hangs holds
-  the date for the warm-up's 30 s and the budget, not two warm-ups one after the other.
+  the date for the warm-up's deadline and the budget, not two warm-ups one after the other.
+  **The warm-up has one deadline** (`NOVA_WARM_UP_SECONDS`, default 90 s, since
+  2026-10-21; it was one 30 s request). Measured on the development PC with the OpenAI SDK
+  Nova uses: Ollama drops a cancelled request's work, running or queued (a tiny request
+  right after cancelling a 600-token one took 0.36 s; behind one left running, 6.09 s),
+  but cancelling the only request waiting on a cold load aborts the load, and the next
+  request starts it again (17.5 s, the same as cold). So a 30 s warm-up against a slower
+  load cancelled it, prep started the load again inside its own 45 s budget, and most of
+  the date's set pieces fell back. Now the warm-up holds one request for the whole
+  deadline, never cutting a load short to try again; only a fast failure that may pass
+  (Ollama not up yet or unreachable, a 5xx, a 429, Claude overloaded: `models.retryable`)
+  is tried again, after 1, 2, 4 then 8 s, at most 5 tries, within the deadline. Anything
+  else ends it at once: a bad key, a missing permission, a model not pulled, a request or
+  parameter it rejects (`rejected`), a refusal, or anything it can't tell (`error`). The
+  `warmup` event and the rehearsal report give the time, the tries and the reason. Measured:
+  a cold load warmed in 17.8 s on one try; an Ollama that wasn't there gave up after 5
+  tries in 26.5 s; a model not pulled was rejected on one try in 269 ms. If the warm-up
+  still fails, prep runs within its budget, approved fallbacks stand in for anything not
+  ready, and, since 2026-10-22, the date doesn't open until the moderator says so (below).
+  Live lines and checks run on their own timeouts, and an unchecked check alerts the
+  moderator. An Ollama line cut off at the token limit is
+  an error now, so its fallback is said, not half a line. Live lines and checks are
+  cancelled at their timeouts, and Ollama drops that work too, so timed-out requests don't
+  queue up behind the next ones; with `NOVA_PREP_PARALLEL` at 1, a distress check waits
+  behind at most one set piece: measured during a full prepare with a check every 0.4 s,
+  27 checks, median 586 ms, worst 1,315 ms, none unchecked (290 ms idle), and prep took
+  28.6 s instead of about 12. Limits: with Claude, a cancelled request may still run (and
+  be billed) on Anthropic's side, though nothing queues behind it here; and the classifier
+  shares Ollama's one request at a time with the line model unless `NOVA_CLASSIFIER_LLM`
+  names a model elsewhere. A smaller classifier on the same Ollama would need a model pulled
+  and memory this PC's 16 GB GPU hasn't got next to Gemma, so that is the product owner's
+  call, not a default.
+  **Ready within 60 s, or the moderator decides** (2026-10-22, the product owner's bound).
+  - Two of the eight Playground rehearsals of 2026-10-18 opened a date of fallbacks after
+    a failed warm-up, and only the report said so.
+  - Measured since on the development PC, cold to ready: 30.0, 29.0 and 29.5 s (a load of
+    17.6 to 18.8 s, then all ten set pieces in 11.2 to 11.5 s, every one the model's).
+  - The defaults are now a 40 s warm-up and a 20 s prep budget, so 60 s at most; it was
+    135 s (90 and 45).
+  - If a model doesn't warm up, or every set piece is a fallback, the date doesn't open
+    (`Rehearsal.hold_until_ready`, the agent): the moderator gets `nova_not_ready`, and the
+    doors hold until they choose. `start` opens the date with the approved fallbacks;
+    `end` ends it before it opens. The report says how long it held.
+  - Never a silent date of fallbacks, and never a wait nobody is told about.
+  - Limits:
+    - Nothing retries the warm-up while the doors hold; the moderator decides.
+    - A set piece the budget cuts off still gets its fallback, as before, when others are
+      the model's.
+    - A slower machine, or a larger model, may need the two settings raised, with the
+      bound.
+
+  **Claude and cancelled requests** (anthropic SDK 0.125, non-streaming `messages.create`,
+  `max_retries=0`). A timeout cancels the coroutine, and httpx closes the connection.
+  Nothing shows Anthropic stops generating, or billing, when it does: that wasn't
+  demonstrated, since it would need a paid call. So assume an abandoned request runs and is
+  billed to the end. What the code guarantees, and the tests show
+  (`tests/test_priority.py`), is that an abandoned request is never followed by a second
+  one for the same thing:
+  - a live line that times out gets its fallback, one request;
+  - a check that times out alerts the moderator, one request;
+  - set pieces cut off by the budget get their fallbacks, never asked for again;
+  - the warm-up never sends again after a timeout, only after a fast failure that may pass.
+
+  **The classifier's slot, measured under load** (2026-10-22, a check every 0.4 s, 2 s
+  timeout):
+
+  | Load | Median | 95th percentile | Worst |
+  | --- | --- | --- | --- |
+  | Idle | 377 ms | 444 ms | 448 ms |
+  | During a full prepare | 698 to 834 ms | 1,161 to 2,013 ms | 1,209 to 2,014 ms |
+  | Both daters checked during live lines | 1,307 ms | 1,460 ms | 1,760 ms |
+
+  One prepare run had 8 of 36 checks time out (each alerted the moderator); the four others
+  had none. A check isn't isolated: it waits for the request already running and for the
+  other dater's check.
+
+  A gate now holds new line requests while a check waits (`nova/priority.py`, the product
+  owner's choice). It gives checks first place among requests not yet sent. Measured on this
+  PC, it made no difference: during prep, a 95th percentile of 1,169 to 1,296 ms with it,
+  1,189 to 1,222 ms without; with both daters, 1,530 ms with it, 1,503 ms without. With
+  `NOVA_PREP_PARALLEL` at 1 and Ollama serving in order, nothing else is queued for it to
+  jump. It matters only where several line requests are out at once (a show server with a
+  higher `OLLAMA_NUM_PARALLEL`).
+
+  Isolating the check needs the product owner's choice of infrastructure:
+  - a second, small model on its own Ollama (`NOVA_CLASSIFIER_LLM`, another GPU or machine);
+  - a server with room for both models side by side;
+  - or a hosted classifier, which sends every utterance to that provider and needs the
+    privacy notice (above).
+
+  Until then, a check that runs out of time alerts the moderator; it never passes silently.
   `NOVA_DISTRESS_TIMEOUT_SECONDS` (default 2) for the
   distress check: warm Gemma took a median of 193-195 ms and at most 278 ms, so 2 s leaves
   room for a slower model; a check that times out alerts the moderator, and a yes that
