@@ -40,6 +40,12 @@ class Violation(StrEnum):
     # Makes a difference between the daters dramatic ("opposite sides of the clock") when no
     # dater said so (nova/grounding.py): checked by the line writer too.
     DRAMATIZED = "dramatized_difference"
+    # A show fact no task gives, or a segment that isn't happening now (nova/show_state.py):
+    # checked by the line writer, which knows the moment and the segment.
+    INVENTS_SHOW_FACT = "invents_show_fact"
+    WRONG_SEGMENT = "wrong_segment"
+    # The meaning check flagged it, or couldn't judge it in time (nova/meaning.py).
+    MEANING = "meaning"
     DECISION = "decision"
     LOOKS_OR_VOICE = "looks_or_voice"
     PERSONAL_DETAIL = "personal_detail"

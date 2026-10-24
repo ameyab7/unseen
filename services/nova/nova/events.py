@@ -22,6 +22,7 @@ class Event(StrEnum):
     SPEECH = "speech"  # the voice detector heard a dater start or stop: the seat only
     YIELDED = "yielded"  # Nova stopped a line for a dater, and what it did next: numbers only
     MUTED = "muted"  # the moderator muted or unmuted Nova (launch requirement 2)
+    MEANING_CHECK = "meaning_check"  # the meaning check on one of Nova's lines: label and time
 
 
 def _allowed(value: object) -> bool:

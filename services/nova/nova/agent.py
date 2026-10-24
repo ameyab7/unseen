@@ -240,6 +240,9 @@ async def rehearse(ctx: JobContext) -> None:
         utterance_grace=settings.utterance_grace,
         utterance_max_wait=settings.utterance_max_wait,
         share_context=settings.shares_dialogue,  # real daters' words: the privacy notice
+        meaning_check=settings.meaning_check,
+        meaning_live=settings.meaning_live,
+        meaning_timeout=settings.meaning_timeout,
     )
 
     def on_user_state(event: Any) -> None:

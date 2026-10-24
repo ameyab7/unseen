@@ -100,6 +100,14 @@ class Settings:
     # is true: off until the privacy notice covers that provider and data flow (decision
     # 0005). A local model (Ollama on this machine) always sees them.
     dialogue_to_provider: bool = False
+    # The meaning check on Nova's lines (nova/meaning.py, decision 0005): on set pieces before
+    # the date unless turned off; on live lines only when turned on, which waits for a
+    # labelled set and room in the classifier's slot (the product owner's choice, 2026-10-23).
+    meaning_check: bool = True
+    meaning_live: bool = False
+    # How long the check on one set piece may take before the date; a live line's check gets
+    # what's left of the live timeout instead. Not judged in time: the line isn't kept.
+    meaning_timeout: float = 5.0
 
     REQUIRED: ClassVar[tuple[str, ...]] = (
         "LIVEKIT_URL",
@@ -123,6 +131,9 @@ class Settings:
         "NOVA_VOICE",
         "NOVA_STT",
         "NOVA_DIALOGUE_TO_PROVIDER",
+        "NOVA_MEANING_CHECK",
+        "NOVA_MEANING_LIVE",
+        "NOVA_MEANING_TIMEOUT_SECONDS",
     )
 
     @classmethod
@@ -171,6 +182,9 @@ class Settings:
             voice=_voice(env.get("NOVA_VOICE", "").strip() or cls.voice),
             stt=_stt(env.get("NOVA_STT", "").strip() or cls.stt),
             dialogue_to_provider=_flag(env, "NOVA_DIALOGUE_TO_PROVIDER"),
+            meaning_check=_flag(env, "NOVA_MEANING_CHECK", default=cls.meaning_check),
+            meaning_live=_flag(env, "NOVA_MEANING_LIVE"),
+            meaning_timeout=_seconds(env, "NOVA_MEANING_TIMEOUT_SECONDS", cls.meaning_timeout),
         )
 
     @property
@@ -195,9 +209,11 @@ def _stt(value: str) -> str:
     return value
 
 
-def _flag(env: Mapping[str, str], name: str) -> bool:
+def _flag(env: Mapping[str, str], name: str, *, default: bool = False) -> bool:
     raw = env.get(name, "").strip().lower()
-    if raw in ("", "false", "0", "no"):
+    if not raw:
+        return default
+    if raw in ("false", "0", "no"):
         return False
     if raw in ("true", "1", "yes"):
         return True

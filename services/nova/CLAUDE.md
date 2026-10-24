@@ -28,7 +28,8 @@ waiting for the product owner are in docs/sign-off/ and nova/sign_off.py.
   `uv run python -m nova.evaluation` against local Gemma, before and after, and put both
   summaries in the pull request. It covers the cases and the distress and conduct dev sets,
   each a gate (missed distress, false pauses, false alerts, unchecked checks, conduct
-  recall). `--night` is the number we track and a gate. Tune on dev only; `--held-out`
+  recall, and the meaning check on Nova's lines, `--meaning`). `--night` is the number we
+  track and a gate. Tune on dev only; `--held-out`
   runs the held-out sets once a change is settled, and prints counts, never sentences
   (the first held-out set was consulted on 2026-10-23, decision 0005). `--independent`
   runs the independent held-out set, written by someone other than the developer: never

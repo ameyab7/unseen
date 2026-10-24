@@ -7,7 +7,8 @@ held-out sentences, and on 2026-10-23 a set of failures printed more. A sentence
 failure can steer the next change, and then the set no longer measures anything. So every
 failing report, and any captured output, has each protected line replaced, whole or cut
 short by pytest's truncation, before anything is shown. Protected: each held-out sentence
-and every line that comes with one (what was said before it, what it answers, its finals);
+and every line that comes with one (what was said before it, what it answers, its finals),
+and the meaning check's held-out lines with what they answer;
 the independent set's, if one is on this machine, read here and never shown; and those of
 any independent set a test loads through the evaluation (nova.independent_set.load).
 """
@@ -21,6 +22,7 @@ import pytest
 from nova import independent_set
 from nova.conduct_set import HELD_OUT_HALF
 from nova.distress_set import DISTRESS_SET, Sample
+from nova.meaning_set import HELD_OUT_HALF as MEANING_HELD_OUT
 
 REDACTED = "[held-out]"
 # pytest cuts a long value to its head and tail around "...": a piece this long or longer
@@ -41,6 +43,8 @@ def _held_out() -> set[str]:
     lines = _lines(DISTRESS_SET)
     for conduct in HELD_OUT_HALF:
         lines.update((conduct.sentence, *conduct.other, *conduct.earlier))
+    for line in MEANING_HELD_OUT:  # the meaning check's held-out lines (nova/meaning_set.py)
+        lines.update((line.line, line.answering, *(said for _, said in line.said)))
     if independent_set.DEFAULT_PATH.exists():  # the real set, never shown
         with contextlib.suppress(independent_set.IndependentSetError):
             lines |= _lines(independent_set.load(independent_set.DEFAULT_PATH))

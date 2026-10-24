@@ -29,7 +29,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
-from nova import prompts, quality, running_order, script
+from nova import prompts, quality, running_order, script, show_state
 from nova.cards import BlindCard, Pair, Seat
 from nova.config import Settings
 from nova.cues import Moment, RoomFacts, Say, Segment, Situation
@@ -46,6 +46,7 @@ from nova.guardrails import (
     clean,
     question_is_off_limits,
 )
+from nova.meaning import Judged, Meaning, MeaningCheck, meaning_prompt
 from nova.measure import ms_since
 from nova.models import WARM_UP_DEADLINE, LineModel, ModelRefused, Warmed, warm_up
 from nova.priority import SafetyFirst
@@ -150,6 +151,8 @@ class Line:
     # Written with this date's context in its prompt, so it may carry what a dater said:
     # never kept in tonight's memory (decision 0008).
     from_date: bool = False
+    # What the meaning check said of the model line (nova/meaning.py); None if not asked.
+    meaning: Meaning | None = None
 
 
 @dataclass(frozen=True)
@@ -175,6 +178,7 @@ class Selection:
     attempts: tuple[Attempt, ...]
     scored: tuple[quality.Scored, ...]
     chosen: int | None
+    judged: tuple[tuple[int, Judged], ...] = ()  # the meaning check, candidate by candidate
 
 
 def fallback_lines(pair: Pair, next_pair: Pair | None) -> list[tuple[Moment, str]]:
@@ -216,8 +220,12 @@ class LineWriter:
         context: DateContext | None = None,
         share_context: bool = True,
         gate: SafetyFirst | None = None,
+        meaning: MeaningCheck | None = None,
+        meaning_live: bool = False,
     ) -> None:
-        """prep_parallel: at most this many requests for set pieces in flight at once
+        """meaning: the meaning check on model lines (nova/meaning.py): set pieces, and live
+        lines only with meaning_live (NOVA_MEANING_LIVE); None, the patterns alone.
+        prep_parallel: at most this many requests for set pieces in flight at once
         (NOVA_PREP_PARALLEL); None, no limit. context: this date's (decision 0008), shared
         with the on-air listener, which adds the daters' turns; None, replies and silence
         prompts work from what was just said and the cards, as before. share_context: False
@@ -226,6 +234,7 @@ class LineWriter:
         self._context = context
         self.share_context = share_context
         self._gate = gate  # safety checks first, on a model they share (nova/priority.py)
+        self._meaning, self.meaning_live = meaning, meaning_live
         self._segment: Segment | None = None  # where the date is (entered), for the arc
         self._model = model
         self._prep_slots = asyncio.Semaphore(prep_parallel) if prep_parallel else None
@@ -318,6 +327,7 @@ class LineWriter:
             error=line.error,
             violations=line.violations,
             context=line.from_date,
+            meaning=line.meaning,
         )
         return line
 
@@ -365,8 +375,19 @@ class LineWriter:
             return Line("", Source.FALLBACK, say.moment, error=ErrorKind.DECLINED)
 
         from_date = self._this_date(say) is not None
+        started = time.monotonic()
         attempt = await self._attempt(say, self._prompt_for(say), self._live_timeout)
-        line = self._settle(say, attempt, Source.MODEL)
+        if attempt.ok and attempt.text is not None and self._meaning and self.meaning_live:
+            # In what's left of the live timeout: a line not judged in time isn't said.
+            left = self._live_timeout - (time.monotonic() - started)
+            verdict = await self.judge(say, attempt.text, timeout=left)
+            attempt = replace(attempt, ms=ms_since(started))
+            if not verdict.passed:
+                flagged = replace(attempt, violations=(Violation.MEANING,))
+                return replace(self._fallback(say, flagged), meaning=verdict.label)
+            line = replace(self._settle(say, attempt, Source.MODEL), meaning=verdict.label)
+        else:
+            line = self._settle(say, attempt, Source.MODEL)
         return replace(line, from_date=True) if from_date and line.source is Source.MODEL else line
 
     def entered(self, segment: Segment) -> None:
@@ -415,18 +436,67 @@ class LineWriter:
     async def _prepare_one(self, say: Say) -> Line:
         """Three candidates at once, then the best (nova/quality.py, best): only one that
         passes the guardrails and makes nothing up about the show; then the one that does
-        its moment's job best; then the least like what Nova has said tonight. If none
-        qualifies, the approved fallback. Choosing is a few word comparisons, no model."""
+        its moment's job best; then the least like what Nova has said tonight. Then the
+        meaning check, if there is one, on the candidate chosen: flagged or not judged, the
+        next best is checked, and so on. If none qualifies, the approved fallback."""
         attempts = await asyncio.gather(*(self._prepare_attempt(say) for _ in range(CANDIDATES)))
         scored = [self._score(say, attempt) for attempt in attempts]
         chosen = quality.best(scored)
-        self.selections.append(Selection(say.moment, tuple(attempts), tuple(scored), chosen))
+        judged: list[tuple[int, Judged]] = []
+        while chosen is not None and self._meaning is not None:
+            slot = self._prep_slots or contextlib.nullcontext()
+            async with slot:  # a request like a candidate's: a check during prep waits for one
+                verdict = await self.judge(say, attempts[chosen].text or "")
+            judged.append((chosen, verdict))
+            if verdict.passed:
+                break
+            scored[chosen] = replace(scored[chosen], ok=False)  # never chosen again
+            chosen = quality.best(scored)
+        selection = Selection(say.moment, tuple(attempts), tuple(scored), chosen, tuple(judged))
+        self.selections.append(selection)
         if chosen is None:
+            if judged:  # the meaning check flagged every candidate the ranking would keep
+                k, last = judged[-1]
+                flagged = replace(attempts[k], violations=(Violation.MEANING,))
+                return replace(self._fallback(say, flagged), meaning=last.label)
             passed = next((attempt for attempt in attempts if attempt.ok), None)
             if passed is None:  # none passed the guardrails: their reasons, as before
                 return self._settle(say, attempts[0], Source.PREPARED)
             return self._fallback(say, replace(passed, error=ErrorKind.QUALITY))
-        return self._settle(say, attempts[chosen], Source.PREPARED)
+        line = self._settle(say, attempts[chosen], Source.PREPARED)
+        return replace(line, meaning=judged[-1][1].label) if judged else line
+
+    async def judge(self, say: Say, text: str, *, timeout: float | None = None) -> Judged:
+        """The meaning check on one model line, with what it's judged against: the cards
+        the guardrails allow, the segment it's said in, each dater's own words on this date
+        (only when they may go to the model) and what it answers."""
+        assert self._meaning is not None
+        cards = self._cards(say)
+        said = None
+        if self._context is not None and self.share_context and say.moment in WITH_THIS_DATE:
+            names = {card.first_name for card in cards}
+            said = {
+                self._pair.card(seat).first_name: self._context.said_by(seat)
+                for seat in Seat
+                if self._pair.card(seat).first_name in names
+            }
+        answering = (say.detail or "") if say.moment in (Moment.REPLY, Moment.FROM_THE_ROOM) else ""
+        prompt = meaning_prompt(
+            say,
+            text,
+            cards=cards,
+            segment=show_state.segment_for(say.moment, self._segment),
+            said=said,
+            answering=answering,
+        )
+        return await self._meaning.judge(say, prompt, timeout=timeout)
+
+    def _cards(self, say: Say) -> list[BlindCard]:
+        """The daters a line may name: only the one who's here when the other is away."""
+        away = _away(say)
+        if away is not None:
+            return [self._pair.card(away.other)]
+        return cards_for(say.moment, self._pair, self._next_pair)
 
     def _score(self, say: Say, attempt: Attempt) -> quality.Scored:
         """A candidate's faults and repetition, for choosing among them."""
@@ -486,10 +556,7 @@ class LineWriter:
         if self._context is not None and say.moment in WITH_THIS_DATE:
             said += self._context.spoken()  # what its prompt may have seen of this date
         away = _away(say)
-        if away is not None:
-            cards = [self._pair.card(away.other)]  # one dater is away: only the one who's here
-        else:
-            cards = cards_for(say.moment, self._pair, self._next_pair)
+        cards = self._cards(say)  # one dater is away: only the one who's here
         found = check(
             text,
             names=frozenset({card.first_name for card in cards} | {"Nova"}),
@@ -511,6 +578,11 @@ class LineWriter:
             found = tuple(v for v in Violation if v in {*found, Violation.COMMON_GROUND})
         if say.moment is not Moment.LIGHTNING_QUESTION and dramatized(text, evidence):
             found = tuple(v for v in Violation if v in {*found, Violation.DRAMATIZED})
+        # Set pieces rank an invented show fact out (quality.SEVERE); live lines had nothing.
+        if say.moment not in SET_PIECES and show_state.invents_show_fact(say.moment, text):
+            found = tuple(v for v in Violation if v in {*found, Violation.INVENTS_SHOW_FACT})
+        if show_state.wrong_segments(text, show_state.segment_for(say.moment, self._segment)):
+            found = tuple(v for v in Violation if v in {*found, Violation.WRONG_SEGMENT})
         return found
 
     def _evidence(self, say: Say, cards: Sequence[BlindCard]) -> dict[str, list[str]]:

@@ -40,6 +40,7 @@ from nova.decisions import Choice, DecisionError, InMemoryDecisionDesk
 from nova.distress import Checked, DistressCheck, Verdict
 from nova.events import Event, EventLog
 from nova.lines import LIVE_REACTIONS, Line, LineWriter, Source
+from nova.meaning import MeaningCheck
 from nova.measure import ms
 from nova.models import LineModel, Warmed, warm_up
 from nova.on_air import Closed, OnAirCues, OnAirListener, ReplyAction
@@ -228,6 +229,9 @@ class Rehearsal:
         yield_hold: float = YIELD_HOLD,
         live_context: bool = True,
         share_context: bool = True,
+        meaning_check: bool = Settings.meaning_check,
+        meaning_live: bool = Settings.meaning_live,
+        meaning_timeout: float = Settings.meaning_timeout,
     ) -> None:
         """live_context: replies and silence prompts see this date's context (decision 0008)
         and the arc's segment (decision 0005). False runs them as before both, for the date
@@ -277,6 +281,13 @@ class Rehearsal:
             context=context,
             share_context=share_context,
             gate=self._gate,
+            # Nova's lines checked for meaning on the classifier's model, after its checks.
+            meaning=MeaningCheck(
+                classifier or model, timeout=meaning_timeout, events=self._events, gate=self._gate
+            )
+            if meaning_check
+            else None,
+            meaning_live=meaning_live,
         )
         self._on_air = OnAirListener(
             self._runner,

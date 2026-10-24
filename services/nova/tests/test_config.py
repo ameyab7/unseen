@@ -241,3 +241,33 @@ def test_a_live_date_s_turns_go_to_a_model_that_isnt_local_only_once_approved(en
 def test_a_malformed_dialogue_setting_is_caught():
     with pytest.raises(ConfigError, match="NOVA_DIALOGUE_TO_PROVIDER must be true or false"):
         Settings.from_env({**CLAUDE, "NOVA_DIALOGUE_TO_PROVIDER": "maybe"})
+
+
+def test_the_meaning_check_is_on_for_set_pieces_and_off_for_live_lines_by_default():
+    """Decision 0005, launch requirement 1: the product owner's choice of 2026-10-23."""
+    settings = Settings.from_env(GOOD)
+    assert (settings.meaning_check, settings.meaning_live, settings.meaning_timeout) == (
+        True,
+        False,
+        5.0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("values", "check", "live"),
+    [
+        ({"NOVA_MEANING_CHECK": "false"}, False, False),
+        ({"NOVA_MEANING_LIVE": "true"}, True, True),
+        ({"NOVA_MEANING_CHECK": "0", "NOVA_MEANING_LIVE": "1"}, False, True),
+    ],
+)
+def test_the_meaning_check_can_be_turned_on_and_off(values, check, live):
+    settings = Settings.from_env({**GOOD, **values})
+    assert (settings.meaning_check, settings.meaning_live) == (check, live)
+
+
+def test_a_malformed_meaning_setting_is_caught():
+    with pytest.raises(ConfigError, match="NOVA_MEANING_LIVE must be true or false"):
+        Settings.from_env({**GOOD, "NOVA_MEANING_LIVE": "sometimes"})
+    with pytest.raises(ConfigError, match="NOVA_MEANING_TIMEOUT_SECONDS"):
+        Settings.from_env({**GOOD, "NOVA_MEANING_TIMEOUT_SECONDS": "soon"})

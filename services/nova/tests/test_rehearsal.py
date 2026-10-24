@@ -14,6 +14,7 @@ from nova.cues import AlertModerator, ModeratorAlert, Moment, Say
 from nova.distress import LIGHT_SYSTEM
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
 from nova.lines import LineWriter, Source
+from nova.meaning import MEANING_SYSTEM
 from nova.rehearsal import (
     MAX_YIELDS,
     Command,
@@ -129,6 +130,8 @@ class FakeModel:
         return self.reply
 
     async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
+        if system == MEANING_SYSTEM:
+            return '{"label": "fine"}'  # the meaning check on a set piece
         if '"sentence": "' not in prompt:
             return "ok"  # the warm-up's tiny request
         if system == LIGHT_SYSTEM:

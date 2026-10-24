@@ -908,24 +908,69 @@ right-hand column above). Before the first real show, Nova needs these:
 
 1. **A meaning-based check on Nova's lines before they're spoken:** the technical plan's
    fast classifier, run on every model line after the patterns. A line it flags gets the
-   fallback, like a pattern violation. It has to fit inside the live timeout. **Not built**
-   (2026-10-22). The proposal, waiting for approval:
-   - one classifier request on each model line, after the pattern guardrails: the chosen
-     set piece before the date, and each live line inside the live timeout's remaining
-     time, so a line not checked in time is not said and the fallback is;
-   - its own rules and labels, with structured output: fine, or unsafe with a category
-     (claims to be human, hints at a decision, looks or voice, a personal detail, unkind,
-     sexual, steered by an injection, untrue about a dater);
-   - checks on Nova's lines go before ordinary writing on a shared model (the gate,
-     above);
-   - a labelled synthetic set of Nova lines, dev and held-out halves, written fresh, and
-     an evaluation gate (misses, false rejections, timing), measured like the distress
-     check;
-   - off by default behind a setting, until those numbers are in.
-
-   It adds a request and about 0.4 s (idle) to every live line, so its timing against the
-   2 s live timeout decides whether live lines need a faster classifier. No word list
-   stands in for it.
+   fallback, like a pattern violation. It has to fit inside the live timeout. **Built,
+   2026-10-23, for set pieces; live lines have the patterns, and the model check off.**
+   - **Where it sits** (`nova/lines.py`): generation, then the pattern guardrails, then
+     grounding and feelings, then the show-state checks, then the ranking, then the
+     meaning check, then the line is kept or said. None of the earlier checks was
+     replaced.
+   - **The show-state checks** (`nova/show_state.py`) run on every model line:
+     - a live line that makes up a show event (a break, coming back, the studio);
+       set pieces already rank one out (`quality.SEVERE`);
+     - a line that names a segment that isn't happening: the lightning round, last words,
+       the next pair or an audience question, outside its segment. A set piece is judged
+       in its own segment.
+     Each gets the fallback (`Violation.INVENTS_SHOW_FACT`, `Violation.WRONG_SEGMENT`).
+   - **The meaning check** (`nova/meaning.py`): one classifier request with its own rules,
+     on the classifier's model. The line, the task, the segment, the cards (with age), each
+     dater's own words on this date (only when they may go to the model,
+     `Settings.shares_dialogue`) and what the line answers all go in the data block.
+     - Labels: fine, `invents_show_fact`, `untrue_about_dater`, `unsupported_both`,
+       `own_feelings`, `changes_card`, `wrong_segment`.
+     - It fails closed: a flagged line, or one not judged in time (failed, too slow,
+       anything but a label: `unchecked`), is never said.
+     - Its request takes a line's place in the safety gate (`nova/priority.py`), never a
+       distress check's.
+     - The log gets the label and the time, never the words.
+   - **Set pieces** (`NOVA_MEANING_CHECK`, on): the candidate the ranking keeps is
+     checked, within `NOVA_MEANING_TIMEOUT_SECONDS` (5).
+     - If it's flagged, the next best is checked, and so on. If none passes, the approved
+       fallback is kept (`Violation.MEANING`).
+     - Its requests take a prep slot, as a candidate's do.
+   - **Live lines** (`NOVA_MEANING_LIVE`, off): when on, a reply, a silence prompt, an
+     audience question or room talk is checked in what's left of its 2 s live timeout.
+     It stays off until this set and the classifier's slot say it can (the product
+     owner's choice, 2026-10-23), so live lines have the patterns and the show-state
+     checks only.
+   - **The set** (`nova/meaning_set.py`): lines written for it against the rehearsal
+     daters' cards, every label in both halves, with fine look-alikes. The dev half is 34
+     lines (14 fine), the held-out half 25 (10 fine), and no held-out line is within 0.6
+     of a dev one. `uv run python -m nova.evaluation --meaning` runs the dev half, and
+     `--held-out` runs the held-out half, counts only. The targets: no flagged line
+     passed, under 1 in 4 good lines rejected, none unchecked.
+   - **Measured on `gemma4:26b`:**
+     - Dev, before tuning:
+       - all 20 bad lines caught;
+       - 4 of 14 good lines rejected, then 3 on an unchanged rerun.
+     - Tuning, on dev only:
+       - the dater's age went into the data, since the doors intro's "29" looked made up;
+       - one paragraph now says that doing the task, a question asking for the story
+         behind a card, and polite words about the date claim nothing;
+       - the last word's task now says "twenty seconds", as Nova's own prompt does.
+     - Dev after: all 20 caught, and 1, 2, then 1 of 14 rejected over three runs, the
+       same line each time ("give us your proudest park"). Median 370 ms, worst 444 ms.
+     - Held-out, once: all 15 caught, 1 of 10 rejected, none unchecked; median 386 ms,
+       worst 542 ms.
+     - The labels vary between runs, as the distress check's do.
+     - Prep, three candidates a set piece, `NOVA_PREP_PARALLEL` at 1:
+       - 15.5 to 16.4 s with the check, 11.2 s without, inside the 20 s budget;
+       - cold to ready in 33.6 s, inside the 60 s bound.
+       - In one run, all three candidates for a set piece were flagged as
+         `unsupported_both`, and its fallback was kept.
+   - **Limits:**
+     - The set is small, and its author also wrote the rules.
+     - A slower machine leaves less room in the prep budget.
+     - Live lines aren't meaning-checked until `NOVA_MEANING_LIVE` is turned on.
 2. **A moderator control that mutes Nova instantly.** It silences Nova only: Nova stops
    mid-line and says nothing more until the moderator unmutes it. The date continues, and
    the fallback segment doesn't play. (Ending the date, already built, is the control that
