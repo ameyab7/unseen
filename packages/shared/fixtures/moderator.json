@@ -1,0 +1,38 @@
+{
+  "command": {
+    "valid": [
+      { "type": "mute", "seq": 1761216000000, "session": "a1b2c3d4e5f6" },
+      { "type": "unmute", "seq": 1, "session": "a1b2c3d4e5f6" },
+      { "type": "mute", "seq": 2.0, "session": "s" }
+    ],
+    "invalid": [
+      { "type": "mute", "seq": 1 },
+      { "type": "mute", "session": "a1b2c3d4e5f6" },
+      { "type": "end", "seq": 1, "session": "a1b2c3d4e5f6" },
+      { "type": "mute", "seq": 0, "session": "a1b2c3d4e5f6" },
+      { "type": "mute", "seq": -5, "session": "a1b2c3d4e5f6" },
+      { "type": "mute", "seq": 1.5, "session": "a1b2c3d4e5f6" },
+      { "type": "mute", "seq": "1", "session": "a1b2c3d4e5f6" },
+      { "type": "mute", "seq": true, "session": "a1b2c3d4e5f6" },
+      { "type": "mute", "seq": 1, "session": "" },
+      { "type": "mute", "seq": 1, "session": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+      { "type": "mute", "seq": 1, "session": "a1b2c3d4e5f6", "role": "moderator" },
+      ["mute"],
+      "mute",
+      null
+    ]
+  },
+  "state": {
+    "valid": [
+      { "type": "nova_state", "session": "a1b2c3d4e5f6", "muted": true, "seq": 1761216000000, "result": "applied" },
+      { "type": "nova_state", "session": "a1b2c3d4e5f6", "muted": false, "seq": 0, "result": "state" },
+      { "type": "nova_state", "session": "a1b2c3d4e5f6", "muted": true, "seq": 3, "result": "stale" }
+    ],
+    "invalid": [
+      { "type": "nova_state", "session": "a1b2c3d4e5f6", "muted": "yes", "seq": 0, "result": "state" },
+      { "type": "nova_state", "session": "a1b2c3d4e5f6", "muted": true, "seq": 0, "result": "ok" },
+      { "type": "state", "session": "a1b2c3d4e5f6", "muted": true, "seq": 0, "result": "state" },
+      { "type": "nova_state", "muted": true, "seq": 0, "result": "state" }
+    ]
+  }
+}

@@ -6,7 +6,8 @@ Photos unlock only if both daters choose reveal.
 
 Expo app in apps/mobile, moderator console in apps/console, Supabase backend in
 supabase/, AI host agent in services/nova (Python). Built so far: the pnpm monorepo,
-the design tokens (packages/tokens), the Expo app's shell (three placeholder tabs and
+the design tokens (packages/tokens), the shared message schemas (packages/shared: so far
+the moderator's mute), the Expo app's shell (three placeholder tabs and
 routing), and Nova: its show runner, lines and guardrails, distress and conduct checks,
 a measured rehearsal in LiveKit's Agents Playground and an evaluation against the real
 model (services/nova/CLAUDE.md). Not built yet: the moderator console, Supabase, and
