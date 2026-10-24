@@ -45,6 +45,7 @@ from nova.measure import ms
 from nova.models import LineModel, Warmed, warm_up
 from nova.on_air import Closed, OnAirCues, OnAirListener, ReplyAction
 from nova.priority import SafetyFirst
+from nova.privacy import Data, PrivacyPolicy, Recipient
 from nova.questions import AudienceQuestion, QuestionStatus
 from nova.show_runner import SPEECH_CAP, NoVotes, ShowRunner, waits_for_speech
 from nova.timing import REHEARSAL, Timing
@@ -228,7 +229,7 @@ class Rehearsal:
         events: EventLog | None = None,
         yield_hold: float = YIELD_HOLD,
         live_context: bool = True,
-        share_context: bool = True,
+        privacy: PrivacyPolicy | None = None,
         meaning_check: bool = Settings.meaning_check,
         meaning_live: bool = Settings.meaning_live,
         meaning_timeout: float = Settings.meaning_timeout,
@@ -236,12 +237,28 @@ class Rehearsal:
         """live_context: replies and silence prompts see this date's context (decision 0008)
         and the arc's segment (decision 0005). False runs them as before both, for the date
         benchmark's baseline (nova/benchmark.py); a real show always runs with them.
-        share_context: False keeps this date's turns out of the model's prompts, for a model
-        that isn't local without NOVA_DIALOGUE_TO_PROVIDER (Settings.shares_dialogue); the
-        context is still made, one for the date, and read by the checks on Nova's lines."""
+        privacy: who may receive what (nova/privacy.py, PrivacyPolicy.from_settings for real
+        daters); None, the strictest. Every request the lines, the meaning check and the
+        distress check send goes through it. Where this date's turns may not go, they stay
+        out of the prompt; the context is still made, one for the date, and read by the
+        checks on Nova's lines."""
         self.speaker = speaker
-        self.share_context = share_context
+        self.privacy = privacy or PrivacyPolicy()
         self._model, self._classifier = model, classifier
+        # Every request through the policy: the line model's, and the classifier's for the
+        # meaning and distress checks.
+        guarded = self.privacy.guard(model)
+        checks = self.privacy.guard(classifier) if classifier is not None else guarded
+        self._checks_model = checks
+        # Where this date's turns may go, by who receives them: for the report.
+        self.date_context_to: dict[str, tuple[Recipient, bool]] = {
+            "lines": (guarded.recipient, self.privacy.allows(guarded, Data.DATE_CONTEXT))
+        }
+        if meaning_check and meaning_live:  # set pieces never carry this date
+            self.date_context_to["live meaning checks"] = (
+                checks.recipient,
+                self.privacy.allows(checks, Data.DATE_CONTEXT),
+            )
         # Safety checks before lines on a model both use (nova/priority.py): two Ollama
         # models share one server, which serves one request at a time.
         both = {(classifier or model).name.split("/")[0], model.name.split("/")[0]}
@@ -269,7 +286,7 @@ class Rehearsal:
         context = DateContext() if live_context else None
         self._live_context = live_context
         self._writer = LineWriter(
-            model,
+            guarded,
             pair,
             next_pair=next_pair,
             live_timeout=live_timeout,
@@ -279,11 +296,11 @@ class Rehearsal:
             events=self._events,
             tonight=Tonight(),
             context=context,
-            share_context=share_context,
+            privacy=self.privacy,
             gate=self._gate,
             # Nova's lines checked for meaning on the classifier's model, after its checks.
             meaning=MeaningCheck(
-                classifier or model, timeout=meaning_timeout, events=self._events, gate=self._gate
+                checks, timeout=meaning_timeout, events=self._events, gate=self._gate
             )
             if meaning_check
             else None,
@@ -292,7 +309,7 @@ class Rehearsal:
         self._on_air = OnAirListener(
             self._runner,
             DistressCheck(
-                classifier or model,
+                checks,
                 timeout=distress_timeout,
                 events=self._events,
                 gate=self._gate,
@@ -404,8 +421,7 @@ class Rehearsal:
         self.warmed = list(zip(("model", "classifier"), warmed, strict=False))
 
     async def _warm_classifier(self, deadline: float) -> Warmed:
-        assert self._classifier is not None
-        warmed = await warm_up(self._classifier, deadline=deadline)
+        warmed = await warm_up(self._checks_model, deadline=deadline)
         self._events.emit(
             Event.WARMUP,
             ms=warmed.ms,
@@ -1051,6 +1067,20 @@ def after_a_cut(
     return Then.DROPPED, "", len(parts) - 1, len(parts)
 
 
+def _context_text(r: Rehearsal) -> str:
+    """Who receives this date's turns: recipients from the settings, never what was said."""
+    to = [f"{role} ({who.name})" for role, (who, allowed) in r.date_context_to.items() if allowed]
+    kept = [f"{role} ({who.name})" for role, (who, ok) in r.date_context_to.items() if not ok]
+    parts = ["this date's turns go to " + ", ".join(to)] if to else []
+    if kept:
+        parts.append(
+            ("they stay out of " if to else "this date's turns stay out of ")
+            + ", ".join(kept)
+            + ": not approved local, and NOVA_DIALOGUE_TO_PROVIDER isn't set"
+        )
+    return "; ".join(parts)
+
+
 def render_report(rehearsal: Rehearsal) -> str:
     """Codes and numbers only: never what anyone said, typed or heard."""
     r = rehearsal
@@ -1064,11 +1094,7 @@ def render_report(rehearsal: Rehearsal) -> str:
     warm_up = "".join(_warm_up_text(what, warmed) for what, warmed in r.warmed)
     lines = [
         f"Nova rehearsal: voice {r.voice}, model {r.model_name}, speech recognition {r.stt}; "
-        + (
-            "this date's turns go to the model"
-            if r.share_context
-            else "this date's turns stay here (NOVA_DIALOGUE_TO_PROVIDER isn't set)"
-        ),
+        + _context_text(r),
         f"{warm_up}Set pieces prepared in {r.prep_ms / 1000:.1f} s.{budget} {len(r.spoken)} "
         f"lines spoken, {r.alerts} moderator alerts.",
         "",

@@ -622,22 +622,30 @@ Date: 2026-10-13. Status: accepted.
   - The benchmark has a gate for it, and the evaluation checks every line.
   - The outro still never has to mention anything from the date (above): a test keeps it a
     set piece.
-- **What reaches a model provider** (2026-10-22). With local Ollama, nothing leaves the
-  machine. With `NOVA_LLM=anthropic/...`, Anthropic receives:
+- **What reaches a model provider** (2026-10-22; corrected 2026-10-24, decision 0010). With
+  local Ollama, no model request leaves the machine; daters' audio and Nova's lines still
+  go to LiveKit Inference for speech recognition and the voice, whatever the model
+  (`docs/privacy/nova-data-flows.md`). "Local" means an approved-local endpoint (decision
+  0010), not any Ollama. With `NOVA_LLM=anthropic/...`, Anthropic receives:
   - the blind cards (first names, ages, pronouns, the daters' card answers), for set pieces;
   - approved audience questions;
   - a dater's words to Nova, for a reply;
   - this date's recent turns (decision 0008), but only if `NOVA_DIALOGUE_TO_PROVIDER` is
-    true. It is off by default, and off until the privacy notice covers it.
+    true. It is off by default, and off until the privacy notice covers it. Since
+    2026-10-24 the privacy policy decides it per recipient at each request
+    (`nova/privacy.py`), so a hosted classifier is held to it too (decision 0010).
   - With `NOVA_CLASSIFIER_LLM` unset, the distress and conduct check uses the same model,
     so every utterance a dater finishes, with 15 s of both daters' words before it, goes to
-    Anthropic too. That is the largest flow; a local classifier keeps it here.
+    Anthropic too. That is the largest flow; a local classifier keeps it here. Decision 0010
+    names it conversation-derived safety context, apart from dialogue memory, and makes a
+    hosted classifier a production approval decision (provider review and the notice's
+    paragraph).
 
-  There is no privacy notice in the repository yet; the legal copy (terms, privacy policy,
-  on-air release) is still to be signed off (technical plan). Nothing in it names a model
-  provider, so none of these flows is covered. Recent dialogue is the only one switched off
-  in code, as asked. The others need the notice before any configuration with Claude meets
-  real daters.
+  No privacy notice has shipped. A draft for daters names these flows
+  (`docs/privacy/dater-notice-draft.md`, DRAFT / NOT SHIPPED since 2026-10-24); the legal
+  copy (terms, privacy policy, on-air release) is still to be signed off (technical plan).
+  Recent dialogue is the only flow switched off in code, as asked. The others need the
+  notice shipped before any configuration with Claude meets real daters.
   - Each flow is minimal by construction: no surnames, contact details or places pass the
     guardrails, the data block escapes markup, and nothing is logged.
   - Cost and requests: one request per set piece (three candidates each before a date), per
@@ -923,8 +931,8 @@ right-hand column above). Before the first real show, Nova needs these:
      Each gets the fallback (`Violation.INVENTS_SHOW_FACT`, `Violation.WRONG_SEGMENT`).
    - **The meaning check** (`nova/meaning.py`): one classifier request with its own rules,
      on the classifier's model. The line, the task, the segment, the cards (with age), each
-     dater's own words on this date (only when they may go to the model,
-     `Settings.shares_dialogue`) and what the line answers all go in the data block.
+     dater's own words on this date (only when the classifier may have them, decision
+     0010) and what the line answers all go in the data block.
      - Labels: fine, `invents_show_fact`, `untrue_about_dater`, `unsupported_both`,
        `own_feelings`, `changes_card`, `wrong_segment`.
      - It fails closed: a flagged line, or one not judged in time (failed, too slow,

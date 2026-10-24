@@ -19,6 +19,9 @@ services:
     environment:
       # Ollama runs on Windows; inside Docker the host is host.docker.internal. This wins
       # over OLLAMA_BASE_URL in .env: for an Ollama on another machine, change it here.
+      # Neither counts as local (decision 0010): this date's turns stay out of Nova's
+      # prompts unless .env names the host in NOVA_APPROVED_LOCAL_HOSTS, which only a host
+      # you run, with nobody else receiving its requests, should be.
       OLLAMA_BASE_URL: http://host.docker.internal:11434
     # host.docker.internal resolves on a plain Linux engine too (Docker Desktop has it).
     extra_hosts:

@@ -85,6 +85,7 @@ from nova.meaning_set import MeaningSample
 from nova.measure import ms_since
 from nova.models import LineModel, build_classifier, build_model, warm_up
 from nova.on_air import OnAirCues, OnAirListener, ReplyAction
+from nova.privacy import PrivacyPolicy
 from nova.quality import SEVERE, form_problems, least_similar, names_word, opening
 from nova.rehearsal import ms_text
 from nova.show_runner import NoVotes, ShowRunner
@@ -749,6 +750,7 @@ async def run_case(
         prep_timeout=prep,
         events=EventLog(logging.getLogger("nova.evaluation")),
         context=context,
+        privacy=PrivacyPolicy.for_synthetic_data(),  # made-up daters: this date always shown
     )
     writer.entered(case.segment)
     attempt = await writer.attempt_for(case.say)
@@ -1794,7 +1796,12 @@ async def run_meaning(
         for seat, said in sample.said:
             context.heard(seat, said)
         writer = LineWriter(
-            model, REHEARSAL_PAIR, next_pair=NEXT_PAIR, context=context, meaning=check
+            model,
+            REHEARSAL_PAIR,
+            next_pair=NEXT_PAIR,
+            context=context,
+            meaning=check,
+            privacy=PrivacyPolicy.for_synthetic_data(),  # made-up lines and daters
         )
         if sample.segment is not None:
             writer.entered(sample.segment)

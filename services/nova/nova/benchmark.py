@@ -61,6 +61,7 @@ from nova.grounding import dramatized, unsupported
 from nova.guardrails import OWN_FEELINGS
 from nova.lines import ErrorKind, Line, Source
 from nova.models import LineModel, build_classifier, build_model, warm_up
+from nova.privacy import PrivacyPolicy
 from nova.quality import content_words, opening
 from nova.rehearsal import Rehearsal
 from nova.scenarios import DEVELOPMENT, SCENARIOS, Scenario
@@ -235,6 +236,7 @@ class Driver:
             distress_timeout=distress_timeout,
             events=EventLog(logging.getLogger("nova.benchmark")),
             live_context=variant == CANDIDATE,
+            privacy=PrivacyPolicy.for_synthetic_data(),  # the benchmark's daters are made up
         )
         self.asked_nova = 0
         self.prep_s = 0.0

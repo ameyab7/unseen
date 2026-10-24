@@ -28,6 +28,7 @@ from nova.meaning import (
     parse_meaning,
 )
 from nova.priority import SafetyFirst
+from nova.privacy import PrivacyPolicy
 
 LEFT, RIGHT = Seat.LEFT, Seat.RIGHT
 MAYAS_FIRST = Say(Moment.FIRST_QUESTION, about=LEFT, detail=MAYA.prompts[0].text)
@@ -42,6 +43,7 @@ class Model:
     "slow" or "error"), and records every request in order."""
 
     name = "fake/model"
+    endpoint = "http://localhost:11434"  # on this machine: it may see this date
 
     def __init__(self, *lines: str, labels=("fine",), delay: float = 0.0) -> None:
         self.lines, self.labels, self.delay = lines, list(labels), delay
@@ -264,14 +266,25 @@ async def test_a_live_line_that_passes_is_said_with_its_label():
     assert line.source is Source.MODEL and line.meaning is Meaning.FINE
 
 
-@pytest.mark.parametrize(("shares", "shown"), [(True, True), (False, False)])
-async def test_this_dates_turns_go_to_the_check_only_when_they_may_go_to_the_model(shares, shown):
+class Hosted(Model):
+    endpoint = "https://models.example.com"  # a provider's (nova/privacy.py)
+
+
+@pytest.mark.parametrize(
+    ("kind", "approved", "shown"),
+    [(Model, False, True), (Hosted, False, False), (Hosted, True, True)],
+)
+async def test_this_dates_turns_go_to_the_check_only_when_they_may_go_to_its_model(
+    kind, approved, shown
+):
     context = DateContext()
     context.heard(LEFT, "I swim in the sea every single morning.")
-    model = Model("Maya, Theo, sea swims at dawn: brave or mad?")
-    w = writer(model, live=True, context=context, share_context=shares)
-    await w.line_for(SILENCE)
+    model = kind("Maya, Theo, sea swims at dawn: brave or mad?")
+    privacy = PrivacyPolicy(dialogue_to_provider=approved)
+    w = writer(model, live=True, context=context, privacy=privacy)
+    line = await w.line_for(SILENCE)
     assert ("sea every single morning" in model.judged[0]) is shown
+    assert line.source is Source.MODEL, "kept out of the prompt, never blocked"
 
 
 async def test_an_approved_line_is_never_meaning_checked():

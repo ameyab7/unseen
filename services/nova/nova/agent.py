@@ -14,11 +14,16 @@ raises: Nova acts on each utterance once the dater has finished it (nova/on_air.
 the end the report (codes and numbers only) is logged and saved in
 services/nova/rehearsals/.
 
-Privacy (CLAUDE.md): daters' audio goes to speech recognition and no other LiveKit service;
-recording is off, so LiveKit Cloud keeps no audio, transcripts or traces; no one in the
-room can query the session for its history; LiveKit's own log fields that carry what
+Privacy (CLAUDE.md, docs/privacy/nova-data-flows.md): beyond the room's own media server,
+daters' audio goes only to speech recognition (LiveKit Inference, then the NOVA_STT
+provider), every frame from the session's start to its end, Nova muted or not. Recording
+is off, so the session uploads no recording, transcript or traces to LiveKit Cloud; what
+LiveKit and the speech providers keep of what passes through them isn't known. No one in
+the room can query the session for its history; LiveKit's own log fields that carry what
 people said (lk.pii.*) are redacted; what daters say is never published to the room as
-text; and what they say or type stays in memory.
+text; and what they say or type is never written down: it stays in memory, and reaches a
+model only as nova/privacy.py allows. The agent hears real people, so it refuses to start
+with any SDK logger that writes prompts (nova/privacy.py, check_for_real_people).
 """
 
 import asyncio
@@ -47,6 +52,7 @@ from nova.events import EventLog
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
 from nova.models import build_classifier, build_model
 from nova.moderator import TOPIC, ModeratorControl, is_moderator
+from nova.privacy import PrivacyPolicy, check_for_real_people
 from nova.rehearsal import Command, Rehearsal, render_report
 from nova.timing import REHEARSAL
 
@@ -268,6 +274,7 @@ server = AgentServer()
 async def rehearse(ctx: JobContext) -> None:
     redact_logs()
     settings = load_settings()
+    check_for_real_people(settings)  # the log levels as LiveKit set them for this job
     session = new_session(settings)
     speaker = SessionSpeaker(session)
     rehearsal = Rehearsal(
@@ -287,7 +294,7 @@ async def rehearse(ctx: JobContext) -> None:
         distress_timeout=settings.distress_timeout,
         utterance_grace=settings.utterance_grace,
         utterance_max_wait=settings.utterance_max_wait,
-        share_context=settings.shares_dialogue,  # real daters' words: the privacy notice
+        privacy=PrivacyPolicy.from_settings(settings),  # real daters: the privacy notice
         meaning_check=settings.meaning_check,
         meaning_live=settings.meaning_live,
         meaning_timeout=settings.meaning_timeout,
@@ -352,6 +359,7 @@ async def rehearse(ctx: JobContext) -> None:
 
 def main() -> None:
     settings = load_settings()
+    check_for_real_people(settings)
     # The LiveKit CLI and its speech models read these from the environment.
     os.environ.setdefault("LIVEKIT_URL", settings.livekit_url)
     os.environ.setdefault("LIVEKIT_API_KEY", settings.livekit_api_key)

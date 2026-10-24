@@ -79,10 +79,11 @@ since it reaches every later date's prompts (decision 0005).
   live timeout.
 - Nothing is written anywhere or logged. The `line` event gains one flag (`context`,
   whether the line's prompt had this date's context); `nova/events.py` still rejects text.
-- What leaves the process (2026-10-22). With local Gemma nothing leaves the machine. With
-  an `anthropic/` model, this date's turns go into no prompt unless
-  `NOVA_DIALOGUE_TO_PROVIDER` is true (`Settings.shares_dialogue`; the LiveKit agent passes
-  it to its Rehearsal). Until then, replies and silence prompts work as before this
+- What leaves the process (2026-10-22; since 2026-10-24, decision 0010). This date's turns
+  go into a prompt only for a model at an approved-local endpoint, or once
+  `NOVA_DIALOGUE_TO_PROVIDER` is true: the privacy policy (`nova/privacy.py`) decides it for
+  each model at each request, and the LiveKit agent builds it from its settings. Otherwise
+  replies and silence prompts work as before this
   decision, from the dater's own words and the cards. The context is still kept, locally, for
   the checks on Nova's lines (common ground, decision 0005). The evaluation and the
   benchmark are synthetic and always share it. Decision 0005 lists every flow to a provider.
