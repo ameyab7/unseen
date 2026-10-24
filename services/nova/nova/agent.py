@@ -43,9 +43,11 @@ from livekit.agents import (
 from livekit.agents.voice.transcription import TranscriptSynchronizer
 
 from nova.config import Settings, load_settings
+from nova.events import EventLog
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
 from nova.models import build_classifier, build_model
-from nova.rehearsal import Rehearsal, render_report
+from nova.moderator import TOPIC, ModeratorControl, is_moderator
+from nova.rehearsal import Command, Rehearsal, render_report
 from nova.timing import REHEARSAL
 
 logger = logging.getLogger("nova.agent")
@@ -198,6 +200,52 @@ class SessionSpeaker:
         self._session.interrupt(force=True)
 
 
+def connect_moderators(room: Any, control: ModeratorControl) -> Callable[[], None]:
+    """The console's control path (nova/moderator.py): each data message on the moderator
+    topic goes to the control, and its answer to every moderator in the room; each moderator
+    who joins, comes back or is made one gets the state at once. A command from anyone else
+    gets nothing back. Returns broadcast(), which sends the state to every moderator, for a
+    mute changed another way (the rehearsal's chat)."""
+
+    def moderators() -> list[str]:
+        return [p.identity for p in room.remote_participants.values() if is_moderator(p.attributes)]
+
+    def send(payload: bytes, to: list[str]) -> None:
+        if not to:
+            return
+        sending = asyncio.ensure_future(
+            room.local_participant.publish_data(
+                payload, reliable=True, destination_identities=to, topic=TOPIC
+            )
+        )
+        sending.add_done_callback(_sent)
+
+    def on_data(packet: Any) -> None:
+        who = getattr(packet, "participant", None)
+        if packet.topic != TOPIC or who is None:
+            return
+        reply = control.handle(who.identity, who.attributes, packet.data)
+        if reply is not None:
+            send(reply, moderators())
+
+    def on_joined(participant: Any) -> None:
+        reply = control.joined(participant.attributes)
+        if reply is not None:
+            send(reply, [participant.identity])
+
+    room.on("data_received", on_data)
+    room.on("participant_connected", on_joined)
+    room.on("participant_attributes_changed", lambda _changed, participant: on_joined(participant))
+    for participant in list(room.remote_participants.values()):  # moderators already here
+        on_joined(participant)
+    return lambda: send(control.state(), moderators())
+
+
+def _sent(sending: asyncio.Future[None]) -> None:
+    if not sending.cancelled() and sending.exception() is not None:
+        logger.warning("moderator state not sent: %s", type(sending.exception()).__name__)
+
+
 def new_session(settings: Settings) -> AgentSession:
     model, voice = voice_parts(settings.voice)
     voice_options: dict[str, Any] = {"voice": voice} if voice else {}
@@ -255,8 +303,13 @@ async def rehearse(ctx: JobContext) -> None:
         if event.is_final:
             rehearsal.transcript(event.transcript)
 
+    # The moderator's mute from the console (launch requirement 2, nova/moderator.py).
+    control = ModeratorControl(rehearsal, events=EventLog())
+    tell_moderators = connect_moderators(ctx.room, control)
+
     def on_chat(_session: AgentSession, event: room_io.TextInputEvent) -> None:
-        rehearsal.command(event.text)
+        if rehearsal.command(event.text) in (Command.MUTE, Command.UNMUTE):
+            tell_moderators()  # the console shows what is true, however it changed
 
     session.on("user_state_changed", on_user_state)
     session.on("user_input_transcribed", on_transcript)

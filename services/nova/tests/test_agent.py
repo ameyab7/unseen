@@ -2,6 +2,7 @@
 connection: the real thing runs in the Agents Playground (docs/spike-results.md)."""
 
 import asyncio
+import json
 import logging
 from dataclasses import replace
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from livekit.agents.voice import io as voice_io
 from nova import agent
 from nova.agent import RedactPii, SessionSpeaker, new_session, time_played_words, voice_parts
 from nova.config import LlmChoice, Settings
+from nova.moderator import ModeratorControl
 
 SETTINGS = Settings(
     livekit_url="wss://example.invalid",
@@ -248,6 +250,21 @@ class FakeRehearsal:
         await self.listening.wait()  # a dater may speak while set pieces are prepared
 
     opens = True  # what the moderator chose, if Nova wasn't ready
+    muted = False
+
+    def mute(self) -> None:
+        self.muted = True
+
+    def unmute(self) -> None:
+        self.muted = False
+
+    def command(self, text: str):
+        from nova.rehearsal import Command
+
+        if text not in ("mute", "unmute"):
+            return None
+        self.mute() if text == "mute" else self.unmute()
+        return Command(text)
 
     async def hold_until_ready(self) -> bool:
         self.order.append("hold")
@@ -258,8 +275,30 @@ class FakeRehearsal:
         self.listening_at_the_start = self.listening.is_set() and not self.stopped_listening
 
 
+class FakeRoom:
+    """The parts of rtc.Room the moderator's control path uses."""
+
+    def __init__(self, *participants) -> None:
+        self.name = "rehearsal"
+        self.handlers: dict[str, list] = {}
+        self.remote_participants = {p.identity: p for p in participants}
+        self.sent: list[tuple[dict, list[str], str]] = []
+        self.local_participant = SimpleNamespace(publish_data=self._publish)
+
+    def on(self, event: str, handler) -> None:
+        self.handlers.setdefault(event, []).append(handler)
+
+    def emit(self, event: str, *args) -> None:
+        for handler in self.handlers.get(event, []):
+            handler(*args)
+
+    async def _publish(self, payload, *, reliable, destination_identities, topic) -> None:
+        assert reliable, "a mute must not be lost"
+        self.sent.append((json.loads(payload), list(destination_identities), topic))
+
+
 class FakeContext:
-    room = SimpleNamespace(name="rehearsal")
+    room = FakeRoom()
 
     async def wait_for_participant(self) -> None:
         pass
@@ -388,3 +427,87 @@ async def test_a_date_nova_isnt_ready_for_never_opens_unless_the_moderator_says(
     rehearsal = FakeRehearsal.last
     assert rehearsal is not None and rehearsal.order == ["warm_up", "prepare", "hold"]
     assert list(tmp_path.glob("*.txt")), "the report is written all the same"
+
+
+# --- The moderator's mute from the console (launch requirement 2) ---------------------------------
+
+MODERATOR = SimpleNamespace(identity="mod-1", attributes={"role": "moderator"})
+DATER_PARTICIPANT = SimpleNamespace(identity="dater-1", attributes={"role": "dater"})
+
+
+def mute_packet(
+    who, kind: str = "mute", seq: int = 1, session: str = "s1", topic: str = "unseen.moderator"
+):
+    payload = json.dumps({"type": kind, "seq": seq, "session": session}).encode()
+    return SimpleNamespace(topic=topic, participant=who, data=payload)
+
+
+async def test_a_moderators_mute_reaches_nova_and_every_moderator_hears_the_state():
+    target = FakeRehearsal()
+    room = FakeRoom(MODERATOR, DATER_PARTICIPANT)
+    agent.connect_moderators(room, ModeratorControl(target, session="s1"))
+    await asyncio.sleep(0)
+    assert room.sent == [
+        (
+            {"type": "nova_state", "session": "s1", "muted": False, "seq": 0, "result": "state"},
+            ["mod-1"],
+            "unseen.moderator",
+        ),
+    ], "a moderator already in the room is told at once; the dater never is"
+    room.emit("data_received", mute_packet(MODERATOR))
+    await asyncio.sleep(0)
+    assert (
+        target.muted and room.sent[-1][0]["result"] == "applied" and room.sent[-1][1] == ["mod-1"]
+    )
+
+
+async def test_a_daters_mute_message_is_ignored_and_answered_with_nothing():
+    target = FakeRehearsal()
+    room = FakeRoom(MODERATOR, DATER_PARTICIPANT)
+    agent.connect_moderators(room, ModeratorControl(target, session="s1"))
+    await asyncio.sleep(0)
+    before = len(room.sent)
+    room.emit("data_received", mute_packet(DATER_PARTICIPANT))
+    room.emit("data_received", mute_packet(MODERATOR, topic="lk.chat"))
+    room.emit(
+        "data_received", SimpleNamespace(topic="unseen.moderator", participant=None, data=b"{}")
+    )
+    await asyncio.sleep(0)
+    assert not target.muted and len(room.sent) == before
+
+
+async def test_a_moderator_who_comes_back_is_told_the_mute_still_stands():
+    target = FakeRehearsal()
+    room = FakeRoom(MODERATOR)
+    agent.connect_moderators(room, ModeratorControl(target, session="s1"))
+    room.emit("data_received", mute_packet(MODERATOR))
+    del room.remote_participants["mod-1"]  # the console's connection drops
+    room.emit("participant_connected", MODERATOR)  # and comes back
+    await asyncio.sleep(0)
+    assert target.muted and room.sent[-1][0] == {
+        "type": "nova_state",
+        "session": "s1",
+        "muted": True,
+        "seq": 0,
+        "result": "state",
+    }
+
+
+async def test_someone_made_a_moderator_mid_session_is_told_the_state():
+    room = FakeRoom()
+    agent.connect_moderators(room, ModeratorControl(FakeRehearsal(), session="s1"))
+    room.emit("participant_attributes_changed", {"role": "moderator"}, MODERATOR)
+    await asyncio.sleep(0)
+    assert room.sent[-1][1] == ["mod-1"]
+
+
+async def test_the_agent_tells_the_consoles_when_the_chat_mutes_nova(monkeypatch, tmp_path):
+    room = FakeRoom(MODERATOR)
+    monkeypatch.setattr(FakeContext, "room", room)
+    session = await rehearse(monkeypatch, tmp_path)
+    await asyncio.sleep(0)
+    assert len(room.sent) == 1, "the moderator in the room heard the state when the session began"
+    on_chat = session.started["room_options"].text_input.text_input_cb
+    on_chat(session, SimpleNamespace(text="mute"))
+    await asyncio.sleep(0)
+    assert room.sent[-1][0]["muted"] is True and room.sent[-1][0]["result"] == "state"

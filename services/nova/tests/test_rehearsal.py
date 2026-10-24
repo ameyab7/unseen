@@ -1972,3 +1972,97 @@ async def test_muting_twice_is_one_mute_and_unmuting_an_unmuted_nova_does_nothin
     r.command("unmute")
     r.command("unmute")
     assert not r.muted and r.mutes == 1
+
+
+# --- The mute in every state Nova can be in (launch requirement 2) -------------------------------
+
+
+async def test_muted_while_silent_nothing_due_is_said_and_the_date_goes_on():
+    clock = Clock()
+    r = await started(clock)
+    r.command("mute")
+    await past_the_first_questions(r, clock)
+    assert lines(r, Moment.FIRST_QUESTION) == [] and r.unsaid >= 2, "due, never said"
+    r.command("unmute")
+    clock.now = 60.0
+    r.command("moment")
+    await r.speak_queued()
+    assert script.NEED_A_MOMENT in r.speaker.texts, "the next line after unmuting is said"
+
+
+async def test_muted_while_a_reply_is_being_written_it_is_never_said():
+    clock = Clock()
+    gate = asyncio.Event()
+    model = GatedWriter(gate)
+    r = await started(clock, model=model)
+    model.gating = True
+    speaking = await nova_waiting_on(r, clock, "Nova, tea or coffee?")
+    r.command("mute")
+    await asyncio.wait_for(speaking, 1.0)
+    gate.set()
+    await r.heard()
+    await r.speak_queued()
+    assert lines(r, Moment.REPLY) == [] and r.muted
+
+
+async def test_muted_while_waiting_for_a_daters_answer_the_next_question_is_dropped():
+    clock = Clock()
+    r = await started(clock)
+    clock.now = 13.6
+    r.tick()
+    await r.speak_queued()
+    assert len(lines(r, Moment.FIRST_QUESTION)) == 1, "Maya is asked, and Nova waits for her"
+    r.command("mute")
+    clock.now = 13.6 + REHEARSAL.answer_window + 1.0
+    r.tick()
+    await r.speak_queued()
+    assert len(lines(r, Moment.FIRST_QUESTION)) == 1, "Theo's question isn't said"
+    asked = [c.about for c in r.cues if getattr(c, "moment", None) is Moment.FIRST_QUESTION]
+    assert asked == [Seat.LEFT, Seat.RIGHT], "the runner still moved on to Theo's turn"
+
+
+async def test_muted_in_a_hold_nothing_covers_it_and_the_hold_still_works():
+    clock = Clock()
+    r = await started(clock)
+    held_until_bear_with_us(r, clock)
+    r.command("mute")
+    await r.speak_queued()
+    assert lines(r, Moment.ROOM_TALK) == [] and lines(r, Moment.BEAR_WITH_US) == []
+    assert script.NEED_A_MOMENT not in r.speaker.texts, "safety lines too: the moderator has it"
+    clock.now = 45.0
+    r.command("back")
+    await r.speak_queued()
+    assert script.WELCOME_BACK not in r.speaker.texts and not r._runner.held, "the hold ended"
+
+
+async def test_muted_while_waiting_to_resume_after_a_cut_nova_never_resumes():
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock, PlaysWithWords)
+    clock.now = 33.0
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)  # the dater kept going: Nova yields and waits
+    r.command("mute")
+    clock.now = 36.0
+    r.speech_ended()
+    await asyncio.wait_for(speaking, 1.0)
+    speaker.finish()
+    await r.speak_queued()
+    assert UNLOCKED_REST not in speaker.texts and r.yields[-1].then is Then.STOPPED
+
+
+async def test_a_dater_in_distress_reaches_the_moderator_while_nova_is_muted_after_a_cut():
+    clock = Clock()
+    r, speaker, speaking = await unlocked(clock, PlaysWithWords)
+    clock.now = 33.0
+    r.speech_started()
+    await asyncio.sleep(HOLD + 0.05)
+    r.command("mute")
+    r.transcript("I want to stop.")
+    r.speech_ended()
+    close(r, clock)
+    await asyncio.wait_for(speaking, 1.0)
+    speaker.finish()
+    await r.heard()
+    await r.speak_queued()
+    assert ModeratorAlert.DATER_DISTRESSED in alerts(r), "the check and the alert go on"
+    assert script.DISTRESS_PAUSE not in speaker.texts

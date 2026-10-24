@@ -984,16 +984,66 @@ right-hand column above). Before the first real show, Nova needs these:
      one mute, and unmuting speaks again from the next line the date asks for, never what
      was dropped.
    - `muted` events (codes only), and the report counts mutes and lines not said.
-   - What the console needs:
-     - a control message from a participant with the moderator's role (a token
-       attribute), checked by the agent; anyone else's is ignored;
-     - a zod schema in packages/shared (CLAUDE.md), `{"type": "mute" | "unmute"}`;
-     - an acknowledgement with Nova's state, so the console shows what is true, not what
-       it asked for;
-     - a console that has heard nothing back shows the state as unknown, never as muted.
+   - **The console's control path, built 2026-10-23** (the console itself isn't). The
+     schemas are zod in `packages/shared/src/moderator.ts`; `nova/moderator.py` checks the
+     same shapes, both against `packages/shared/fixtures/moderator.json`, and
+     `nova/agent.py` (`connect_moderators`) wires it to the room.
+     - Who: a participant whose token carries `role=moderator`. Only the server that mints
+       tokens sets it. Anyone else's command is ignored, with no reply, and logged as a code.
+     - The path: a `MuteCommand`, `{"type": "mute" | "unmute", "seq", "session"}`, on the
+       `unseen.moderator` data topic, sent to Nova's agent only.
+     - The acknowledgement: a `NovaState` saying what's true, `{"type": "nova_state",
+       "session", "muted", "seq", "result"}`, sent to the moderators. Results:
+       - `applied`: the state changed;
+       - `unchanged`: it already was in that state;
+       - `stale`: the command's seq isn't newer than that moderator's last, or it was for
+         another session, so nothing changes;
+       - `invalid`: the message wasn't a `MuteCommand`.
+       Each moderator who joins, returns or is made one gets a NovaState at once, and so
+       does every moderator after a change made in the rehearsal's chat. The console shows
+       the state as unknown until a NovaState arrives, and trusts one only from Nova's
+       agent participant.
+     - `seq` must increase for each moderator, and a timestamp in ms does, across console
+       restarts. A command sent twice, or an older one arriving late, changes nothing.
+     - The current line, the line being written and the queued audio are dropped. Nova
+       never resumes by itself. Checks and alerts go on.
+     - The mute lasts the session, through every segment, until a moderator unmutes.
+     - A lost moderator connection changes nothing (the product owner's choice,
+       2026-10-23): a mute stays a mute, an unmuted Nova stays unmuted, and the moderator
+       who comes back is told the state. An agent that restarts is a new session,
+       unmuted, and its old session's commands are stale.
+     - Tests:
+       - `tests/test_moderator.py`, the control;
+       - `tests/test_rehearsal.py`, muted while silent, while a reply is written, while
+         speaking, waiting for a dater, in a hold, and waiting to resume after a cut, with
+         safety alerts in each;
+       - `tests/test_agent.py`, the room wiring, in Docker;
+       - `packages/shared`, the schemas.
+   - **The mute rehearsal in LiveKit** (`uv run python -m nova.mute_live`, Docker,
+     LiveKit credit; `nova/mute_matrix.py`): Nova with the agent's own control path, a
+     dater, a moderator with the role in its token, and the dater as an impostor. 24
+     trials over eight kinds.
+     - The run that counts, 2026-10-23 15:38 UTC: 24 of 24 passed, real audio and the real
+       control path, no 429.
+       - A mute mid-line stopped the audio the dater heard 119 to 130 ms after it was sent.
+       - The acknowledgement arrived in 61 to 66 ms, and in about 125 ms while Nova was
+         checking a dater's words.
+       - An impostor's mute was ignored and got no answer.
+       - Stale and duplicate commands changed nothing, and were answered `stale`.
+       - A moderator who dropped and came back was told the mute still stood.
+       - A dater's request to stop while muted still alerted the moderator.
+       - A mute while Nova waited to resume after a cut meant it never resumed.
+     - The runs before it were the harness's, not Nova's:
+       - the moderator took a dater's broadcast message for Nova's state;
+       - a stop was measured to the next line;
+       - acknowledgements were matched by when they came, not by their seq;
+       - a line was asked for on the dater's connection before Nova had the moderator's
+         unmute.
+     - So the console must wait for Nova's acknowledgement before it treats a command as
+       done: messages from different participants aren't ordered against each other.
+     - Limits: one machine runs every participant, the console is a script, and no phone
+       was used.
 
-     An agent that restarts starts unmuted, in a new session: the console has to mute
-     again. The tests are in `tests/test_rehearsal.py`.
 3. **Hearing a dater's conduct, not only their distress** (decision 0006): personal details
    slipping, unkindness, harassment, sexual content, hate, threats and anything about a
    minor, with the console alerts and the brand book's lines. Built in its first form;

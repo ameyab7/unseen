@@ -58,7 +58,9 @@ components and say so in the pull request.
 - services/nova: uv run python -m nova.agent dev runs Nova in LiveKit for one measured
   rehearsal date in the Agents Playground; uv run python -m nova.voices writes voice
   samples; uv run python -m nova.yield_live runs the yield rehearsal, a scripted dater
-  cutting Nova off in a real LiveKit room (decision 0004). All use LiveKit credit
+  cutting Nova off in a real LiveKit room (decision 0004); uv run python -m
+  nova.mute_live runs the mute rehearsal, a moderator muting Nova through the console's
+  control path in a real LiveKit room (decision 0005). All use LiveKit credit
   (docs/spike-results.md)
 
 Install app packages from apps/mobile with

@@ -56,6 +56,13 @@ waiting for the product owner are in docs/sign-off/ and nova/sign_off.py.
   in Docker only, and costs LiveKit credit: `docker compose -f services/nova/compose.yaml run
   --rm --build nova uv run python -m nova.yield_live`. Its report (numbers only) lands in
   services/nova/rehearsals/yield-*.txt.
+- The mute rehearsal (decision 0005, launch requirement 2) runs Nova with the agent's own
+  moderator control, a dater, a moderator and an impostor in a real LiveKit room, in Docker
+  only, at LiveKit credit: `docker compose -f services/nova/compose.yaml run --rm --build nova
+  uv run python -m nova.mute_live`. Its report lands in services/nova/rehearsals/mute-*.txt.
+- The moderator's messages are zod schemas in packages/shared (src/moderator.ts);
+  nova/moderator.py checks the same shapes, and both are tested on
+  packages/shared/fixtures/moderator.json. Change them together.
 - The evaluation and rehearsals need services/nova/.env (see .env.example). Open
   .env.example by its exact path: Claude Code's Glob and Grep can't see it under the Read
   deny rules for .env files. A rehearsal and voice samples cost LiveKit credit; the
