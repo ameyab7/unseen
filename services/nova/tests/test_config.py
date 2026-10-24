@@ -224,18 +224,54 @@ CLAUDE = {**GOOD, "NOVA_LLM": "anthropic/claude-haiku-5-5", "ANTHROPIC_API_KEY":
 
 
 @pytest.mark.parametrize(
-    ("env", "shares"),
+    ("env", "approved"),
     [
-        (GOOD, True),  # local Ollama: this date's turns never leave the machine
-        (CLAUDE, False),  # another provider: off until the privacy notice covers it
+        (GOOD, False),
+        (CLAUDE, False),
         ({**CLAUDE, "NOVA_DIALOGUE_TO_PROVIDER": "true"}, True),
         ({**CLAUDE, "NOVA_DIALOGUE_TO_PROVIDER": "false"}, False),
     ],
 )
-def test_a_live_date_s_turns_go_to_a_model_that_isnt_local_only_once_approved(env, shares):
-    """Decision 0005: the current notice names no model provider, so Claude sees no recent
-    dialogue from a real date until NOVA_DIALOGUE_TO_PROVIDER says it may."""
-    assert Settings.from_env(env).shares_dialogue is shares
+def test_sending_a_live_date_s_turns_to_a_provider_is_a_setting_off_by_default(env, approved):
+    """Decision 0010: who may receive them is the privacy policy's to say (nova/privacy.py,
+    tests/test_privacy.py), from this and the model's endpoint."""
+    assert Settings.from_env(env).dialogue_to_provider is approved
+
+
+class TestApprovedLocalHosts:
+    """Hosts besides loopback that count as local (decision 0010): none unless named."""
+
+    def test_none_by_default_not_even_dockers_host(self):
+        assert Settings.from_env(GOOD).approved_local_hosts == frozenset()
+
+    def test_named_hosts_separated_by_commas(self):
+        env = {**GOOD, "NOVA_APPROVED_LOCAL_HOSTS": " host.docker.internal, GPU-Box.lan ,"}
+        hosts = Settings.from_env(env).approved_local_hosts
+        assert hosts == {"host.docker.internal", "gpu-box.lan"}
+
+    @pytest.mark.parametrize("value", ["*", "http://gpu.lan", "gpu.lan:11434", "gpu lan"])
+    def test_only_bare_host_names(self, value):
+        with pytest.raises(ConfigError, match="NOVA_APPROVED_LOCAL_HOSTS must be host names"):
+            Settings.from_env({**GOOD, "NOVA_APPROVED_LOCAL_HOSTS": value})
+
+
+class TestSdkRequestLogs:
+    """ANTHROPIC_LOG or OPENAI_LOG at "debug" makes the SDK log every request, prompt and
+    all: daters' words. Refused unless a run on made-up daters asks for it."""
+
+    @pytest.mark.parametrize("name", ["ANTHROPIC_LOG", "OPENAI_LOG"])
+    @pytest.mark.parametrize("value", ["debug", " DEBUG "])
+    def test_refused(self, name, value):
+        with pytest.raises(ConfigError, match=f"{name} at debug would log every prompt"):
+            Settings.from_env({**CLAUDE, name: value})
+
+    @pytest.mark.parametrize("value", ["info", "", "warning"])
+    def test_levels_that_log_no_request_are_fine(self, value):
+        assert not Settings.from_env({**CLAUDE, "ANTHROPIC_LOG": value}).synthetic_diagnostics
+
+    def test_allowed_only_with_the_flag_for_synthetic_runs(self):
+        env = {**CLAUDE, "ANTHROPIC_LOG": "debug", "NOVA_SYNTHETIC_DIAGNOSTICS": "true"}
+        assert Settings.from_env(env).synthetic_diagnostics
 
 
 def test_a_malformed_dialogue_setting_is_caught():

@@ -34,6 +34,7 @@ class Fake:
     and keeps every prompt."""
 
     name = "fake/model"
+    endpoint = "http://localhost:11434"  # on this machine: it may see this date
 
     def __init__(self, labels: dict[str, str] | None = None) -> None:
         self.labels = labels or {}

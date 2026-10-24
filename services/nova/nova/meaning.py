@@ -37,6 +37,7 @@ from nova.events import Event, EventLog
 from nova.measure import ms_since
 from nova.models import LineModel
 from nova.priority import SafetyFirst
+from nova.privacy import PrivacyPolicy
 
 
 class Meaning(StrEnum):
@@ -136,7 +137,7 @@ def meaning_prompt(
     answering: str = "",
 ) -> str:
     """The question and its data. said: each dater's own words on this date, by first name,
-    only when this date's turns may go to the model (Settings.shares_dialogue)."""
+    only when this date's turns may go to the model (nova/privacy.py)."""
     data: dict[str, object] = {
         "task": TASKS.get(say.moment, say.moment.value),
         "segment": segment.replace("_", " ") if segment is not None else "not known",
@@ -193,6 +194,16 @@ class MeaningCheck:
         self.timeout = timeout
         self._events = events or EventLog()
         self._gate = gate
+
+    @property
+    def model(self) -> LineModel:
+        """Whoever receives the check's prompts."""
+        return self._model
+
+    def guard(self, privacy: PrivacyPolicy) -> None:
+        """Every request checked against the privacy policy before it's sent, as the line
+        writer's are (nova/privacy.py). One it blocks is a check that failed: UNCHECKED."""
+        self._model = privacy.guard(self._model)
 
     async def judge(self, say: Say, prompt: str, *, timeout: float | None = None) -> Judged:
         """The label for a line, in at most `timeout` seconds (the check's own if None)."""

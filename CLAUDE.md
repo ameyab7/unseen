@@ -123,6 +123,10 @@ the root scripts call pnpm themselves and fail when it is not on PATH.
 - No code, test or script calls production.
 - Keys live only in untracked .env files, next to the .env.example that names them.
   Never put a secret in an EXPO_PUBLIC_ variable: those are built into the app.
+- docs/privacy/nova-data-flows.md lists every flow of daters' data and who receives it;
+  docs/privacy/dater-notice-draft.md is the dater notice, DRAFT / NOT SHIPPED. A change
+  that sends data somewhere new updates both, and decision 0010, in the same change. Never
+  state a provider's retention or training terms that a contract or their terms don't.
 
 ## Workflow
 - For changes touching more than 3 files, propose a plan and wait for approval.

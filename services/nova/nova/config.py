@@ -7,6 +7,7 @@ or error messages.
 
 import math
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,9 @@ PROVIDERS = ("anthropic", "ollama")
 # chooses one (task 5); Robyn is Cartesia's neutral, mature voice.
 DEFAULT_VOICE = "cartesia/sonic-3:f31cc6a7-c1e8-4764-980c-60a361443dd1"
 DEFAULT_STT = "deepgram/nova-3"
+
+# The SDKs' own settings that, at "debug", log each request they send, prompt and all.
+SDK_REQUEST_LOGS = ("ANTHROPIC_LOG", "OPENAI_LOG")
 
 
 class ConfigError(ValueError):
@@ -96,10 +100,17 @@ class Settings:
     # Nova's voice as "provider/model:voice", and the speech recognition that hears daters.
     voice: str = DEFAULT_VOICE
     stt: str = DEFAULT_STT
-    # This date's recent turns (decision 0008) go to a model that isn't local only when this
-    # is true: off until the privacy notice covers that provider and data flow (decision
-    # 0005). A local model (Ollama on this machine) always sees them.
+    # This date's recent turns (decision 0008) go to a model that isn't approved local only
+    # when this is true: off until the privacy notice covers that provider and data flow
+    # (decision 0010). A model at an approved-local endpoint always sees them.
     dialogue_to_provider: bool = False
+    # Hosts besides loopback that count as local for a model's endpoint (nova/privacy.py):
+    # only one the operator runs, which nobody else receives requests at. Never implied,
+    # host.docker.internal included.
+    approved_local_hosts: frozenset[str] = frozenset()
+    # Lets ANTHROPIC_LOG or OPENAI_LOG be "debug", which logs every prompt sent, for a run on
+    # made-up daters only (the evaluation, the benchmark). The agent refuses to start with it.
+    synthetic_diagnostics: bool = False
     # The meaning check on Nova's lines (nova/meaning.py, decision 0005): on set pieces before
     # the date unless turned off; on live lines only when turned on, which waits for a
     # labelled set and room in the classifier's slot (the product owner's choice, 2026-10-23).
@@ -134,6 +145,8 @@ class Settings:
         "NOVA_MEANING_CHECK",
         "NOVA_MEANING_LIVE",
         "NOVA_MEANING_TIMEOUT_SECONDS",
+        "NOVA_APPROVED_LOCAL_HOSTS",
+        "NOVA_SYNTHETIC_DIAGNOSTICS",
     )
 
     @classmethod
@@ -154,6 +167,15 @@ class Settings:
         if uses_anthropic and anthropic_api_key is None:
             raise ConfigError(
                 "ANTHROPIC_API_KEY is required when NOVA_LLM or NOVA_CLASSIFIER_LLM uses anthropic"
+            )
+
+        synthetic_diagnostics = _flag(env, "NOVA_SYNTHETIC_DIAGNOSTICS")
+        logged = [name for name in SDK_REQUEST_LOGS if env.get(name, "").strip().lower() == "debug"]
+        if logged and not synthetic_diagnostics:
+            raise ConfigError(
+                f"{' and '.join(logged)} at debug would log every prompt Nova sends, daters' "
+                "words included: unset it, or for a run on made-up daters only, set "
+                "NOVA_SYNTHETIC_DIAGNOSTICS=true"
             )
 
         grace = _seconds(env, "NOVA_UTTERANCE_GRACE_SECONDS", cls.utterance_grace)
@@ -185,13 +207,9 @@ class Settings:
             meaning_check=_flag(env, "NOVA_MEANING_CHECK", default=cls.meaning_check),
             meaning_live=_flag(env, "NOVA_MEANING_LIVE"),
             meaning_timeout=_seconds(env, "NOVA_MEANING_TIMEOUT_SECONDS", cls.meaning_timeout),
+            approved_local_hosts=_hosts(env, "NOVA_APPROVED_LOCAL_HOSTS"),
+            synthetic_diagnostics=synthetic_diagnostics,
         )
-
-    @property
-    def shares_dialogue(self) -> bool:
-        """Whether a live date's recent turns may go into Nova's prompts: always to a local
-        model, to another only once NOVA_DIALOGUE_TO_PROVIDER says the notice covers it."""
-        return self.llm.provider == "ollama" or self.dialogue_to_provider
 
 
 def _voice(value: str) -> str:
@@ -218,6 +236,14 @@ def _flag(env: Mapping[str, str], name: str, *, default: bool = False) -> bool:
     if raw in ("true", "1", "yes"):
         return True
     raise ConfigError(f"{name} must be true or false")
+
+
+def _hosts(env: Mapping[str, str], name: str) -> frozenset[str]:
+    """Host names separated by commas, lower case; no wildcards, schemes or ports."""
+    hosts = frozenset(h.strip().lower() for h in env.get(name, "").split(",") if h.strip())
+    if any(not re.fullmatch(r"[a-z0-9.\-]+|[0-9a-f:]+", host) for host in hosts):
+        raise ConfigError(f"{name} must be host names separated by commas")
+    return hosts
 
 
 def _count(env: Mapping[str, str], name: str, default: int) -> int:

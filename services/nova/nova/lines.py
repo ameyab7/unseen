@@ -18,6 +18,10 @@ also sees this date's context, if the date has one (nova/date_context.py, decisi
 recent turns the checks cleared, open questions and Nova's own last lines. A line written
 from it is never kept in tonight's memory, and every turn it holds is passed to the
 guardrails. The log records events and timings only, never text.
+
+Every request goes through the privacy policy (nova/privacy.py): this date's turns go into
+a prompt only if the model that receives it may have them, the line model for a line and
+the classifier for its meaning check, each asked for itself.
 """
 
 import asyncio
@@ -50,6 +54,7 @@ from nova.meaning import Judged, Meaning, MeaningCheck, meaning_prompt
 from nova.measure import ms_since
 from nova.models import WARM_UP_DEADLINE, LineModel, ModelRefused, Warmed, warm_up
 from nova.priority import SafetyFirst
+from nova.privacy import Data, PrivacyPolicy
 from nova.text import plain
 from nova.tonight import SHOWN, SHOWN_LIVE, Remembered, Tonight, mask
 
@@ -218,7 +223,7 @@ class LineWriter:
         rng: random.Random | None = None,
         tonight: Tonight | None = None,
         context: DateContext | None = None,
-        share_context: bool = True,
+        privacy: PrivacyPolicy | None = None,
         gate: SafetyFirst | None = None,
         meaning: MeaningCheck | None = None,
         meaning_live: bool = False,
@@ -228,15 +233,18 @@ class LineWriter:
         prep_parallel: at most this many requests for set pieces in flight at once
         (NOVA_PREP_PARALLEL); None, no limit. context: this date's (decision 0008), shared
         with the on-air listener, which adds the daters' turns; None, replies and silence
-        prompts work from what was just said and the cards, as before. share_context: False
-        keeps it out of every prompt (a model that isn't local, without
-        NOVA_DIALOGUE_TO_PROVIDER), while the checks on Nova's lines still read it here."""
+        prompts work from what was just said and the cards, as before. privacy: who may
+        receive what (nova/privacy.py); None, the strictest, where only a model at a loopback
+        address sees this date. It checks every request this writer and its meaning check
+        send, and the checks on Nova's lines still read this date here, whoever may."""
         self._context = context
-        self.share_context = share_context
+        self._privacy = privacy or PrivacyPolicy()
         self._gate = gate  # safety checks first, on a model they share (nova/priority.py)
         self._meaning, self.meaning_live = meaning, meaning_live
+        if meaning is not None:
+            meaning.guard(self._privacy)
         self._segment: Segment | None = None  # where the date is (entered), for the arc
-        self._model = model
+        self._model = self._privacy.guard(model)
         self._prep_slots = asyncio.Semaphore(prep_parallel) if prep_parallel else None
         self._pair = pair
         self._next_pair = next_pair
@@ -473,7 +481,11 @@ class LineWriter:
         assert self._meaning is not None
         cards = self._cards(say)
         said = None
-        if self._context is not None and self.share_context and say.moment in WITH_THIS_DATE:
+        if (
+            self._context is not None
+            and say.moment in WITH_THIS_DATE
+            and self._privacy.allows(self._meaning.model, Data.DATE_CONTEXT)
+        ):
             names = {card.first_name for card in cards}
             said = {
                 self._pair.card(seat).first_name: self._context.said_by(seat)
@@ -748,7 +760,11 @@ class LineWriter:
     def _this_date(self, say: Say) -> dict[str, object] | None:
         """This date's context for a reply or a silence prompt (decision 0008), without the
         dater who's away and without the words a reply answers; None if there's none."""
-        if self._context is None or not self.share_context or say.moment not in WITH_THIS_DATE:
+        if (
+            self._context is None
+            or say.moment not in WITH_THIS_DATE
+            or not self._privacy.allows(self._model, Data.DATE_CONTEXT)
+        ):
             return None
         names = {seat: self._pair.card(seat).first_name for seat in Seat}
         answering = (say.detail or "") if say.moment is Moment.REPLY else ""

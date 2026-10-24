@@ -11,7 +11,9 @@ the listener delay (proposed), 0008 this date's context for live replies and sil
 tonight's memory: one date, only what the checks cleared, never logged), 0009 the date
 benchmark (whether a change makes a date better: `uv run python -m nova.benchmark`, on
 demand with local Ollama, never in CI; its hard gates fail the run, its indicators hint,
-and only people's blind ratings say whether it helped: `uv run python -m nova.ratings`).
+and only people's blind ratings say whether it helped: `uv run python -m nova.ratings`),
+0010 privacy at the request boundary (who may receive what: nova/privacy.py; every flow:
+nova/data_flows.py, `uv run python -m nova.data_flows`, and docs/privacy/).
 Iterate on the benchmark's development set; its comparison set is the scorecard, never
 tuned against. Read the one a change touches first, and update it in the same change. Lines
 waiting for the product owner are in docs/sign-off/ and nova/sign_off.py.
@@ -24,6 +26,11 @@ waiting for the product owner are in docs/sign-off/ and nova/sign_off.py.
   nova/script.py.
 - No text in logs: nova/events.py accepts codes, numbers and flags only. Never log what a
   dater, listener or Nova said.
+- Every model request goes through the privacy policy (nova/privacy.py, decision 0010): a
+  model a Rehearsal or LineWriter guarded, never a bare one where real daters are heard.
+  This date's turns reach a model only at an approved-local endpoint (loopback, or
+  NOVA_APPROVED_LOCAL_HOSTS) or with NOVA_DIALOGUE_TO_PROVIDER. Only the evaluation and
+  the benchmark, on made-up daters, use `PrivacyPolicy.for_synthetic_data()`.
 - Before any model change (a prompt, the model, the guardrails it's measured against), run
   `uv run python -m nova.evaluation` against local Gemma, before and after, and put both
   summaries in the pull request. It covers the cases and the distress and conduct dev sets,

@@ -12,8 +12,9 @@ from livekit.agents.voice import io as voice_io
 
 from nova import agent
 from nova.agent import RedactPii, SessionSpeaker, new_session, time_played_words, voice_parts
-from nova.config import LlmChoice, Settings
+from nova.config import ConfigError, LlmChoice, Settings
 from nova.moderator import ModeratorControl
+from nova.privacy import PrivacyPolicy
 
 SETTINGS = Settings(
     livekit_url="wss://example.invalid",
@@ -392,12 +393,12 @@ def test_redaction_is_added_once_however_often_the_agent_starts():
         logging.getLogger().removeHandler(handler)
 
 
-async def test_a_session_makes_one_rehearsal_and_keeps_its_turns_from_an_unapproved_provider(
+async def test_a_session_makes_one_rehearsal_with_the_privacy_policy_its_settings_give(
     monkeypatch, tmp_path
 ):
-    """One Rehearsal a session, so one DateContext a date (decision 0008). With Claude and no
-    NOVA_DIALOGUE_TO_PROVIDER, a real date's recent turns never go into its prompts (decision
-    0005); with local Ollama they do."""
+    """One Rehearsal a session, so one DateContext a date (decision 0008), and every request
+    it sends goes through the policy from the settings (decision 0010): who may receive a
+    real date's recent turns is decided per model, at each request (tests/test_privacy.py)."""
     made: list[FakeRehearsal] = []
     real = FakeRehearsal.__init__
 
@@ -407,14 +408,33 @@ async def test_a_session_makes_one_rehearsal_and_keeps_its_turns_from_an_unappro
 
     monkeypatch.setattr(FakeRehearsal, "__init__", counted)
     await rehearse(monkeypatch, tmp_path)
-    assert len(made) == 1 and made[0].options["share_context"] is True
-    claude = replace(SETTINGS, llm=LlmChoice("anthropic", "claude-haiku-5-5"))
+    assert len(made) == 1 and made[0].options["privacy"] == PrivacyPolicy()
+    approved = replace(
+        SETTINGS,
+        llm=LlmChoice("anthropic", "claude-haiku-5-5"),
+        dialogue_to_provider=True,
+        approved_local_hosts=frozenset({"gpu.lan"}),
+    )
     monkeypatch.setattr(agent, "build_classifier", lambda settings: SimpleNamespace(name="fake"))
     session = StartedSession(Clock())
-    monkeypatch.setattr(agent, "load_settings", lambda: claude)
+    monkeypatch.setattr(agent, "load_settings", lambda: approved)
     monkeypatch.setattr(agent, "new_session", lambda settings: session)
     await agent.rehearse(FakeContext())
-    assert len(made) == 2 and made[1].options["share_context"] is False
+    assert len(made) == 2 and made[1].options["privacy"] == PrivacyPolicy(
+        dialogue_to_provider=True, approved_hosts=frozenset({"gpu.lan"})
+    )
+
+
+async def test_a_session_never_starts_with_logs_that_would_write_prompts(monkeypatch, tmp_path):
+    """The agent hears real people: diagnostics meant for synthetic runs are refused before
+    the session starts, as is any SDK logger at DEBUG (nova/privacy.py)."""
+    diagnostics = replace(SETTINGS, synthetic_diagnostics=True)
+    session = StartedSession(Clock())
+    monkeypatch.setattr(agent, "load_settings", lambda: diagnostics)
+    monkeypatch.setattr(agent, "new_session", lambda settings: session)
+    with pytest.raises(ConfigError, match="never the agent"):
+        await agent.rehearse(FakeContext())
+    assert getattr(session, "started", None) is None, "no session was started"
 
 
 async def test_a_date_nova_isnt_ready_for_never_opens_unless_the_moderator_says(
