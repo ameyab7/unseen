@@ -104,6 +104,17 @@ The yield rehearsal (decision 0004, `nova.yield_live`) ran in a real LiveKit roo
   Requests from the sixth trial on, for every voice tried, and still did 12 minutes later.
 - Mid-line yielding stays release-blocking until a full run passes.
 
+The full run, 2026-10-23 10:23 UTC, was valid: 51 of 51 trials, real audio both ways, no
+429 (decision 0004 has the detail).
+- Genuine cut-ins: 37 of 37 stopped Nova. From the dater's first speech, the voice stopped
+  at the agent in a median of 478 ms mid-line (199 ms early), and the dater heard it end in
+  a median of 562 ms (worst 681 ms).
+- False stops: with no echo cancelling, Nova's own audio stopped it 3 times in each of 3
+  trials, and the TV once in each of 3 trials. Through WebRTC's echo canceller: none.
+- A request to stop reached the moderator 2.4 s after the clip began.
+- Echo, the canceller and the dater's voice were all simulated on one machine, and no real
+  phone on speaker was tested.
+
 ### The model's lifecycle on the development PC (2026-10-21)
 
 Measured against local Ollama (`gemma4:26b`) through the OpenAI SDK Nova uses, outside
