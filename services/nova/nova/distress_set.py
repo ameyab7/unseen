@@ -22,6 +22,10 @@ class Sample:
     plain: bool = False  # none of the usual warning words (stop, leave, help, scared...)
     split: tuple[str, ...] = ()  # the sentence as two final transcripts, if it's split
     other: tuple[str, ...] = ()  # what the other dater said just before, which it answers
+    # A dater refusing something personal or intrusive, however they say it (with distress
+    # True): the moderator is alerted that the other dater is pushing, and the date doesn't
+    # pause (decision 0005).
+    boundary: bool = False
 
     @property
     def finals(self) -> tuple[str, ...]:

@@ -124,9 +124,38 @@ Date: 2026-10-13. Status: accepted.
     `response_format` with a JSON schema; Claude's `output_config.format`), with the old
     bare-word parse kept for a model that ignores it. The rules name the indirect signals
     (asking how long is left, wishing to be home or elsewhere, the body in trouble, asking
-    for someone from the show, a flat answer to something invasive the other dater said),
-    say "if you are unsure between no and maybe, answer maybe" (a maybe only alerts), and
-    give six short examples written for the prompt, from neither test set. The agent and
+    for someone from the show, a short, flat or shaken answer to something invasive,
+    controlling or threatening the other dater said; not a game or round of the show), say
+    "if you are unsure between no and maybe, answer maybe" (a maybe only alerts), and give eight
+    short examples written for the prompt, from neither test set.
+    **Refusals: the product owner's decision, 2026-10-22.** (An earlier version of this
+    entry called the calm boundary below "the product owner's choice, 2026-10-21"; no
+    recorded decision supported that, and this one replaces it.) On main at 2346211 a
+    short, flat or reluctant answer to something invasive was a yes, so a refusal paused
+    the date. Now:
+    - (a) a clear refusal of something personal or intrusive, however it's said (pleading,
+      repeated, or answering coercion or a demeaning remark: "I'd rather not, please." to
+      a demand for a photo, "i said no already", "Can we change the subject." to a remark
+      about women, "no no no i don't want to answer that") is a maybe: the moderator is
+      alerted and the date doesn't pause;
+    - (b) a calm boundary (declining to share where they live or work, their number,
+      surname or photos, or asking why the other dater keeps asking) is a maybe too;
+    - a refusal that answers a threat or the other dater knowing their details, or that
+      also says they want it to end or to leave, or feel upset, uneasy, unsafe or scared,
+      stays a yes: the date pauses for them;
+    - (c) a playful refusal of something light (a favourite biscuit, a karaoke song) is
+      ordinary talk: nothing;
+    - (d) opting out of a game or a round of the show ("Can I tap out of the quiz round
+      and just watch?") is ordinary talk: nothing;
+    - (e) pressing after a no, insisting on an answer or blaming the other dater for not
+      giving one, is the presser's harassment: a console flag, no line on air (decision
+      0006); the dater asking for, or pressing for, the other's details is never a yes or
+      maybe for that reason;
+    - (f) asking for someone from the show ("who do i tell if something's wrong") stays a
+      yes; it was fragile, so it has contrast pairs (below) rather than a broader rule.
+    Before the first of these changes, both sides of a boundary were paused: "why do you
+    keep asking what street i live on" and "So what street are you on?" each got yes,
+    three runs of three. The agent and
     the evaluation warm the check's model up first: without it, a cold load (18 s) made
     every 2 s check time out and start the load again.
     Distress needn't use any particular word ("can someone come get me?"), so nothing is
@@ -224,6 +253,65 @@ Date: 2026-10-13. Status: accepted.
     195 ms, with the longer rules and the JSON. Before the first real show, someone else
     (the product owner or a moderator) writes a second held-out set the check has never
     seen; real transcripts can't be used, since they're never stored.
+    Fourth run, 2026-10-21, Gemma (`gemma4:26b`), for calm boundaries and teasing
+    (decision 0006). The dev set gained a third group, four calm boundaries
+    (`Sample.boundary`, hoped for: an alert with no pause; two gates: none missed, under 1
+    in 4 paused), each with a near neighbour that wants it to end or is scared, and four
+    ordinary lines beside them (two daters asking, two playful refusals): 66 real, 66
+    ordinary, 4 boundaries. Before, on the 124 sentences it had: 61 of 62 real paused, 1
+    missed (the sofa), 3 false pauses, 2 false alerts. After, on 136: 62 of 66 real
+    paused, 3 alerted the moderator only, 1 missed (the same sofa), 1 false pause ("tap
+    out of the quiz round"), 4 false alerts (the two split sentences, as before, and two
+    playful refusals, a favourite biscuit and a karaoke song), all 4 boundaries alerted
+    without a pause, none unchecked, median 371 ms. The three that now only alert were
+    paused before: "I'd rather not, please." (to a demand for a photo), "Can we change
+    the subject." (to a remark about women) and "no no no i don't want to answer that".
+    The moderator still hears them; the date doesn't pause. Three examples, for a
+    boundary, a dater asking and teasing, were tried and dropped: with them, "who do i
+    tell if something's wrong" was missed, and it flips on almost any added sentence, so
+    the check is fragile there. Held-out, run once after: 50 of 53 real paused, 2 alerted
+    only, 1 missed (1.9%, 0.3% to 9.9%), no false pauses, 3 false alerts (5.7%), none
+    unchecked. The missed-distress gate fails on one sentence in each set, as it did
+    before this change.
+    Fifth run, 2026-10-22, Gemma (`gemma4:26b`, distress timeout 2 s), for the product
+    owner's refusal decision above. The dev set's refusals became nine (`Sample.boundary`:
+    the four calm boundaries, the four refusals that paused on main, and a number
+    declined), each beside the same refusal when it also wants out or is scared, plus pairs
+    for a refusal to a threat (pause), sitting out a round of the show (nothing) and asking
+    someone backstage (pause), each with an ordinary look-alike: 70 real, 70 ordinary, 9
+    refusals. Two examples were added: asking who to go to if something felt off (yes) and
+    who to thank for the songs (no). The conduct dev half's "Honestly, that's the dumbest
+    thing I've heard all night." scored 0.67 against a held-out sentence and was replaced. A
+    test now keeps the whole dev half, and the lines its samples answer, under 0.6. The
+    guards print a score, never a held-out sentence: before that, one failing guard printed
+    six held-out sentences through pytest's assertion detail. None of them was used.
+    Before, on the fourth run's rules: three refusals alerted only and "i said no already"
+    paused; "tap out of the quiz round" paused; the biscuit and karaoke refusals alerted;
+    "why are you being difficult?" was unkind.
+    After, the same on three runs, none changing outcome:
+    - 69 of 70 real paused, none alerted only, 1 missed (the sofa);
+    - all 9 refusals alerted without a pause;
+    - no false pauses;
+    - 5 false alerts: the two split sentences and three playful refusals (the karaoke
+      song, an embarrassing wedding song, a worst film);
+    - none unchecked, median 392 ms;
+    - conduct dev: harassment 5 of 5, the rest as before.
+    It is still fragile, and three wordings were tried and dropped:
+    - a clause naming "asks to change the subject" alerted on "Can we change the subject, I
+      know nothing about football." and "can we can we talk about dogs instead";
+    - two examples contrasting a personal refusal with a playful one flipped "I couldn't
+      catch my breath after laughing at that." to a pause and "That's, um, that's a lot."
+      to an alert;
+    - without "often moving the talk on", "Can we change the subject." (to a remark about
+      women) paused.
+    Held-out, once after:
+    - distress: 49 of 53 real paused, 2 alerted only, 2 missed (3.8%, 1.0% to 12.8%; one
+      more than the fourth run), no false pauses, 2 false alerts (3.8%), none unchecked;
+    - conduct: harassment 3 of 4 and threat 2 of 3 as before, ordinary talk left alone 11
+      of 14 (one fewer).
+    The held-out labels predate this decision, so a held-out refusal labelled distress that
+    now only alerts counts as "alerted only"; a miss is a miss either way. The rules were
+    not tuned after the held-out run.
 - **Lines vary across the night.** Listeners hear every date, so Nova remembers the lines
   it has used tonight, across dates (`nova/tonight.py`). Every prompt sees the lines
   already said for its moment (daters' names masked, so no earlier dater's name reaches a

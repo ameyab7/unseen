@@ -8,6 +8,7 @@ import time
 
 import pytest
 
+from nova import conduct_set
 from nova.cards import Seat
 from nova.distress import (
     CHECK_SYSTEM,
@@ -27,6 +28,7 @@ from nova.distress_set import DISTRESS_SET, Sample
 from nova.tonight import similarity
 
 LEFT, RIGHT = Seat.LEFT, Seat.RIGHT
+TEASED = ((conduct_set.SINGS,), (conduct_set.PUN,), (conduct_set.LATE,), (conduct_set.CROWS,))
 
 # --- The instant layer --------------------------------------------------------------------
 
@@ -501,6 +503,13 @@ async def test_the_listener_gives_the_check_both_daters_last_fifteen_seconds():
 NEAR = 0.6
 
 
+def assert_no_paraphrase(said: str, held_out: list[str]) -> None:
+    """A failure names the dev line and its score, never a held-out sentence, which stays
+    unread."""
+    score = max(similarity(said, h) for h in held_out)
+    assert score < NEAR, f"{said!r} scores {score:.2f} against a held-out sentence"
+
+
 def test_the_checks_examples_and_the_dev_set_never_paraphrase_a_held_out_sentence():
     """Held-out results measure the check only if neither its examples nor the set it is
     tuned on answer a held-out sentence for it."""
@@ -508,5 +517,47 @@ def test_the_checks_examples_and_the_dev_set_never_paraphrase_a_held_out_sentenc
     examples = re.findall(r'"([^"]+)"', CHECK_SYSTEM.split("Examples")[1].split("Also label")[0])
     assert len(examples) >= 6
     for said in (*examples, *(sample.sentence for sample in DEV_SET)):
-        closest = max(held_out, key=lambda h: similarity(said, h))
-        assert similarity(said, closest) < NEAR, (said, closest)
+        assert_no_paraphrase(said, held_out)
+
+
+def test_the_teasing_pairs_and_boundaries_never_paraphrase_a_held_out_sentence():
+    """The contrast pairs added for boundaries and teasing, and every line they answer or
+    follow, kept from both held-out sets (distress and the conduct half)."""
+    held_out = [s.sentence for s in (*DISTRESS_SET, *conduct_set.HELD_OUT_HALF)]
+    teasing = [s for s in conduct_set.DEV_HALF if s.earlier or s.other in TEASED]
+    lines = {
+        line
+        for s in (*teasing, *(s for s in DEV_SET if s.other))
+        for line in (s.sentence, *s.other, *s.earlier)
+    }
+    assert len(teasing) == 8
+    for said in lines:
+        assert_no_paraphrase(said, held_out)
+
+
+def test_the_conduct_dev_half_never_paraphrases_a_held_out_sentence():
+    """A put-down in the dev half once scored 0.67 against a held-out one: the whole dev
+    half, and every line its samples answer or follow, kept from both held-out sets."""
+    held_out = [s.sentence for s in (*DISTRESS_SET, *conduct_set.HELD_OUT_HALF)]
+    lines = {line for s in conduct_set.DEV_HALF for line in (s.sentence, *s.other, *s.earlier)}
+    for said in lines:
+        assert_no_paraphrase(said, held_out)
+
+
+def test_the_rules_tell_a_refusal_from_distress_and_teasing_from_a_put_down():
+    """On main at 2346211 a calm boundary was a request to stop, the dater asking was
+    paused too, and friendly teasing got "Let's keep it kind.". The product owner's
+    decision, 2026-10-22 (decision 0005): a refusal alerts only, however it's said; a
+    refusal to a threat, or one that says the dater wants out or is scared, pauses."""
+    rules = " ".join(CHECK_SYSTEM.split())
+    assert "when the dater refuses something personal or intrusive, however they say it" in rules
+    assert (
+        "A refusal that answers a threat or the other dater knowing their details is the yes"
+        in rules
+    )
+    assert "one that says they want it to end or feel any of those" in rules
+    assert "a game or a round of the show" in rules
+    assert "pressing after a no (insisting on an answer" in rules
+    assert "never a reason to answer yes or maybe for them" in rules
+    assert "friendly teasing included: light, playful ribbing" in rules
+    assert "teasing that carries on after they objected, or repeats a put-down" in rules

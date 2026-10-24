@@ -36,8 +36,18 @@ sexual content, hate, minors, and addresses or workplaces.
     what the speaker's own words do; the yes, maybe or no label stays about whether the
     speaker needs the moderator. The rules say that a dater reporting, quoting or
     describing what someone else said or did to them, or asking why they keep doing it,
-    has conduct none. A model that ignores the structured output may still answer both
-    labels ("no, none"). An utterance the instant distress layer acts on goes to the model
+    has conduct none. Friendly teasing (light ribbing, often about something the other
+    dater just said about themselves) is none; unkind is a put-down of the other dater
+    themselves, or teasing that carries on after they objected or repeats an earlier
+    put-down (2026-10-21: "do you always need an audience to perform your best?", to the
+    other dater's joke about singing for a crowd, was unkind three runs of three, and Nova
+    said "Let's keep it kind."). Harassment includes pressing after a no: insisting on an
+    answer, or blaming the other dater for not giving one, even with a put-down in it ("I
+    asked you a question, answer it, why are you being difficult?", after "I don't want to
+    talk about my ex."), is harassment, a console flag with no line on air, not unkind (the
+    product owner's decision, 2026-10-22, decision 0005). Playful insistence about
+    something light, after a laughing no, is none. A model that ignores the structured
+    output may still answer both labels ("no, none"). An utterance the instant distress layer acts on goes to the model
     too if it holds three or more words besides the request, for its conduct label only,
     so "I need to go. Give me your number or I'll find you." is flagged as a threat.
 - **Actions** (`ShowRunner.dater_conduct`), on air; off air (before the date, on a hold,
@@ -99,6 +109,23 @@ sexual content, hate, minors, and addresses or workplaces.
   held-out, 50 of 51 real distress paused, 1 missed, no false pauses; dev, 1 missed and 3
   false pauses of 60 (5.0%: "a cooking edition", "go home and bake that bread" and "tap
   out of the quiz round"). The rules weren't tuned again after the held-out run.
+
+  Second run, 2026-10-21, Gemma (`gemma4:26b`): the dev half gained four pairs, a friendly
+  tease and a put-down answering the same line from the other dater, one put-down repeated
+  after an earlier one (`ConductSample.earlier`): 50 sentences, 32 conduct and 18 ordinary.
+  Every gate passed before and after: unkind 4 of 4, then 8 of 8; ordinary talk left alone
+  14 of 14, then 18 of 18; harassment 3 of 4 both times ("I asked you a question, answer
+  it, why are you being difficult?" is labelled unkind). Held-out, once after: every
+  category caught, harassment 3 of 4 and threat 2 of 3 as before, ordinary talk left alone
+  12 of 14.
+
+  Third run, 2026-10-22, Gemma (`gemma4:26b`), after the product owner's refusal decision.
+  The dev half replaced a put-down that paraphrased a held-out one (0.67), and gained a pair:
+  pressing after a no ("That's the third time you've dodged it, just answer the question.")
+  beside playful insistence after a laughing no. That makes 52 sentences, 33 conduct and 19
+  ordinary. Dev: every gate passed; harassment 5 of 5 ("why are you being difficult?" is now
+  harassment); ordinary talk left alone 19 of 19. Held-out, once after: harassment 3 of 4 and
+  threat 2 of 3 as before; ordinary talk left alone 11 of 14, one fewer.
 
 ## What it can't catch
 
