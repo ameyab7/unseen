@@ -8,6 +8,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from livekit.agents import CloseEvent, CloseReason
 from livekit.agents.voice import io as voice_io
 
 from nova import agent
@@ -234,7 +235,13 @@ class FakeRehearsal:
         self.listening_at_the_start = False
         self.stopped_listening = False
         self.order: list[str] = []
+        self.closed = False
         FakeRehearsal.last = self
+
+    def close(self) -> None:
+        """Its Night closes it, however the date ended (nova/show.py)."""
+        self.order.append("close")
+        self.closed = True
 
     async def listen(self) -> None:
         self.listening.set()
@@ -259,7 +266,7 @@ class FakeRehearsal:
     def unmute(self) -> None:
         self.muted = False
 
-    def command(self, text: str):
+    def command(self, text: str, seat=None):
         from nova.rehearsal import Command
 
         if text not in ("mute", "unmute"):
@@ -274,6 +281,7 @@ class FakeRehearsal:
     async def run(self) -> None:
         self.order.append("run")
         self.listening_at_the_start = self.listening.is_set() and not self.stopped_listening
+        assert not self.closed, "closed only once the date is over"
 
 
 class FakeRoom:
@@ -308,9 +316,85 @@ class FakeContext:
         pass
 
 
-async def rehearse(monkeypatch, tmp_path) -> StartedSession:
+async def test_two_person_inputs_are_pinned_to_their_tracks_and_closed(monkeypatch):
+    from nova.cards import Seat
+
+    left, right = StartedSession(Clock()), StartedSession(Clock())
+    heard = []
+    waited = []
+
+    class Context(FakeContext):
+        async def wait_for_participant(self, *, identity):
+            waited.append(identity)
+
+    class Date(FakeRehearsal):
+        def speech_started(self, seat):
+            heard.append(("start", seat))
+
+        def speech_ended(self, seat):
+            heard.append(("end", seat))
+
+        def transcript(self, text, seat):
+            heard.append((text, seat))
+
+        def command(self, text, seat=None):
+            heard.append((f"typed {text}", seat))
+            return super().command(text, seat)
+
+        async def run(self):
+            left.handlers["user_state_changed"](
+                SimpleNamespace(new_state="speaking", old_state="listening")
+            )
+            right.handlers["user_state_changed"](
+                SimpleNamespace(new_state="speaking", old_state="listening")
+            )
+            right.handlers["user_input_transcribed"](
+                SimpleNamespace(is_final=True, transcript="Right input")
+            )
+            left.handlers["user_input_transcribed"](
+                SimpleNamespace(is_final=True, transcript="Left input")
+            )
+            # Each person's typing is their own seat's, whoever spoke last (Theo, here).
+            for session in (left, right):
+                chat = session.started["room_options"].text_input.text_input_cb
+                chat(session, SimpleNamespace(text="reveal"))
+
+    closed = []
+
+    async def close_right():
+        closed.append(True)
+
+    right.aclose = close_right
+    date = Date()
+    await agent.run_date(
+        Context(),
+        left,
+        SessionSpeaker(left),
+        date,
+        seats={Seat.LEFT: "dater-left", Seat.RIGHT: "dater-right"},
+        other_session=right,
+    )
+    assert set(waited) == {"dater-left", "dater-right"}
+    assert left.started["room_options"].participant_identity == "dater-left"
+    options = right.started["room_options"]
+    assert options.participant_identity == "dater-right"
+    assert options.get_audio_output_options() is None
+    assert options.get_text_output_options() is None
+    assert options.get_text_input_options() is not None, "the right seat types its own commands"
+    assert heard == [
+        ("start", Seat.LEFT),
+        ("start", Seat.RIGHT),
+        ("Right input", Seat.RIGHT),
+        ("Left input", Seat.LEFT),
+        ("typed reveal", Seat.LEFT),
+        ("typed reveal", Seat.RIGHT),
+    ]
+    assert closed == [True]
+
+
+async def rehearse(monkeypatch, tmp_path, session: StartedSession | None = None) -> StartedSession:
     """Runs the agent's entrypoint with LiveKit's session, the model and the date faked."""
-    session = StartedSession(Clock())
+    session = session or StartedSession(Clock())
     monkeypatch.setattr(agent, "load_settings", lambda: SETTINGS)
     monkeypatch.setattr(agent, "new_session", lambda settings: session)
     monkeypatch.setattr(agent, "build_model", lambda settings: SimpleNamespace(name="fake"))
@@ -378,7 +462,8 @@ async def test_the_model_is_warmed_up_before_set_pieces_are_prepared(monkeypatch
     """A cold model takes 20-28 s to load: the warm-up takes that, not the prep budget."""
     await rehearse(monkeypatch, tmp_path)
     rehearsal = FakeRehearsal.last
-    assert rehearsal is not None and rehearsal.order == ["warm_up", "prepare", "hold", "run"]
+    assert rehearsal is not None
+    assert rehearsal.order == ["warm_up", "prepare", "hold", "run", "close"]
     assert rehearsal.options["prep_budget"] == SETTINGS.prep_budget
 
 
@@ -391,6 +476,95 @@ def test_redaction_is_added_once_however_often_the_agent_starts():
         assert sum(isinstance(f, RedactPii) for f in handler.filters) == 1
     finally:
         logging.getLogger().removeHandler(handler)
+
+
+async def test_the_sessions_date_is_opened_through_a_night_and_closed_when_it_ends(
+    monkeypatch, tmp_path
+):
+    """A rehearsal is a night of one date (nova/show.py, decision 0011): the date gets the
+    night's memory, the retry window from the settings, and is closed after the session's
+    date, before the report."""
+    await rehearse(monkeypatch, tmp_path)
+    date = FakeRehearsal.last
+    assert date is not None and date.closed and date.order[-1] == "close"
+    assert "tonight" in date.options and date.options["ready_retry"] == SETTINGS.ready_retry
+
+
+async def test_a_date_that_never_opens_is_closed_too(monkeypatch, tmp_path):
+    monkeypatch.setattr(FakeRehearsal, "opens", False)
+    await rehearse(monkeypatch, tmp_path)
+    date = FakeRehearsal.last
+    assert date is not None and "run" not in date.order and date.closed
+
+
+def closes_the_session(monkeypatch, session: StartedSession, step: str) -> None:
+    """The person playing both daters leaves during `step` of the date (prepare or run):
+    LiveKit closes the session, and the step would otherwise never end on its own."""
+
+    async def step_cut_short(self) -> None:
+        self.order.append(step)
+        reason = CloseReason.PARTICIPANT_DISCONNECTED
+        session.handlers["close"](CloseEvent(reason=reason))
+        try:
+            await asyncio.Event().wait()
+        finally:
+            self.order.append(f"{step} cut short")
+
+    monkeypatch.setattr(FakeRehearsal, step, step_cut_short)
+
+
+def report(tmp_path) -> str:
+    (path,) = tmp_path.glob("*.txt")
+    return path.read_text(encoding="utf-8")
+
+
+async def test_the_date_ends_as_soon_as_the_session_closes_and_the_report_says_why(
+    monkeypatch, tmp_path
+):
+    """Until 2026-10-26, a dater who left had the date run on to an empty room, Nova's
+    lines and model requests included, until LiveKit cancelled the job about 35 s later,
+    and no report was written."""
+    session = StartedSession(Clock())
+    closes_the_session(monkeypatch, session, "run")
+    await asyncio.wait_for(rehearse(monkeypatch, tmp_path, session), 1.0)
+    date = FakeRehearsal.last
+    assert date is not None and date.order[-3:] == ["run", "run cut short", "close"]
+    await asyncio.sleep(0)
+    assert date.stopped_listening
+    assert "The session closed (participant_disconnected) before the date's end" in report(tmp_path)
+
+
+async def test_a_session_that_closes_while_nova_gets_ready_never_opens_the_date(
+    monkeypatch, tmp_path
+):
+    session = StartedSession(Clock())
+    closes_the_session(monkeypatch, session, "prepare")
+    await asyncio.wait_for(rehearse(monkeypatch, tmp_path, session), 1.0)
+    date = FakeRehearsal.last
+    assert date is not None and date.order == ["warm_up", "prepare", "prepare cut short", "close"]
+    assert "(participant_disconnected)" in report(tmp_path)
+
+
+async def test_a_date_that_runs_its_course_says_nothing_of_the_session_closing(
+    monkeypatch, tmp_path
+):
+    await rehearse(monkeypatch, tmp_path)
+    assert "session closed" not in report(tmp_path)
+
+
+async def test_an_error_in_the_date_still_ends_the_job_and_the_date_is_closed(
+    monkeypatch, tmp_path
+):
+    async def broken(self) -> None:
+        self.order.append("run")
+        raise RuntimeError("the date broke")
+
+    monkeypatch.setattr(FakeRehearsal, "run", broken)
+    with pytest.raises(RuntimeError, match="the date broke"):
+        await rehearse(monkeypatch, tmp_path)
+    date = FakeRehearsal.last
+    await asyncio.sleep(0)
+    assert date is not None and date.closed and date.stopped_listening
 
 
 async def test_a_session_makes_one_rehearsal_with_the_privacy_policy_its_settings_give(
@@ -445,7 +619,7 @@ async def test_a_date_nova_isnt_ready_for_never_opens_unless_the_moderator_says(
     monkeypatch.setattr(FakeRehearsal, "opens", False)
     await rehearse(monkeypatch, tmp_path)
     rehearsal = FakeRehearsal.last
-    assert rehearsal is not None and rehearsal.order == ["warm_up", "prepare", "hold"]
+    assert rehearsal is not None and rehearsal.order == ["warm_up", "prepare", "hold", "close"]
     assert list(tmp_path.glob("*.txt")), "the report is written all the same"
 
 

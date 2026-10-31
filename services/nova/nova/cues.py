@@ -4,7 +4,7 @@ When these become room events (a later task), their shapes get zod schemas in
 packages/shared, and these classes follow them.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from nova.cards import Seat
@@ -75,8 +75,13 @@ class ModeratorAlert(StrEnum):
     CONDUCT_FLAG = "conduct_flag"  # a dater's conduct, with its category: listen in now
     SHOW_HELD = "show_held"  # the date is still held for a dater's conduct after 30 s: decide
     # Nova isn't ready to open the date (a model didn't warm up, or every set piece is a
-    # fallback): the doors hold until the moderator starts it anyway or ends it.
+    # fallback): the doors hold while Nova tries again, and the moderator may start it
+    # anyway or end it at any time.
     NOVA_NOT_READY = "nova_not_ready"
+    NOVA_READY = "nova_ready"  # ready after all while the doors held: the date opens now
+    # The tries stopped (NOVA_READY_RETRY_SECONDS ran out, or a failure that can't pass):
+    # the doors hold until the moderator starts it with the approved fallbacks or ends it.
+    NOVA_STILL_NOT_READY = "nova_still_not_ready"
 
 
 class Conduct(StrEnum):
@@ -120,7 +125,10 @@ class Say:
     room works from the room facts. number of of: a question's place in its round (the
     lightning round's "2 of 3"). away: a dater off air after the moderator resumed without
     them, whom an audience question, a reply, or the other dater's first question or last
-    word must not name or address."""
+    word must not name or address. due: a scheduled transition's line, the wall time its
+    pending age counts from (decision 0012): when its beat first came due, later by any
+    room hold while it waited. So the wait before it, and after any yield, knows how long
+    the conversation has held it back. Not part of what the line is."""
 
     moment: Moment
     text: str | None = None
@@ -130,6 +138,9 @@ class Say:
     number: int | None = None
     of: int | None = None
     away: Seat | None = None
+    bridge: bool = False  # optional live prefix; the prepared question remains intact
+    return_floor: bool = False  # a reply preserves this dater's pending question
+    due: float | None = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)

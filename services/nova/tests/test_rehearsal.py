@@ -5,6 +5,8 @@ import asyncio
 import logging
 import time
 
+import httpx
+import openai
 import pytest
 
 from nova import script
@@ -15,10 +17,12 @@ from nova.distress import LIGHT_SYSTEM
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
 from nova.lines import LineWriter, Source
 from nova.meaning import MEANING_SYSTEM
+from nova.models import WARM_UP_SYSTEM, WarmUpError
 from nova.rehearsal import (
     MAX_YIELDS,
     Command,
     Kind,
+    Opened,
     Rehearsal,
     Spoken,
     Then,
@@ -1885,25 +1889,32 @@ async def test_a_ready_nova_opens_the_date_at_once_with_no_alert():
     clock = Clock()
     r = rehearsal(clock)
     await r.warm_up(deadline=1.0)
+    clock.now = 4.0
     await r.prepare()
     assert r.ready and await asyncio.wait_for(r.hold_until_ready(), 1.0)
     assert ModeratorAlert.NOVA_NOT_READY not in alerts(r) and r.held_for is None
+    assert (r.opened, r.startup_ms, r.hold_retries) == (Opened.READY, 4000, 0)
+    assert "Nova was ready 4.0 s from the warm-up; 0 of 10 set pieces" in render_report(r)
 
 
 async def test_nova_not_ready_holds_the_doors_until_the_moderator_opens_the_date():
     """Two rehearsals on 2026-10-18 opened with every set piece a fallback after a failed
-    warm-up, and only the report said so. Now the moderator is told and decides."""
+    warm-up, and only the report said so. Now the moderator is told and decides. A failure
+    that can't pass (one it can't tell) is never tried again: still not ready, at once."""
     clock = Clock()
     r = await not_ready(clock)
     assert not r.ready
     held = asyncio.ensure_future(r.hold_until_ready())
     await asyncio.sleep(0.02)
-    assert ModeratorAlert.NOVA_NOT_READY in alerts(r) and not held.done(), "never on its own"
+    assert alerts(r)[-2:] == [ModeratorAlert.NOVA_NOT_READY, ModeratorAlert.NOVA_STILL_NOT_READY]
+    assert not held.done(), "never on its own"
     clock.now = 12.0
     r.command("start")
     assert await asyncio.wait_for(held, 1.0) is True and r.held_for == 12.0
+    assert (r.opened, r.hold_retries) == (Opened.MODERATOR, 0)
     r.start()
-    assert "the doors held 12.0 s for the moderator, who opened the date" in render_report(r)
+    assert "the doors held 12.0 s, 0 warm-up tries" in render_report(r)
+    assert "the moderator opened the date with the approved fallbacks" in render_report(r)
 
 
 async def test_the_moderator_can_end_a_date_nova_isnt_ready_for():
@@ -1913,7 +1924,8 @@ async def test_the_moderator_can_end_a_date_nova_isnt_ready_for():
     await asyncio.sleep(0.02)
     r.command("end")
     assert await asyncio.wait_for(held, 1.0) is False and r.finished
-    assert "ended it" in render_report(r)
+    assert r.opened is Opened.ENDED
+    assert "the moderator ended it before it opened" in render_report(r)
 
 
 async def test_every_set_piece_a_fallback_is_not_ready_even_when_the_warm_up_was_fine():
@@ -1925,6 +1937,185 @@ async def test_every_set_piece_a_fallback_is_not_ready_even_when_the_warm_up_was
     await r.warm_up(deadline=1.0)
     await r.prepare()
     assert all(w.error is None for _, w in r.warmed) and not r.ready
+
+
+# --- Trying again while the doors hold (decision 0011, 2026-10-24) ----------------------------
+
+DOWN = openai.APIConnectionError(message="connection refused", request=httpx.Request("POST", "/"))
+QUICK = (0.01, 0.02)  # the hold's pauses, short for the tests
+
+
+class ComesUp(FakeModel):
+    """Refuses connections, a failure that may pass, until `up`; then a working model.
+    slow: how long a warm-up takes once up (a cold load)."""
+
+    def __init__(self, *, slow: float = 0.0, **options) -> None:
+        super().__init__(**options)
+        self.up, self.slow = False, slow
+        self.warm_ups: list[float] = []  # when each warm-up request was sent
+        self.cancelled = 0
+
+    async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
+        if system == WARM_UP_SYSTEM:
+            self.warm_ups.append(time.monotonic())
+            if not self.up:
+                raise DOWN
+            try:
+                await asyncio.sleep(self.slow)
+            except asyncio.CancelledError:
+                self.cancelled += 1
+                raise
+            return "ok"
+        if not self.up:
+            raise DOWN
+        return await super().label(system=system, prompt=prompt, schema=schema)
+
+    async def write(self, *, system: str, prompt: str) -> str:
+        if not self.up:
+            raise DOWN
+        return await super().write(system=system, prompt=prompt)
+
+
+def holding(clock: Clock, model: FakeModel, *, retry: float = 2.0) -> Rehearsal:
+    return Rehearsal(
+        REHEARSAL_PAIR,
+        model=model,
+        speaker=FakeSpeaker(clock),
+        clock=clock,
+        timing=REHEARSAL,
+        next_pair=NEXT_PAIR,
+        first_up=Seat.LEFT,
+        voice="fake/voice",
+        stt="deepgram/nova-3",
+        prep_budget=1.0,
+        ready_retry=retry,
+        retry_backoff=QUICK,
+    )
+
+
+async def down_at_the_start(clock: Clock, model: ComesUp, **options) -> Rehearsal:
+    r = holding(clock, model, **options)
+    await r.warm_up(deadline=0.2)  # its own tries pause 1 s: past this deadline, so one
+    await r.prepare()
+    assert r.warmed[0][1].error is WarmUpError.UNAVAILABLE and r._writer.all_fallbacks
+    return r
+
+
+async def test_a_model_that_comes_up_while_the_doors_hold_opens_the_date_and_says_so():
+    """Ollama still starting when the session began: the doors hold, Nova tries again, and
+    once it answers the set pieces are written again and the date opens on its own."""
+    clock = Clock()
+    model = ComesUp()
+    r = await down_at_the_start(clock, model)
+    planned = [line.text for line in r._writer._prepared.values()]
+    held = asyncio.ensure_future(r.hold_until_ready())
+    await asyncio.sleep(0.05)
+    assert not held.done() and alerts(r)[-1] is ModeratorAlert.NOVA_NOT_READY
+    model.up = True
+    assert await asyncio.wait_for(held, 2.0) is True, "opened without the moderator"
+    assert alerts(r)[-2:] == [ModeratorAlert.NOVA_NOT_READY, ModeratorAlert.NOVA_READY]
+    assert r.opened is Opened.RECOVERED and r.hold_retries >= 1 and r.reprepared == 1
+    assert r._writer.fallbacks == (0, 10), "every set piece the model's"
+    remembered = [text for kept in r._writer._tonight._lines.values() for text in kept]
+    assert not {line.text for line in remembered} & set(planned), "the fallbacks left memory"
+    assert "ready after all, and the date opened" in render_report(r)
+
+
+async def test_the_tries_stop_at_the_deadline_and_leave_it_to_the_moderator():
+    clock = Clock()
+    model = ComesUp()  # never comes up
+    r = await down_at_the_start(clock, model, retry=0.3)
+    started = time.monotonic()
+    held = asyncio.ensure_future(r.hold_until_ready())
+    while ModeratorAlert.NOVA_STILL_NOT_READY not in alerts(r):
+        await asyncio.sleep(0.01)
+    assert time.monotonic() - started < 0.45, "never past its deadline"
+    tries = len(model.warm_ups)
+    await asyncio.sleep(0.1)
+    assert len(model.warm_ups) == tries and not held.done(), "no more tries: the moderator"
+    assert r.hold_retries >= 2
+    r.command("start")
+    assert await asyncio.wait_for(held, 1.0) is True and r.opened is Opened.MODERATOR
+
+
+async def test_backoff_spaces_the_tries_and_repeats_the_last_pause():
+    clock = Clock()
+    model = ComesUp()
+    r = await down_at_the_start(clock, model, retry=0.25)
+    first = len(model.warm_ups)
+    held = asyncio.ensure_future(r.hold_until_ready())
+    while ModeratorAlert.NOVA_STILL_NOT_READY not in alerts(r):
+        await asyncio.sleep(0.005)
+    sent = model.warm_ups[first:]
+    gaps = [b - a for a, b in zip(sent, sent[1:], strict=False)]
+    assert gaps and all(gap >= 0.018 for gap in gaps), "at least the last pause between tries"
+    r.command("end")
+    assert await asyncio.wait_for(held, 1.0) is False
+
+
+async def test_a_slow_load_in_the_hold_is_one_request_held_never_cut_short():
+    """A cold load slower than the warm-up's deadline timed out; in the hold the next try
+    holds one request for what's left, so the load finishes instead of starting over."""
+    clock = Clock()
+    model = ComesUp(slow=0.3)
+    model.up = True
+    r = holding(clock, model)
+    await r.warm_up(deadline=0.1)  # the load takes 0.3 s: timed out
+    assert r.warmed[0][1].error is WarmUpError.TIMEOUT
+    await r.prepare()
+    held = asyncio.ensure_future(r.hold_until_ready())
+    assert await asyncio.wait_for(held, 2.0) is True and r.opened is Opened.RECOVERED
+    assert len(model.warm_ups) == 2 and model.cancelled == 1, "the timed-out one, then one held"
+
+
+async def test_the_moderators_choice_wins_over_a_try_in_flight():
+    clock = Clock()
+    model = ComesUp(slow=5.0)
+    r = await down_at_the_start(clock, model)
+    model.up = True  # the next try loads, slowly
+    held = asyncio.ensure_future(r.hold_until_ready())
+    while len(model.warm_ups) < 2:
+        await asyncio.sleep(0.005)
+    r.command("end")
+    assert await asyncio.wait_for(held, 1.0) is False and r.opened is Opened.ENDED
+    assert model.cancelled == 1, "the try in flight was stopped"
+    assert ModeratorAlert.NOVA_READY not in alerts(r)
+
+
+async def test_warm_models_whose_set_pieces_all_fall_back_never_open_on_their_own():
+    """Never a silent date of fallbacks: warm but writing nothing usable, the set pieces
+    are tried again until the deadline, then it's the moderator's."""
+
+    class WarmButBroken(WontWarm):
+        async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
+            return "ok" if '"sentence": "' not in prompt else "no"
+
+    clock = Clock()
+    r = holding(clock, WarmButBroken(), retry=0.2)
+    await r.warm_up(deadline=1.0)
+    await r.prepare()
+    held = asyncio.ensure_future(r.hold_until_ready())
+    while ModeratorAlert.NOVA_STILL_NOT_READY not in alerts(r):
+        await asyncio.sleep(0.01)
+    assert r.reprepared >= 1 and not held.done()
+    assert ModeratorAlert.NOVA_READY not in alerts(r)
+    r.command("end")
+    assert await asyncio.wait_for(held, 1.0) is False
+
+
+async def test_the_start_is_logged_as_numbers_and_codes(caplog):
+    caplog.set_level(logging.INFO, logger="nova")
+    clock = Clock()
+    model = ComesUp()
+    r = await down_at_the_start(clock, model)
+    held = asyncio.ensure_future(r.hold_until_ready())
+    await asyncio.sleep(0.02)
+    model.up = True
+    await asyncio.wait_for(held, 2.0)
+    messages = [record.getMessage() for record in caplog.records]
+    (opened,) = [m for m in messages if m.startswith("opened")]
+    assert opened.startswith("opened how=recovered ms=") and "fallbacks=0 set_pieces=10" in opened
+    assert any(m.startswith("warmup") and "hold=True" in m for m in messages)
 
 
 # --- The moderator mutes Nova (launch requirement 2) -----------------------------------------

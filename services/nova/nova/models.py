@@ -191,7 +191,10 @@ class WarmUpError(StrEnum):
     # Rejected outright, and never tried again: a bad key, no permission, a model not
     # pulled or unknown, a parameter or request it won't take.
     REJECTED = "rejected"
-    ERROR = "error"  # failed, and still failing when the tries or the deadline ran out
+    # A failure that may pass (models.retryable), still failing when the tries or the
+    # deadline ran out: the doors-hold tries again (Rehearsal.hold_until_ready).
+    UNAVAILABLE = "unavailable"
+    ERROR = "error"  # a failure it can't tell: never tried again
 
 
 @dataclass(frozen=True)
@@ -253,7 +256,7 @@ async def warm_up(
                 if tried < attempts and in_time:
                     await asyncio.sleep(pause)
                     continue
-                error = WarmUpError.ERROR
+                error = WarmUpError.UNAVAILABLE
             else:
                 error = WarmUpError.REJECTED if _rejected(caught) else WarmUpError.ERROR
         return Warmed(ms_since(started), error, tried)

@@ -2,10 +2,12 @@
 (decision 0008): a callback to something a dater said a minute ago, or a link between the
 two daters' answers, instead of reacting only to the last sentence.
 
-Lifetime: one date. Whoever runs the date makes one DateContext. The on-air listener adds a
-dater's turn once the distress and conduct check has cleared it (nova/on_air.py), the line
+Lifetime: one date. Each date of a show is opened by its Night (nova/show.py), which makes
+one DateContext for it alone, the rehearsal's single date included. The on-air listener adds
+a dater's turn once the distress and conduct check has cleared it (nova/on_air.py), the line
 writer adds Nova's own lines as they play and reads a summary for a reply or a silence
-prompt (nova/lines.py), and both clear it when the date ends. Tonight's memory
+prompt (nova/lines.py), and the date closes it when it ends, however it ends: cleared, and
+nothing joins it after, not even a turn whose check finishes late. Tonight's memory
 (nova/tonight.py) is a different thing, across dates and for repetition only: a line
 written from this context is never kept there, so nothing a dater said reaches a later
 date.
@@ -80,6 +82,7 @@ class DateContext:
         self._nova: deque[str] = deque(maxlen=NOVA_LINES)
         self._count = 0  # every turn either dater took, kept or not
         self._last: dict[Seat, int] = {}  # when each dater last took one
+        self.closed = False  # the date is over: nothing joins it again
 
     def __len__(self) -> int:
         """How many dater turns are kept, words and all: for the log, which never sees them."""
@@ -90,7 +93,7 @@ class DateContext:
         build on or holds a personal detail (then only that they spoke), or is Nova's own
         line echoed back (then nothing); True if kept."""
         text = plain(words)
-        if not text or any(similarity(text, line) >= ECHO for line in self._nova):
+        if self.closed or not text or any(similarity(text, line) >= ECHO for line in self._nova):
             return False
         if personal_detail(text) is not None:
             self.spoke(seat)
@@ -107,6 +110,8 @@ class DateContext:
         turn, so a question answered only with it is never shown; or, with held False, it
         was too short or only acknowledged, and takes no place at all. Either way the other
         dater's question counts as answered."""
+        if self.closed:
+            return
         n = self._took(seat)
         if held:
             self._turns.append(Turn(seat, "", held=True, n=n))
@@ -119,12 +124,21 @@ class DateContext:
     def said(self, line: str) -> None:
         """A line Nova wrote and the room heard (a set piece or a live reaction)."""
         text = plain(line)
-        if text:
+        if text and not self.closed:
             self._nova.append(_cut(text))
 
     def spoken(self) -> list[str]:
         """Every dater turn kept: the guardrails block any proper noun from them."""
         return [turn.text for turn in self._turns if turn.text]
+
+    def last_turn(self) -> Turn | None:
+        """The turn just taken, if it was kept with its words: all an optional prefix may
+        pick up (decision 0012). None if the latest was held back or too short to keep: a
+        prefix about something said earlier would land out of nowhere."""
+        if not self._turns:
+            return None
+        turn = self._turns[-1]
+        return turn if turn.text and turn.n == self._count else None
 
     def said_by(self, seat: Seat) -> list[str]:
         """One dater's kept turns: their own evidence for anything Nova says both daters
@@ -216,6 +230,11 @@ class DateContext:
         self._nova.clear()
         self._count = 0
         self._last.clear()
+
+    def close(self) -> None:
+        """The date is over, however it ended: everything goes, and nothing joins again."""
+        self.clear()
+        self.closed = True
 
 
 def acknowledges(text: str) -> bool:

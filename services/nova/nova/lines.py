@@ -52,7 +52,14 @@ from nova.guardrails import (
 )
 from nova.meaning import Judged, Meaning, MeaningCheck, meaning_prompt
 from nova.measure import ms_since
-from nova.models import WARM_UP_DEADLINE, LineModel, ModelRefused, Warmed, warm_up
+from nova.models import (
+    WARM_UP_ATTEMPTS,
+    WARM_UP_DEADLINE,
+    LineModel,
+    ModelRefused,
+    Warmed,
+    warm_up,
+)
 from nova.priority import SafetyFirst
 from nova.privacy import Data, PrivacyPolicy
 from nova.text import plain
@@ -74,6 +81,10 @@ LIVE_REACTIONS = frozenset({Moment.SILENCE, Moment.FROM_THE_ROOM, Moment.ROOM_TA
 REMEMBERED_LIVE = frozenset({Moment.SILENCE, Moment.ROOM_TALK})
 # Live reactions that see this date's context (decision 0008).
 WITH_THIS_DATE = frozenset({Moment.SILENCE, Moment.REPLY})
+# Questions an optional live prefix may lead into (decision 0012). Not a lightning question:
+# its one sentence leaves a prefix no room.
+BRIDGED = frozenset({Moment.FIRST_QUESTION, Moment.FROM_THE_ROOM, Moment.LAST_WORD})
+PREFIX_ROOM = 40  # characters a question must leave for a prefix, or none is written
 CANDIDATES = 3  # model lines written for each set piece; the best one is kept
 # What Nova says while the show is held, or as a date ends early: any other line means the
 # hold is over, and the next hold may use the room-talk fallback again.
@@ -158,6 +169,8 @@ class Line:
     from_date: bool = False
     # What the meaning check said of the model line (nova/meaning.py); None if not asked.
     meaning: Meaning | None = None
+    # An optional live prefix leads into the question (decision 0012, _bridge).
+    prefixed: bool = False
 
 
 @dataclass(frozen=True)
@@ -269,33 +282,44 @@ class LineWriter:
 
     # --- Before the date ------------------------------------------------------------------
 
-    async def warm_up(self, *, deadline: float = WARM_UP_DEADLINE) -> Warmed:
+    async def warm_up(
+        self,
+        *,
+        deadline: float = WARM_UP_DEADLINE,
+        attempts: int = WARM_UP_ATTEMPTS,
+        hold: bool = False,
+    ) -> Warmed:
         """A tiny request held up to the deadline (nova/models.py, warm_up), so a cold
         model loads now and not inside the prep budget: how long it took, how many tries,
-        and whether it failed."""
-        warmed = await warm_up(self._model, deadline=deadline)
+        and whether it failed. hold: a retry while the doors hold (Rehearsal.hold_until_ready)."""
+        warmed = await warm_up(self._model, deadline=deadline, attempts=attempts)
         self._events.emit(
             Event.WARMUP,
             ms=warmed.ms,
             error=warmed.error,
             attempts=warmed.attempts,
             classifier=False,
+            hold=hold,
         )
         return warmed
 
-    async def prepare(self) -> None:
+    async def prepare(self, *, again: bool = False, budget: float | None = None) -> None:
         """Writes every set piece within the prep budget. Different moments are written at
         the same time; the pieces of one moment (the two first questions, the three
         lightning questions, the two last words) are written in order, so each sees the ones
         chosen before it (tonight's memory includes them as soon as they're chosen). When
-        the budget runs out, every piece not yet chosen gets its fallback."""
+        the budget runs out, every piece not yet chosen gets its fallback. again: only the
+        pieces that fell back, once the model is ready after all (Rehearsal.hold_until_ready);
+        the model's own lines stay as they are. budget: instead of the prep budget."""
         started = time.monotonic()
-        cues = self._set_piece_cues()
+        cues = [say for say in self._set_piece_cues() if not again or self._fell_back(say)]
+        if again:  # each fallback stays until a line replaces it, so none goes missing
+            self.budget_exhausted = False
         chains: dict[Moment, list[Say]] = {}
         for say in cues:
             chains.setdefault(say.moment, []).append(say)
         try:
-            async with asyncio.timeout(self._prep_budget):
+            async with asyncio.timeout(self._prep_budget if budget is None else budget):
                 await asyncio.gather(*(self._prepare_chain(chain) for chain in chains.values()))
         except TimeoutError:
             self.budget_exhausted = True
@@ -361,6 +385,8 @@ class LineWriter:
         return await self._attempt(say, self._prompt_for(say), timeout)
 
     async def _line_for(self, say: Say) -> Line:
+        if say.bridge:
+            return await self._bridge(say)
         if say.moment not in HOLD_MOMENTS or (say.moment is Moment.ROOM_TALK and say.number == 1):
             self._fallback_in_hold = False  # the hold is over, or a new one starts
         if say.text is not None:
@@ -398,6 +424,61 @@ class LineWriter:
             line = self._settle(say, attempt, Source.MODEL)
         return replace(line, from_date=True) if from_date and line.source is Source.MODEL else line
 
+    async def _bridge(self, say: Say) -> Line:
+        """An optional brief prefix to a required question, never a replacement for it.
+        Only cleared date context reaches either model. Every live prefix is judged,
+        even when live meaning checks on older moment types are disabled."""
+        started = time.monotonic()
+        plain_say = replace(say, bridge=False)
+        base = await self._line_for(plain_say)
+        if say.away is not None or say.moment not in BRIDGED:
+            return base
+        just_said = self._just_said()
+        if not base.text or just_said is None or self._meaning is None:
+            return base
+        rules = rules_for(say.moment)
+        if (
+            len(SENTENCE_END.findall(base.text)) >= rules.max_sentences
+            or len(base.text) + PREFIX_ROOM > rules.max_chars
+        ):
+            return base  # the line's limits leave no room: nothing to ask the model for
+        if base.source in (Source.FALLBACK, Source.FIXED):
+            return base
+        if not self._privacy.allows(self._meaning.model, Data.DATE_CONTEXT):
+            return base
+        remaining = self._live_timeout - (time.monotonic() - started)
+        if remaining <= 0:
+            return base
+        attempt = await self._attempt(
+            say, prompts.bridge(self._pair, base.text, just_said), remaining
+        )
+        if not attempt.ok or not attempt.text:
+            return replace(
+                base,
+                violations=attempt.violations or base.violations,
+                error=attempt.error or base.error,
+            )
+        prefix = first_sentence(attempt.text)
+        if len(prefix.split()) > 8 or "?" in prefix:
+            return replace(base, error=ErrorKind.QUALITY)
+        combined = f"{prefix} {base.text}"
+        violations = self._check(say, combined)
+        if violations:
+            return replace(base, violations=violations)
+        left = self._live_timeout - (time.monotonic() - started)
+        judged = await self.judge(say, combined, timeout=left)
+        if not judged.passed:
+            return replace(base, violations=(Violation.MEANING,), meaning=judged.label)
+        return Line(
+            combined,
+            Source.MODEL,
+            say.moment,
+            ms=ms_since(started),
+            from_date=True,
+            meaning=judged.label,
+            prefixed=True,
+        )
+
     def entered(self, segment: Segment) -> None:
         """The show runner started a segment (its SegmentStarted cue): replies and silence
         prompts are told where the date is, for the arc's aim there (decision 0005). It
@@ -430,7 +511,14 @@ class LineWriter:
         for say in chain:
             self._keep(say, await self._prepare_one(say))
 
+    def _fell_back(self, say: Say) -> bool:
+        line = self._prepared.get(_key(say))
+        return line is None or line.source is Source.FALLBACK
+
     def _keep(self, say: Say, line: Line) -> None:
+        replaced = self._planned.get(_key(say))
+        if replaced is not None:  # a fallback written again: never said, so never kept
+            self._tonight.drop([replaced])
         self._prepared[_key(say)] = line
         self._planned[_key(say)] = self._tonight.plan(say.moment, line.text, names=self._names)
 
@@ -483,7 +571,7 @@ class LineWriter:
         said = None
         if (
             self._context is not None
-            and say.moment in WITH_THIS_DATE
+            and (say.moment in WITH_THIS_DATE or say.bridge)
             and self._privacy.allows(self._meaning.model, Data.DATE_CONTEXT)
         ):
             names = {card.first_name for card in cards}
@@ -552,6 +640,12 @@ class LineWriter:
         return await self._model.write(system=prompts.SYSTEM_PROMPT, prompt=prompt)
 
     @property
+    def fallbacks(self) -> tuple[int, int]:
+        """How many set pieces are approved fallbacks, of how many prepared."""
+        lines = self._prepared.values()
+        return sum(line.source is Source.FALLBACK for line in lines), len(self._prepared)
+
+    @property
     def all_fallbacks(self) -> bool:
         """Every set piece prepared is an approved fallback: the model gave nothing for
         any of them (decision 0005: then the doors hold for the moderator)."""
@@ -565,7 +659,7 @@ class LineWriter:
         audience question) is passed in so no proper noun from it is repeated."""
         rules = rules_for(say.moment)
         said = [say.detail] if say.moment in (Moment.REPLY, Moment.FROM_THE_ROOM) else []
-        if self._context is not None and say.moment in WITH_THIS_DATE:
+        if self._context is not None and (say.moment in WITH_THIS_DATE or say.bridge):
             said += self._context.spoken()  # what its prompt may have seen of this date
         away = _away(say)
         cards = self._cards(say)  # one dater is away: only the one who's here
@@ -576,7 +670,7 @@ class LineWriter:
             max_sentences=rules.max_sentences,
             echo_from=[s for s in said if s],
             card_words=card_words(" ".join(p.text for p in card.prompts) for card in cards),
-            questions=rules.questions,
+            questions=rules.questions and not say.return_floor,
             open_with_names=rules.open_with_names,
         )
         # The dater who's away is never named, even to open a sentence, where a capitalised
@@ -606,7 +700,7 @@ class LineWriter:
             name = self._pair.card(seat).first_name
             if name not in own:
                 continue
-            if self._context is not None and say.moment in WITH_THIS_DATE:
+            if self._context is not None and (say.moment in WITH_THIS_DATE or say.bridge):
                 own[name] += self._context.said_by(seat)
             if say.moment is Moment.REPLY and say.about is seat and say.detail:
                 own[name].append(say.detail)
@@ -631,6 +725,8 @@ class LineWriter:
         """An approved fallback line, never built from what a dater or listener said (one
         exception is proposed, behind a switch that's off: an approved audience question,
         framed)."""
+        if say.moment is Moment.REPLY and say.return_floor:
+            return script.TAKE_YOUR_TIME
         pair = self._pair
         match say.moment:
             case Moment.DOORS_INTRO:
@@ -754,6 +850,7 @@ class LineWriter:
                     tonight=tonight,
                     this_date=self._this_date(say),
                     segment=self._segment,
+                    return_floor=say.return_floor,
                 )
         raise ValueError(f"No prompt for {say.moment}")
 
@@ -762,7 +859,7 @@ class LineWriter:
         dater who's away and without the words a reply answers; None if there's none."""
         if (
             self._context is None
-            or say.moment not in WITH_THIS_DATE
+            or (say.moment not in WITH_THIS_DATE and not say.bridge)
             or not self._privacy.allows(self._model, Data.DATE_CONTEXT)
         ):
             return None
@@ -770,11 +867,33 @@ class LineWriter:
         answering = (say.detail or "") if say.moment is Moment.REPLY else ""
         return self._context.summary(names, away=_away(say), answering=answering)
 
+    def _just_said(self) -> dict[str, str] | None:
+        """What a prefix may pick up (decision 0012): the turn just taken, under its dater's
+        first name, if this date's context may reach the model and that turn was kept.
+        Only that turn: given more, the model reached back to what was said before."""
+        if self._context is None or not self._privacy.allows(self._model, Data.DATE_CONTEXT):
+            return None
+        turn = self._context.last_turn()
+        if turn is None:
+            return None
+        return {"by": self._pair.card(turn.seat).first_name, "said": turn.text}
+
     def _set_piece_cues(self) -> list[Say]:
         return running_order.set_pieces(self._pair, self._next_pair)
 
 
 type _Key = tuple[Moment, Seat | None, int | None]
+
+
+def first_sentence(text: str) -> str:
+    """Only a prefix's own words (decision 0012): the model is asked for one sentence, and
+    often goes on to say the question again. What follows its first sentence is dropped, so
+    the question is said once, and the guardrails and the meaning check judge exactly what
+    is said. Ends with a full stop if the model left it off."""
+    text = " ".join(text.split())
+    match = re.match(r"(.+?[.?!…])(?=\s|$)", text)
+    first = match.group(1) if match else text
+    return first if first[-1:] in ".?!…" else f"{first}."
 
 
 def _key(say: Say) -> _Key:

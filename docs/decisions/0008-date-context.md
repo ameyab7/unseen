@@ -2,6 +2,11 @@
 
 Date: 2026-10-21. Status: accepted.
 
+2026-10-26: decision 0012 extends this same bounded, cleared context to optional live
+prefixes on prepared questions. Generation and mandatory meaning checks obey the existing
+recipient policy. Prefixes default off, never enter another date's memory, and never
+replace the original question. Local floor signals retain no transcript.
+
 ## Context
 
 Nova's live reactions saw only the moment: a reply saw the sentence it answers, a silence
@@ -61,8 +66,11 @@ since it reaches every later date's prompts (decision 0005).
   noun a dater said earlier can reach the room, as for a reply's own words.
 - **Tonight stays clean**: a silence line written with this date's context is never kept in
   tonight's memory (`Line.from_date`), as replies and audience questions never were.
-- **Lifetime**: one date. `OnAirListener.cancel` (and so `finish`) and `LineWriter.finish`
-  clear it; the next date gets a new one.
+- **Lifetime**: one date. Since 2026-10-24 (decision 0011), each date opens through a
+  show's `Night` (`nova/show.py`), which makes its context and closes it when the date
+  ends, however it ends, the moderator ending it before it opens included. A closed context
+  is empty and takes nothing more, not even a turn whose check finishes late. The next date
+  gets a new one.
 - **The show runner is untouched**: it still decides every cue, its timing, safety and the
   decisions. The context only changes the words of a reply or a silence prompt the runner
   already asked for, and everything still passes the guardrails or falls back.
@@ -92,8 +100,9 @@ since it reaches every later date's prompts (decision 0005).
 
 - The agent for real shows makes one `DateContext` per date and gives it to the listener and
   the writer, as the rehearsal does. Today the LiveKit agent (`nova/agent.py`) is the only
-  entrypoint, with one Rehearsal a session, and so one context a date. Tests check that, and
-  that it's cleared at the end; a show agent that runs several dates must make one each.
+  entrypoint, with one Rehearsal a session, and so one context a date. Since decision 0011
+  it opens that date through a `Night`, as a show server running several dates must
+  (`tests/test_show.py`).
 - Nothing here is stored in Supabase or sent to analytics; no schema changes.
 - The evaluation has four cases with earlier turns (a callback, a silence both daters
   spoke to, nothing to call back to, an injection in an earlier turn). The night has no

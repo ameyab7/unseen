@@ -56,6 +56,18 @@ class Timing:
     # An audience question breaks into the daters' own conversation: it waits for a
     # real lull, not a gap between two sentences.
     lull: float = 2.5
+    # Conversational mode: a silent, thinking or explicitly invited dater has a
+    # bounded opportunity, rather than being treated as finished after answer_window.
+    floor_wait: float = 20.0
+    conversation_overrun: float = 60.0
+    minimum_free_talk: float = 60.0
+    minimum_last_word: float = 20.0
+    # Decision 0012: a scheduled transition the conversation has held back this long (from
+    # when it first came due) goes in a brief opening of this much quiet, instead of the lull,
+    # since lively talk may never leave a longer one. Initial tuning values, not validated by
+    # listening yet.
+    transition_grace: float = 15.0
+    brief_opening: float = 0.4
 
     def __post_init__(self) -> None:
         starts = [
@@ -81,6 +93,11 @@ class Timing:
             "turn_gap",
             "lull",
             "cover_lines",
+            "floor_wait",
+            "conversation_overrun",
+            "minimum_last_word",
+            "transition_grace",
+            "brief_opening",
         }
         return replace(
             self,

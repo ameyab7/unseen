@@ -758,7 +758,8 @@ Date: 2026-10-13. Status: accepted.
   a cold load warmed in 17.8 s on one try; an Ollama that wasn't there gave up after 5
   tries in 26.5 s; a model not pulled was rejected on one try in 269 ms. If the warm-up
   still fails, prep runs within its budget, approved fallbacks stand in for anything not
-  ready, and, since 2026-10-22, the date doesn't open until the moderator says so (below).
+  ready, and, since 2026-10-22, the date doesn't open until the moderator says so, or, since
+  2026-10-24, until a try while the doors hold finds Nova ready after all (below).
   Live lines and checks run on their own timeouts, and an unchecked check alerts the
   moderator. An Ollama line cut off at the token limit is
   an error now, so its fallback is said, not half a line. Live lines and checks are
@@ -781,11 +782,14 @@ Date: 2026-10-13. Status: accepted.
     135 s (90 and 45).
   - If a model doesn't warm up, or every set piece is a fallback, the date doesn't open
     (`Rehearsal.hold_until_ready`, the agent): the moderator gets `nova_not_ready`, and the
-    doors hold until they choose. `start` opens the date with the approved fallbacks;
-    `end` ends it before it opens. The report says how long it held.
+    doors hold. `start` opens the date with the approved fallbacks; `end` ends it before
+    it opens. The report says how long it held.
+  - Since 2026-10-24 (decision 0011), the doors-hold tries again for up to 120 s
+    (`NOVA_READY_RETRY_SECONDS`), only for a failure that may pass. Nova opens itself once
+    ready (`nova_ready`); otherwise the moderator gets `nova_still_not_ready` and decides.
+    The moderator's choice always wins.
   - Never a silent date of fallbacks, and never a wait nobody is told about.
   - Limits:
-    - Nothing retries the warm-up while the doors hold; the moderator decides.
     - A set piece the budget cuts off still gets its fallback, as before, when others are
       the model's.
     - A slower machine, or a larger model, may need the two settings raised, with the

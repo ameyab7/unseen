@@ -15,7 +15,9 @@ import itertools
 import math
 import random
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from typing import Protocol
 
 from nova import running_order, script
@@ -50,6 +52,7 @@ from nova.cues import (
 )
 from nova.decisions import DecisionDesk, Outcome
 from nova.distress import Verdict, is_unmistakable
+from nova.floor import FINAL_LEAD, Floor, Move, move, possible_completion
 from nova.guardrails import screen_question
 from nova.questions import AudienceQuestion
 from nova.timing import FULL, Timing
@@ -100,6 +103,82 @@ TURN_BEATS = frozenset(
 )
 # Turns that break into the daters' own conversation: they wait for timing.lull.
 LULL_BEATS = frozenset({"from_the_room", "audience_question"})
+# Lines that announce a scheduled transition. Conversational, whoever plays them waits for
+# the same opening the runner did (quiet_needed, decision 0012) before each.
+ANNOUNCES = TURN_MOMENTS | {Moment.TIME}
+
+
+class Transition(StrEnum):
+    """A scheduled transition, as diagnostics name it: its beat (TURN_BEATS)."""
+
+    FIRST_QUESTION = "first_question"
+    SECOND_PROMPT = "second_prompt"
+    FROM_THE_ROOM = "from_the_room"
+    AUDIENCE_QUESTION = "audience_question"
+    LIGHTNING = "lightning"
+    LIGHTNING_QUESTION = "lightning_question"
+    LAST_WORD = "last_word"
+    SECOND_LAST_WORD = "second_last_word"
+    TIME = "time"
+
+
+class Phase(StrEnum):
+    DUE = "due"  # it first came due
+    DEFERRED = "deferred"  # what holds it back changed
+    WENT = "went"  # committed: its lines went to whoever plays them
+    DROPPED = "dropped"  # it never goes: the optional second room question
+
+
+class Deferral(StrEnum):
+    """What holds a due conversational transition back (_deferral), in that order."""
+
+    SPEAKING = "speaking"  # a dater is speaking: never talked over, however overdue
+    PREVIOUS_LINE = "previous_line"  # Nova's last turn line isn't over (TURN_WAIT_CAP)
+    LAST_WORD = "last_word"  # a last word's protected time
+    QUIET = "quiet"  # not yet the quiet it needs (quiet_needed)
+    # The floor's own (nova/floor.py, Hold), within the conversation's overrun budget.
+    CLARIFICATION = "clarification"
+    HANDOVER = "handover"
+    THINKING = "thinking"
+    UNHEARD = "unheard"
+    ANSWER = "answer"
+
+
+@dataclass(frozen=True)
+class TransitionSeen:
+    """A due transition, for rehearsal diagnostics (decision 0012): codes and numbers
+    only. at and due are wall times; held is the room holds since it came due, which its
+    age leaves out."""
+
+    phase: Phase
+    beat: Transition
+    number: int | None  # a lightning question's place
+    at: float
+    due: float
+    held: float
+    reason: Deferral | None = None
+    quiet: float | None = None  # the quiet it needs (deferred) or needed (went)
+
+    @property
+    def age(self) -> float:
+        return self.at - self.due - self.held
+
+
+@dataclass(frozen=True)
+class FinalSeen:
+    """A final transcript, for rehearsal diagnostics: when it arrived, which speech it was
+    taken to say, and what the floor made of it. Never the words."""
+
+    seat: Seat
+    at: float
+    began: float | None  # when the speech it says began (the voice detector), if known
+    stopped: float | None  # when that dater stopped; None while they're still speaking
+    move: Move
+    latest: bool  # it says the conversation's latest speech
+    hint: bool  # a closing phrase, taken as a possible completion
+    answered: bool  # it answered a question Nova had said
+
+
 # After a turn has waited this long (a line never reported played, daters who never pause
 # for long), it goes at the first turn gap: it never cuts a dater off.
 # Wall seconds, during which the show clock is stopped.
@@ -173,10 +252,13 @@ class ShowRunner:
         first_up: Seat | None = None,
         rng: random.Random | None = None,
         paced: bool = False,
+        conversational: bool = False,
+        observe: Callable[[TransitionSeen | FinalSeen], None] | None = None,
     ) -> None:
         """paced: whoever plays the cues reports each of Nova's lines as it finishes
         (line_done), so a dater's turn waits for the dater asked before to have had time to
-        answer (TURN_BEATS). Unpaced, every beat goes by the clock alone."""
+        answer (TURN_BEATS). Unpaced, every beat goes by the clock alone. observe: hears
+        each change in a due transition and each final, for rehearsal diagnostics."""
         # Each lightning question gets a full gap before the last word.
         questions = running_order.LIGHTNING_QUESTIONS
         if timing.lightning + questions * timing.lightning_gap > timing.last_word:
@@ -235,14 +317,37 @@ class ShowRunner:
         self._waiting: list[Cue] = []  # a beat's lines and sounds, held while one speaks
         self._waiting_until: float | None = None  # wall time they go out whatever happens
         self._paced = paced
+        self.conversational = conversational
+        self.floor = Floor(wait=timing.floor_wait)
+        self.conversation_delay = 0.0
+        self._recovered_delay = 0.0
         self._turns_unfinished = 0  # turn lines cued that Nova hasn't finished saying
         self._turn_done_at: float | None = None  # wall time Nova last finished asking one
+        self._last_turn_moment: Moment | None = None
         # Wall time the show clock stopped for a turn that waits (_turn_waits), like a hold:
         # everything after it moves too, so the decision window is never cut short.
         self._turn_paused_since: float | None = None
         self._turn_wait_from: float | None = None  # wall time the due turn began waiting
         self._speech_ended_at: float | None = None  # wall time a dater last stopped
         self._speech_since: float | None = None  # wall time the current speech began
+        self._began: float | None = None  # wall time a dater last started speaking
+        self._stopped: dict[Seat, float] = {}  # wall time each dater last stopped
+        self._seat_began: dict[Seat, float] = {}  # when each dater's latest speech began
+        # Each dater's earliest speech no final has said yet: what their next final says.
+        self._untranscribed: dict[Seat, float] = {}
+        self._final_at: dict[Seat, float] = {}  # when each dater's latest final arrived
+        # A closing phrase heard while its dater was the only one speaking, and the floor's
+        # revision then: a hint once they stop, if nothing has happened since.
+        self._closing: tuple[Seat, int] | None = None
+        # Decision 0012: the scheduled transition that is due (its beat's action and arg, so
+        # a retry is the same one), the wall time it first came due, kept until it goes,
+        # and the room holds since, which its pending age leaves out.
+        self._transition: tuple[str, object] | None = None
+        self._transition_since: float | None = None
+        self._transition_held = 0.0
+        self._deferred: tuple[Deferral | None, float | None] | None = None  # as last seen
+        self._quiet_used: float | None = None  # the quiet it needed when last checked
+        self.observe = observe or (lambda seen: None)
         # The daters the last turn asked who haven't started answering yet.
         self._awaiting: set[Seat] = set()
 
@@ -298,13 +403,89 @@ class ShowRunner:
         """The show is held: a dater's moment, a distress or conduct pause, or a report."""
         return self._held_since is not None
 
-    def line_done(self, now: float, say: Say) -> None:
+    def line_done(
+        self,
+        now: float,
+        say: Say,
+        *,
+        said: bool = True,
+        heard_from: float | None = None,
+        heard_until: float | None = None,
+    ) -> None:
         """Nova finished a line, or it never played (cut off, dropped, nothing to say).
-        Paced, the dater asked in a turn line gets their answer window from now."""
+        said: the room heard all of it, or all it ever will, from heard_from (its first
+        audio) to heard_until (both now if not given). Paced, the dater asked in a turn
+        line gets their answer window from then; conversational, a turn line never said
+        owes nobody an answer, and the next turn doesn't wait for one."""
+        if self.conversational and say.moment is Moment.REPLY and say.about is not None:
+            if say.return_floor:
+                self.floor.replied(now, say.about)
+            elif self.floor.clarifying is say.about:
+                self.floor.clarifying = None
+                self.floor.last_move = Move.UNKNOWN
         if not self._paced or say.moment not in TURN_MOMENTS or not self.started:
             return
         self._turns_unfinished = max(0, self._turns_unfinished - 1)
         self._turn_done_at = now
+        self._last_turn_moment = say.moment
+        if self.conversational:
+            if said:
+                self.floor.asked(now, heard_from=heard_from, heard_until=heard_until)
+            else:
+                self.floor.withdrawn()
+
+    @property
+    def expected_speaker(self) -> Seat | None:
+        """For the single-microphone simulation only; real inputs supply their seat."""
+        if self.floor.handover is not None:
+            return self.floor.handover
+        if len(self.floor.expected) == 1:
+            return next(iter(self.floor.expected))
+        return None
+
+    def turn_words(self, now: float, seat: Seat, words: str, *, to_nova: bool = False) -> None:
+        """Local floor hints on each transcript, before advancing the clock. No safety
+        verdict is inferred here; the listener still checks exactly the same utterances."""
+        if not self.conversational or not self._live or self.held:
+            return
+        signal = move(words, other_name=self._pair.card(seat.other).first_name, to_nova=to_nova)
+        # Which speech it says, from the voice detector: the earliest no final has said yet,
+        # however late this one arrives. While they're still going, the rest is to come.
+        speaking = seat in self._speaking
+        began = self._untranscribed.pop(seat, None)
+        if speaking:
+            self._untranscribed[seat] = self._seat_began[seat]
+        ended = None if speaking else self._stopped.get(seat)
+        self._final_at[seat] = now
+        closing = signal is Move.UNKNOWN and possible_completion(words)
+        latest = self._latest(seat)
+        owed = seat in self.floor.expected
+        self.floor.heard(
+            now,
+            seat,
+            signal,
+            spoke=(began, ended),
+            speaking=speaking,
+            completion=closing and latest,
+        )
+        self._closing = (
+            (seat, self.floor.revision) if closing and self._speaking == {seat} else None
+        )
+        if signal is not Move.HOLD and signal is not Move.NOVA:
+            self._awaiting.discard(seat)
+        answered = owed and seat not in self.floor.expected
+        self.observe(
+            FinalSeen(seat, now, began, ended, signal, latest, closing and latest, answered)
+        )
+
+    def _latest(self, seat: Seat) -> bool:
+        """These words are the latest speech: nobody is speaking, and nobody has started
+        since this dater stopped. A final can arrive after newer speech, or while the dater
+        is still going: neither ends the conversation's latest utterance."""
+        stopped = self._stopped.get(seat)
+        if self._speaking or stopped is None:
+            return False
+        return self._began is None or self._began <= stopped
 
     # --- Things that happen in the room ---------------------------------------------------
     # Daters, the moderator and the room can do these at any time, so none of them raises
@@ -313,25 +494,53 @@ class ShowRunner:
     def speech_started(self, now: float, seat: Seat) -> list[Cue]:
         """The voice detector hears a dater start speaking. Until they stop, a beat's lines
         and sounds wait (up to timing.talk_over_grace), and no silence prompt comes."""
-        cues = self._due(now)
+        if self.conversational:
+            if self.held:
+                self.floor.revision += 1
+                self.floor.completion_hint = False
+            else:
+                self.floor.started(now, seat)
+        self._closing = None  # newer speech: an earlier closing phrase isn't the last word
+        cues = [] if self.conversational else self._due(now)
         if not self._speaking:
             self._speech_since = now
         self._speaking.add(seat)
-        self._awaiting.discard(seat)  # they've started answering: now they're speaking
+        self._began = self._seat_began[seat] = now
+        self._untranscribed.setdefault(seat, now)
+        if not self.conversational:
+            self._awaiting.discard(seat)
         if self._live and self._held_since is None:
             self._quiet_since = self._show_time(now)
-        return cues
+        return cues + (self._due(now) if self.conversational else [])
 
     def speech_stopped(self, now: float, seat: Seat) -> list[Cue]:
         """The voice detector hears a dater stop. The silence clock counts from now, and
         once nobody is speaking, anything that waited goes out, in order."""
         self._speaking.discard(seat)
-        self._speech_ended_at = now
+        self._speech_ended_at = self._stopped[seat] = now
         if not self._speaking:
             self._speech_since = None
+        if self.conversational:
+            self._ended_on_a_final(now, seat)
         if self._live and self._held_since is None:
             self._quiet_since = self._show_time(now)
         return self._due(now)
+
+    def _ended_on_a_final(self, now: float, seat: Seat) -> None:
+        """A final during this speech, at most FINAL_LEAD before the voice detector heard
+        it stop, already said how it ended: nothing is left unheard, and a closing phrase in
+        it becomes a hint, if nothing has happened since and nobody else is speaking. A
+        final further back means more was said after it, which a later final will say."""
+        final, began = self._final_at.get(seat), self._seat_began.get(seat)
+        transcribed = (
+            final is not None and began is not None and final >= began and now - final <= FINAL_LEAD
+        )
+        if transcribed:
+            self._untranscribed.pop(seat, None)
+        self.floor.stopped(now, seat, transcribed=transcribed)
+        closing, self._closing = self._closing, None
+        if transcribed and closing == (seat, self.floor.revision) and not self._speaking:
+            self.floor.completion_hint = True
 
     def need_a_moment(self, now: float, seat: Seat) -> list[Cue]:
         """Nova stops mid-line, as for a report, and covers without naming anyone, and the
@@ -492,7 +701,15 @@ class ShowRunner:
             return cues + self._wants_to_stop(now, seat)
         if self._live and self._held_since is None and self.segment in ON_AIR:
             away = seat.other if seat.other in self._absent else None
-            cues.append(Say(Moment.REPLY, about=seat, detail=words, away=away))
+            cues.append(
+                Say(
+                    Moment.REPLY,
+                    about=seat,
+                    detail=words,
+                    away=away,
+                    return_floor=self.conversational and seat in self.floor.expected,
+                )
+            )
         return cues
 
     def dater_said(
@@ -710,10 +927,24 @@ class ShowRunner:
                     self._end_turn_pause(now)
             shown = self._show_time(now)
             beat_at = self._beats[0].at if self._beats else math.inf
-            silence_at = self._silence_due()
+            silence_at = self._silence_due(now)
             if min(beat_at, silence_at) > shown:
                 break
             if beat_at <= silence_at:
+                if (
+                    self.conversational
+                    and self._beats[0].action == "audience_question"
+                    and self.conversation_delay > self._recovered_delay
+                ):
+                    # The second room question is optional. Recover from it before
+                    # shortening anyone's protected last word or decision time.
+                    dropped = heapq.heappop(self._beats)
+                    if self._transition == (dropped.action, dropped.arg):
+                        self.observe(self._transition_seen(Phase.DROPPED, now))
+                        self._forget_transition()  # never said now
+                    self._recover_before("lightning", shown + self._timing.lull)
+                    continue
+                self._note_due(self._beats[0], now)
                 if self._turn_waits(self._beats[0], now):
                     if self._turn_wait_from is None:
                         self._turn_wait_from = now
@@ -723,12 +954,14 @@ class ShowRunner:
                 beat = heapq.heappop(self._beats)
                 if beat.action in TURN_BEATS:
                     self._turn_wait_from = None
-                ran = self._attempt(beat, shown)
+                ran = self._announced(beat, self._attempt(beat, shown), now)
                 if self._paced:
                     self._turns_unfinished += sum(_is_turn(cue) for cue in ran)
                     for cue in ran:
                         if isinstance(cue, Say) and cue.moment in TURN_MOMENTS:
                             self._awaiting = self._asked(cue)
+                            if self.conversational:
+                                self.floor.begin(self._asked(cue))
                 cues += self._wait_for_speech(now, ran)
                 if self._finish_when_said and not self._waiting:
                     cues += self._finish()
@@ -745,9 +978,14 @@ class ShowRunner:
         speak (or of Nova finishing) is passed over. After TURN_WAIT_CAP it stops waiting
         for the lull and the answers, but still for timing.turn_gap of quiet (before, it went
         the instant one dater stopped, and Theo, starting to answer, was talked over); only
-        SPEECH_CAP of speech without a break is talked over."""
+        SPEECH_CAP of speech without a break is talked over. Conversational, decision 0012
+        (_deferral)."""
         if not self._paced or beat.action not in TURN_BEATS:
             return False
+        if self.conversational:
+            reason, quiet = self._deferral(beat, now)
+            self._seen(beat, now, reason, quiet)
+            return reason is not None
         if self._speaking:
             started = self._speech_since
             return started is None or now - started < SPEECH_CAP
@@ -768,6 +1006,148 @@ class ShowRunner:
         last = max(done, ended) if ended is not None else done
         return now < last + self._timing.answer_window
 
+    def _deferral(self, beat: _Beat, now: float) -> tuple[Deferral | None, float | None]:
+        """Conversational (decision 0012): what holds a due turn back, if anything, and the
+        quiet it needs after the last dater. In order: a dater speaking (never talked over);
+        Nova's previous turn line, for at most TURN_WAIT_CAP; a last word's protected time;
+        the quiet (quiet_needed); then, within the overrun budget, the floor (nova/floor.py,
+        Floor.holds). Being overdue shortens only the quiet, never any of the others."""
+        if self._speaking:
+            return Deferral.SPEAKING, None
+        self.floor.expected.difference_update(self._absent)
+        if self.floor.handover in self._absent:
+            self.floor.handover = None
+        if self.floor.clarifying in self._absent:
+            self.floor.clarifying = None
+        if self.floor.holder in self._absent:
+            self.floor.last_move = Move.UNKNOWN
+        for seat in self._absent:
+            self.floor.unheard.pop(seat, None)
+        if self._turns_unfinished:
+            since = self._turn_wait_from
+            if since is None or now < since + TURN_WAIT_CAP:
+                return Deferral.PREVIOUS_LINE, None
+            return None, None
+        if (
+            self._last_turn_moment is Moment.LAST_WORD
+            and self._turn_done_at is not None
+            and self.floor.last_move is not Move.PASS
+            and now < self._turn_done_at + self._timing.minimum_last_word
+        ):
+            return Deferral.LAST_WORD, None
+        ended = self._speech_ended_at
+        quiet = self.quiet_needed(now, self._age_from(beat), self._gap(beat))
+        if ended is not None and now < ended + quiet:
+            return Deferral.QUIET, quiet
+        # The budget limits discretionary waiting, never authorizes speech over
+        # a dater or a shorter private decision window.
+        spent = self.conversation_delay
+        if self._turn_paused_since is not None:
+            spent += now - self._turn_paused_since
+        hold = self.floor.holds(now)
+        if spent < self._timing.conversation_overrun and hold is not None:
+            return Deferral(hold.value), quiet
+        return None, quiet
+
+    def _gap(self, beat: _Beat) -> float:
+        """A conversational turn's usual quiet after the last dater: a real lull, except
+        the second last word, which follows the first."""
+        return self._timing.turn_gap if beat.action == "second_last_word" else self._timing.lull
+
+    def quiet_needed(self, now: float, due: float | None, gap: float) -> float:
+        """Decision 0012: how long nobody must have spoken before a scheduled transition's
+        line, whose usual wait is gap. due: when its pending age counts from, which is when it
+        first came due, later by any room hold since (None: not a transition, so gap). Once
+        the conversation has held it back for
+        timing.transition_grace, timing.brief_opening: lively talk may never leave more, and
+        no closing phrase is needed. Before that, timing.turn_gap if the latest utterance
+        ended on one. Never a reason to speak while a dater is speaking: that always waits."""
+        t = self._timing
+        if due is None:
+            return gap
+        if now - due >= t.transition_grace:
+            return min(gap, t.brief_opening)
+        if self.floor.completion_hint:
+            return min(gap, t.turn_gap)
+        return gap
+
+    def next_opening(self, now: float) -> float | None:
+        """When the due transition could next go, if that's ahead: the quiet it needs after
+        the last dater, or the grace's end, which shortens it. For whoever ticks the runner
+        (nova/rehearsal.py, run): a brief opening is usable only if a tick lands in it. None
+        while a dater speaks, during a hold, or with no transition due."""
+        head = self._beats[0] if self._beats else None
+        since = self._age_from(head) if head is not None else None
+        ended = self._speech_ended_at
+        if since is None or ended is None or self._speaking or self.held:
+            return None
+        t = self._timing
+        at = ended + self.quiet_needed(now, since, self._gap(head))
+        if now - since < t.transition_grace:
+            at = min(at, max(since + t.transition_grace, ended + t.brief_opening))
+        return at if at > now else None
+
+    def _note_due(self, beat: _Beat, now: float) -> None:
+        """Decision 0012: a scheduled transition's pending age starts the first time its beat
+        is due, a time kept until it goes. Speech, thinking, clarification, waits, retries
+        and yields never restart it; another beat at the head does."""
+        if not (self.conversational and self._paced) or beat.action not in TURN_BEATS:
+            return
+        if self._transition != (beat.action, beat.arg):
+            self._transition, self._transition_since = (beat.action, beat.arg), now
+            self._transition_held, self._deferred = 0.0, None
+            self.observe(self._transition_seen(Phase.DUE, now))
+
+    def _age_from(self, beat: _Beat) -> float | None:
+        """When the due transition's pending age counts from: when it first came due, later
+        by the room holds since (nobody's conversation held it back during those)."""
+        if self._transition != (beat.action, beat.arg) or self._transition_since is None:
+            return None
+        return self._transition_since + self._transition_held
+
+    def _seen(self, beat: _Beat, now: float, reason: Deferral | None, quiet: float | None) -> None:
+        """Tells the diagnostics whenever what holds the due transition back changes."""
+        if self._transition != (beat.action, beat.arg):
+            return
+        self._quiet_used = quiet
+        if self._deferred != (reason, quiet):
+            self._deferred = (reason, quiet)
+            if reason is not None:
+                self.observe(self._transition_seen(Phase.DEFERRED, now, reason, quiet))
+
+    def _transition_seen(
+        self,
+        phase: Phase,
+        now: float,
+        reason: Deferral | None = None,
+        quiet: float | None = None,
+    ) -> TransitionSeen:
+        assert self._transition is not None and self._transition_since is not None
+        action, arg = self._transition
+        number = arg if isinstance(arg, int) else None
+        held = self._transition_held
+        return TransitionSeen(
+            phase, Transition(action), number, now, self._transition_since, held, reason, quiet
+        )
+
+    def _forget_transition(self) -> None:
+        self._transition = self._transition_since = None
+        self._transition_held, self._deferred, self._quiet_used = 0.0, None, None
+
+    def _announced(self, beat: _Beat, ran: list[Cue], now: float) -> list[Cue]:
+        """The transition went: its lines carry when its pending age counts from, so the wait
+        before each, and after a yield, goes on from there (nova/rehearsal.py). A beat that
+        failed and is tried again (_attempt) is still the same transition, still due."""
+        if self._transition != (beat.action, beat.arg) or ran == [BeatFailed(beat.action)]:
+            return ran
+        since = self._age_from(beat)
+        self.observe(self._transition_seen(Phase.WENT, now, quiet=self._quiet_used))
+        self._forget_transition()
+        return [
+            replace(cue, due=since) if isinstance(cue, Say) and cue.moment in ANNOUNCES else cue
+            for cue in ran
+        ]
+
     def _asked(self, say: Say) -> set[Seat]:
         """Who a turn line asks: the dater it's about, or everyone on air."""
         if say.about is not None:
@@ -777,8 +1157,40 @@ class ShowRunner:
     def _end_turn_pause(self, now: float) -> None:
         """The show clock goes on after a turn's wait (or before a hold takes over)."""
         if self._turn_paused_since is not None:
-            self._held += now - self._turn_paused_since
+            waited = now - self._turn_paused_since
+            self._held += waited
+            if self.conversational:
+                self.conversation_delay += waited
             self._turn_paused_since = None
+            if self.conversational:
+                self._recover_slack(now)
+
+    def _recover_slack(self, now: float) -> None:
+        """Recover conversational delay from free talk before touching protected turns.
+        All later beats move together, keeping the decision window exactly intact.
+        Safety holds never call this with additional conversational delay."""
+        if self.segment is not Segment.FREE_TALK:
+            return
+        boundary = next((b for b in self._beats if b.action == "from_the_room"), None)
+        if boundary is None:
+            return
+        shown = self._show_time(now)
+        minimum = max(shown, self._timing.free_talk + self._timing.minimum_free_talk)
+        self._recover_before("from_the_room", minimum)
+
+    def _recover_before(self, action: str, minimum: float) -> None:
+        boundary = next((b for b in self._beats if b.action == action), None)
+        if boundary is None:
+            return
+        available = boundary.at - minimum
+        recover = min(self.conversation_delay - self._recovered_delay, max(0.0, available))
+        if recover:
+            target = boundary.at
+            for beat in self._beats:
+                if beat.at >= target:
+                    beat.at -= recover
+            self._recovered_delay += recover
+            heapq.heapify(self._beats)
 
     def _attempt(self, beat: _Beat, shown: float) -> list[Cue]:
         """Runs a beat. One that raises (in production, the room poll or the decision desk
@@ -859,6 +1271,9 @@ class ShowRunner:
     def _enter(self, segment: Segment, at: float) -> list[Cue]:
         self.segment = segment
         self._quiet_since = at
+        if self.conversational and segment is Segment.FREE_TALK:
+            # If an earlier turn ran long, recover it from this optional stretch.
+            self._recover_slack(self._started_at + self._held + at)
         return [SegmentStarted(segment)]
 
     def _present(self, say: Say) -> list[Cue]:
@@ -976,8 +1391,10 @@ class ShowRunner:
             cues += self._finish()
         return cues
 
-    def _silence_due(self) -> float:
+    def _silence_due(self, now: float) -> float:
         if not self._live or self.segment not in SILENCE_RULE or self._speaking:
+            return math.inf
+        if self.conversational and self.floor.waiting(now):
             return math.inf
         due = self._quiet_since + self._timing.silence_after
         if self._last_nudge is not None:
@@ -1032,7 +1449,15 @@ class ShowRunner:
         fallback segment first if it was covering, so it never plays under Nova."""
         stop: list[Cue] = [StopFallbackSegment()] if self._segment_playing else []
         if self._held_since is not None:
-            self._held += now - self._held_since
+            duration = now - self._held_since
+            self._held += duration
+            if self.conversational:
+                if self.floor.since is not None:
+                    self.floor.since += duration
+                if self._turn_done_at is not None:
+                    self._turn_done_at += duration
+                if self._transition_since is not None:  # nobody's talk held it back meanwhile
+                    self._transition_held += duration
             self._held_since = None
             self._quiet_since = self._show_time(now)
         self._away = None
@@ -1056,6 +1481,8 @@ class ShowRunner:
         return [LightningMeterClosed()]
 
     def _end_date(self, reason: EndReason, outcome: Outcome | None) -> list[Cue]:
+        self.floor.clear()
+        self._forget_transition()
         self.end_reason = reason
         self.outcome = outcome
         self.segment = None
@@ -1068,6 +1495,7 @@ class ShowRunner:
     def _finish(self) -> list[Cue]:
         self.finished = True
         self._beats.clear()
+        self._forget_transition()
         self._waiting, self._waiting_until = [], None  # nothing is said after Finished
         self._finish_when_said = False
         self._held_since, self._away, self._overdue = None, None, False

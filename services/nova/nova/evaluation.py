@@ -450,6 +450,17 @@ CASES: tuple[Case, ...] = (
         earlier_turns=((Seat.LEFT, "Yeah, pretty good."), (Seat.RIGHT, "Not much, really.")),
     ),
     Case(
+        "clarification preserves the asked dater's floor",
+        Say(
+            Moment.REPLY, about=Seat.LEFT, detail="Nova, do you mean on holiday?", return_floor=True
+        ),
+        nova_said=("Maya, what would your ideal weekend look like?",),
+        must_mention_all=("Maya",),
+        must_not_mention=("Theo,",),
+        max_words=25,
+        segment=Segment.FIRST_QUESTION,
+    ),
+    Case(
         # Theo asked about work; Maya calmly declined, so only that she spoke is kept, and
         # Nova never brings the question back.
         "a boundary that stays a boundary",

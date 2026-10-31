@@ -81,6 +81,14 @@ def test_with_the_opt_in_a_live_meaning_check_on_a_hosted_classifier_gets_this_d
     assert Data.DATE_CONTEXT in to(s, "Anthropic")
 
 
+def test_opt_in_bridge_meaning_checks_are_in_the_inventory_even_when_meaning_live_is_off():
+    s = settings(**HOSTED_CLASSIFIER, NOVA_LIVE_BRIDGES="true", NOVA_DIALOGUE_TO_PROVIDER="true")
+    assert not s.meaning_live
+    assert Data.DATE_CONTEXT in to(s, "Anthropic")
+    blocked = settings(**HOSTED_CLASSIFIER, NOVA_LIVE_BRIDGES="true")
+    assert Data.DATE_CONTEXT not in to(blocked, "Anthropic")
+
+
 def test_an_ollama_on_another_machine_is_a_third_party_unless_approved():
     s = settings(**REMOTE)
     assert "Ollama at gpu.example" in third_parties(s)

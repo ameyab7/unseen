@@ -236,6 +236,7 @@ class Driver:
             distress_timeout=distress_timeout,
             events=EventLog(logging.getLogger("nova.benchmark")),
             live_context=variant == CANDIDATE,
+            conversational=variant == CANDIDATE,
             privacy=PrivacyPolicy.for_synthetic_data(),  # the benchmark's daters are made up
         )
         self.asked_nova = 0
@@ -289,10 +290,10 @@ class Driver:
         transcript, the voice detector again; then Nova acts on it."""
         r = self.r
         r.seat = seat
-        r.speech_started()
+        r.speech_started(seat)
         self.clock.now += max(0.6, len(text.split()) / DATER_WORDS_A_SECOND)
-        r.transcript(text)
-        r.speech_ended()
+        r.transcript(text, seat)
+        r.speech_ended(seat)
         self.said.append((self.names[seat], text))
         await self.advance(self.clock.now + 1.0)
 

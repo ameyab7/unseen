@@ -47,6 +47,10 @@ muted.
 stop or need help, and to tell a human moderator when something breaks the show's rules.
 These checks cover everything said on your date, including while Nova is muted.
 
+Nova also uses the text to recognize thinking pauses, questions and handovers, so it can
+wait while you talk to each other and introduce the show's activities at a pause. When
+enabled, brief host transitions use the same recent conversation context described below.
+
 **The AI models behind Nova.** One AI model writes Nova's lines. Another runs the checks
 above, and checks each line before Nova says it.
 

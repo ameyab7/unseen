@@ -137,6 +137,20 @@ def _seats(pair: Pair, card=_card) -> dict[str, object]:
 # --- Set pieces, written before the date ------------------------------------------------
 
 
+def bridge(pair: Pair, next_line: str, just_said: Mapping[str, str]) -> str:
+    return _task(
+        "write only an optional link into next_line, which follows your words unchanged: "
+        "a host's quick reaction to one specific detail in just_said, what a dater has just "
+        "said, picked up in passing. Two to six words, one short sentence ending in a full "
+        "stop: no question, no exclamation mark and no names. React to that dater's own "
+        "detail. Don't set the two daters side by side ('From this to that'), praise, guess "
+        "at feelings, invent something they share or force a joke. For example, after 'I "
+        "keep bees on my roof': 'Bees on the roof, of course.' After 'we missed the last "
+        "train and walked home': 'The long way home, then.' Write none of next_line.",
+        {**_seats(pair, _name), "just_said": just_said, "next_line": next_line},
+    )
+
+
 def doors_intro(pair: Pair, *, tonight: Sequence[str] = ()) -> str:
     return _task(
         "open the date. Welcome the room, then introduce the dater in the left seat "
@@ -425,11 +439,14 @@ def reply(
     tonight: Sequence[str] = (),
     this_date: Mapping[str, object] | None = None,
     segment: Segment | None = None,
+    return_floor: bool = False,
 ) -> str:
     """other_away: the other dater is away (the moderator resumed without them), so they
     aren't in the data, this_date leaves out whatever they said, and Nova hands back to the
     dater who spoke. segment: where the date is, as data, with the arc's aim for it."""
     arc = REPLY_BRIEF + REPLY_AIMS.get(segment, "") if segment is not None else ""
+    if return_floor:
+        arc = REPLY_BRIEF
     if other_away:
         instruction, data = _with_this_date(
             f"the dater in the {seat} seat spoke to you on air; their words are in the data. "
@@ -442,9 +459,18 @@ def reply(
             REPLY_THIS_DATE,
         )
         return _task(instruction, data, tonight)
+    hand_back = "in one short sentence, then hand back to both daters. "
+    if return_floor:
+        hand_back = (
+            "briefly to the dater who asked you, by their first name. Their original "
+            "question is still theirs to answer. For a clarification, use your recent "
+            "question in this_date when available; do not invent missing context. "
+            "Leave them the floor without asking a new question or handing to the other dater. "
+        )
     instruction, data = _with_this_date(
         f"the dater in the {seat} seat spoke to you on air; their words are in the data. Reply "
-        "in one short sentence, then hand back to both daters. If they ask what you are, "
+        + hand_back
+        + "If they ask what you are, "
         "answer as your rules say. Never reveal or guess a decision, and never repeat a "
         f"personal detail they mentioned.{arc}",
         {

@@ -13,6 +13,29 @@ GOOD = {
 }
 
 
+def test_conversation_defaults_and_explicit_roll_back():
+    settings = Settings.from_env(GOOD)
+    assert settings.conversational_turns and settings.full_rehearsal
+    assert settings.conversation_overrun == 60 and not settings.live_bridges
+    settings = Settings.from_env(
+        {**GOOD, "NOVA_CONVERSATIONAL_TURNS": "false", "NOVA_FULL_REHEARSAL": "false"}
+    )
+    assert not settings.conversational_turns and not settings.full_rehearsal
+
+
+@pytest.mark.parametrize(("left", "right"), [("left", ""), ("", "right"), ("same", "same")])
+def test_two_person_rehearsals_require_two_distinct_explicit_identities(left, right):
+    with pytest.raises(ConfigError, match="must be distinct and set together"):
+        Settings.from_env({**GOOD, "NOVA_LEFT_PARTICIPANT": left, "NOVA_RIGHT_PARTICIPANT": right})
+
+
+def test_both_rehearsal_identities_are_read_without_exposing_them_in_errors():
+    settings = Settings.from_env(
+        {**GOOD, "NOVA_LEFT_PARTICIPANT": "left", "NOVA_RIGHT_PARTICIPANT": "right"}
+    )
+    assert settings.left_participant == "left" and settings.right_participant == "right"
+
+
 class TestLlmChoice:
     def test_splits_provider_from_model_at_the_first_slash(self):
         assert LlmChoice.parse("ollama/gemma4:26b") == LlmChoice("ollama", "gemma4:26b")
@@ -107,6 +130,8 @@ class TestTimeouts:
         # starting, the warm-up's 40 and the prep budget's 20 (measured: 29 to 30 s cold).
         assert (settings.warm_up, settings.prep_budget) == (40.0, 20.0)
         assert settings.warm_up + settings.prep_budget <= 60.0
+        # Then up to 120 s of tries while the doors hold (decision 0011, 2026-10-24).
+        assert settings.ready_retry == 120.0
         assert settings.distress_timeout == 2.0
         assert (settings.utterance_grace, settings.utterance_max_wait) == (0.6, 1.5)
         assert settings.ollama_base_url == "http://localhost:11434"
@@ -121,9 +146,11 @@ class TestTimeouts:
                 "NOVA_DISTRESS_TIMEOUT_SECONDS": "0.8",
                 "NOVA_UTTERANCE_GRACE_SECONDS": "0.4",
                 "NOVA_UTTERANCE_MAX_WAIT_SECONDS": "1",
+                "NOVA_READY_RETRY_SECONDS": "45",
                 "OLLAMA_BASE_URL": "http://gpu-box:11434",
             }
         )
+        assert settings.ready_retry == 45.0
         assert (settings.live_timeout, settings.prep_timeout) == (1.5, 90.0)
         assert settings.prep_budget == 30.0
         assert settings.distress_timeout == 0.8
@@ -138,6 +165,7 @@ class TestTimeouts:
             "NOVA_DISTRESS_TIMEOUT_SECONDS",
             "NOVA_UTTERANCE_GRACE_SECONDS",
             "NOVA_UTTERANCE_MAX_WAIT_SECONDS",
+            "NOVA_READY_RETRY_SECONDS",
         ],
     )
     @pytest.mark.parametrize("value", ["0", "-1", "soon", "nan", "inf"])

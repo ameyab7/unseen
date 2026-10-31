@@ -649,7 +649,7 @@ async def test_a_retried_failure_logs_nothing_it_carried(caplog):
     caplog.set_level(logging.DEBUG)
     model = PrivacyPolicy().guard(Failing("connection"))
     warmed = await warm_up(model, deadline=2.0, backoff=(0.01,), attempts=3)
-    assert (warmed.attempts, warmed.error) == (3, WarmUpError.ERROR)
+    assert (warmed.attempts, warmed.error) == (3, WarmUpError.UNAVAILABLE)
     assert ERROR_WORD not in caplog.text + "".join(repr(vars(r)) for r in caplog.records)
 
 
@@ -707,7 +707,7 @@ NOVA = Path(__file__).parents[1] / "nova"
 
 def test_only_runs_on_made_up_daters_use_the_synthetic_policy():
     users = {p.name for p in NOVA.glob("*.py") if "for_synthetic_data()" in p.read_text("utf-8")}
-    assert users == {"evaluation.py", "benchmark.py"}
+    assert users == {"evaluation.py", "benchmark.py", "conversation_trial.py"}
 
 
 def test_the_agent_uses_the_policy_its_settings_give_and_checks_its_logs():

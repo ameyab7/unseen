@@ -13,7 +13,9 @@ benchmark (whether a change makes a date better: `uv run python -m nova.benchmar
 demand with local Ollama, never in CI; its hard gates fail the run, its indicators hint,
 and only people's blind ratings say whether it helped: `uv run python -m nova.ratings`),
 0010 privacy at the request boundary (who may receive what: nova/privacy.py; every flow:
-nova/data_flows.py, `uv run python -m nova.data_flows`, and docs/privacy/).
+nova/data_flows.py, `uv run python -m nova.data_flows`, and docs/privacy/), 0011 a show's
+dates (nova/show.py: one context a date, closed however the date ends) and the doors-hold
+that tries again before the moderator decides.
 Iterate on the benchmark's development set; its comparison set is the scorecard, never
 tuned against. Read the one a change touches first, and update it in the same change. Lines
 waiting for the product owner are in docs/sign-off/ and nova/sign_off.py.
@@ -47,9 +49,42 @@ waiting for the product owner are in docs/sign-off/ and nova/sign_off.py.
   session, which overstates stability: never report it as the safety result.
   Run it with nothing else busy: part of Gemma runs on the CPU, and a test run alongside
   times the 2 s checks out.
+- Every date opens through a show's Night (`with night.date(pair, ...)`, nova/show.py,
+  decision 0011), the rehearsal's one date included: never a Rehearsal made directly where
+  real daters are heard. The Night closes it however it ends.
 - Nothing here calls production, and the tests never call LiveKit, Ollama or Claude.
 
 ## Running it on this machine
+
+- Conversation changes are in decision 0012. The agent defaults to full-length dates
+  and local floor tracking (`NOVA_FULL_REHEARSAL`, `NOVA_CONVERSATIONAL_TURNS`). Set either
+  false for legacy comparison. `NOVA_CONVERSATION_OVERRUN_SECONDS` defaults to the product
+  owner's 60 seconds. `NOVA_LIVE_BRIDGES` defaults false pending audio/load acceptance.
+  A scheduled transition the conversation has held back for `Timing.transition_grace`
+  (15 s) goes in a `Timing.brief_opening` (0.4 s) of quiet, never over speech or a floor
+  protection; a closing phrase (nova/floor.py) shortens the lull to the turn gap before
+  that. A question's answer window opens only once the room has heard it, judged on the
+  voice detector's times. The report's Transitions and Finals rows and the `transition`,
+  `final` and `delivered` events are the rehearsal diagnostics (decision 0012).
+  For a two-person rehearsal, configure distinct `NOVA_LEFT_PARTICIPANT` and
+  `NOVA_RIGHT_PARTICIPANT` LiveKit identities and join both before opening:
+  `uv run python -m nova.two_person` signs each person's token (no LiveKit call), and
+  docs/rehearsals/two-person-full-length.md is the run sheet. Each input, and what each
+  person types, is pinned to its own seat. Empty identities retain the single-microphone
+  simulation; speech follows the prompted seat/handover unless a typed seat overrides it.
+  Start through the existing Docker rehearsal command; no live rehearsal or worker
+  restart is performed by unit tests. Check the report's segments, last words, decision
+  window, interruptions, both airtime shares, reply latency and safety checks. Human
+  validation stays pending until two real people have run it: blind audio ratings need a
+  recording, consent and the data-flow docs first, and none is ever simulated.
+  The ordinary local-model baseline currently has existing missed-distress failures;
+  do not report passing unit tests as a passing safety evaluation.
+  `uv run python -m nova.conversation_trial [--rounds N]` is the load gate for optional
+  prefixes (decision 0012): ordinary synthetic safety checks alone and while a prefix
+  contends, locally and with nothing else busy. It fails (non-zero exit) on any unchecked
+  or changed verdict, or a contended p99 over three quarters of the distress timeout. It
+  prints codes/counts/timings only, never measures safety recall, never enables prefixes,
+  and does not replace the frozen safety report or human rehearsal.
 
 - `uv sync`, then `uv run ruff check`, `uv run ruff format` and the tests.
 - Smart App Control blocks PyAV, so the tests that import LiveKit (tests/test_agent.py,
@@ -67,6 +102,11 @@ waiting for the product owner are in docs/sign-off/ and nova/sign_off.py.
   moderator control, a dater, a moderator and an impostor in a real LiveKit room, in Docker
   only, at LiveKit credit: `docker compose -f services/nova/compose.yaml run --rm --build nova
   uv run python -m nova.mute_live`. Its report lands in services/nova/rehearsals/mute-*.txt.
+- The startup rehearsal (decision 0011) runs eight sessions in real LiveKit rooms (cold,
+  warm, an Ollama outage, a missing model) and measures how Nova gets ready and how the
+  doors-hold ends, in Docker only, at LiveKit credit, with the machine otherwise idle:
+  `docker compose -f services/nova/compose.yaml run --rm --build nova uv run python -m
+  nova.startup_live`. Its report lands in services/nova/rehearsals/startup-*.txt.
 - The moderator's messages are zod schemas in packages/shared (src/moderator.ts);
   nova/moderator.py checks the same shapes, and both are tested on
   packages/shared/fixtures/moderator.json. Change them together.

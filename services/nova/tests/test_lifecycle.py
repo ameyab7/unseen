@@ -120,14 +120,14 @@ async def test_a_failure_we_cant_tell_is_never_tried_again_either():
 async def test_a_failure_that_keeps_coming_back_stops_at_the_attempt_limit():
     model = Scripted(*[CONNECTION] * 20)
     warmed = await warm_up(model, deadline=5.0, backoff=NO_PAUSE)
-    assert warmed.error is WarmUpError.ERROR and warmed.attempts == WARM_UP_ATTEMPTS
+    assert warmed.error is WarmUpError.UNAVAILABLE and warmed.attempts == WARM_UP_ATTEMPTS
 
 
 async def test_retries_back_off_and_never_pass_the_deadline():
     model = Scripted(*[CONNECTION] * 20)
     started = time.monotonic()
     warmed = await warm_up(model, deadline=0.35, backoff=(0.1, 0.2, 0.4))
-    assert warmed.error is WarmUpError.ERROR and time.monotonic() - started < 0.35
+    assert warmed.error is WarmUpError.UNAVAILABLE and time.monotonic() - started < 0.35
     gaps = [b - a for a, b in zip(model.started, model.started[1:], strict=False)]
     # Tries at 0, 0.1 and 0.3 s; the next pause (0.4 s) would pass the deadline: no more.
     assert len(model.started) == 3 and gaps[0] >= 0.1 and gaps[1] >= 0.2

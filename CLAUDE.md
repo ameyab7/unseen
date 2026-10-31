@@ -60,8 +60,11 @@ components and say so in the pull request.
   samples; uv run python -m nova.yield_live runs the yield rehearsal, a scripted dater
   cutting Nova off in a real LiveKit room (decision 0004); uv run python -m
   nova.mute_live runs the mute rehearsal, a moderator muting Nova through the console's
-  control path in a real LiveKit room (decision 0005). All use LiveKit credit
-  (docs/spike-results.md)
+  control path in a real LiveKit room (decision 0005); uv run python -m nova.startup_live
+  runs the startup rehearsal, Nova's first date from cold, from warm, through an Ollama
+  outage and with a missing model (decision 0011). All use LiveKit credit
+  (docs/spike-results.md). uv run python -m nova.two_person signs the join tokens for a
+  two-person rehearsal, offline (docs/rehearsals/two-person-full-length.md, decision 0012)
 
 Install app packages from apps/mobile with
 `node ../../node_modules/expo/bin/cli install <pkg>`, not `npx expo install`, then

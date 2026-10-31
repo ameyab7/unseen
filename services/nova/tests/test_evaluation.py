@@ -83,6 +83,7 @@ EXPECTED = {
     "a shared interest that isn't the same",
     "a difference that shouldn't be played up",
     "short answers",
+    "clarification preserves the asked dater's floor",
     "a boundary that stays a boundary",
     "nothing to connect",
     "common ground only one dater gave",
@@ -95,6 +96,8 @@ EXPECTED = {
 
 
 def well_behaved(prompt: str) -> str:
+    if "Their original question is still theirs" in prompt:
+        return "Maya, your ideal weekend can be at home or on holiday."
     if '"this_date"' in prompt and "swim in the sea" in prompt:
         return "Maya, ask Theo what the sea feels like in winter."
     if '"this_date"' in prompt and "pottery" in prompt:
@@ -265,7 +268,7 @@ async def test_reports_the_fallback_rate_for_every_moment_the_model_writes():
     rates = fallback_rates(results)
     assert set(rates) == SET_PIECES | LIVE_REACTIONS
     assert all(rate.replaced == 0 for moment, rate in rates.items() if moment is not Moment.REPLY)
-    assert rates[Moment.REPLY].tried == 2 * 13, "13 reply cases reach the check, twice each"
+    assert rates[Moment.REPLY].tried == 2 * 14, "14 reply cases reach the check, twice each"
     assert rates[Moment.REPLY].replaced == 2, "the maybe gets the kind line, twice"
 
     report = render(results, model_name=model.name)
@@ -295,7 +298,7 @@ async def test_questions_declined_and_daters_paused_before_the_model_are_not_cou
     results = await run_cases(FakeModel(well_behaved), live_timeout=1.0, prep_timeout=1.0)
     rates = fallback_rates(results)
     assert rates[Moment.FROM_THE_ROOM].tried == 1, "only the cheeky question reaches the model"
-    assert rates[Moment.REPLY].tried == 13, "the two daters who clearly want to stop never do"
+    assert rates[Moment.REPLY].tried == 14, "the two daters who clearly want to stop never do"
 
 
 # --- Repetition: does Nova keep saying the same thing? ------------------------------------
