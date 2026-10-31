@@ -138,3 +138,43 @@ the root scripts call pnpm themselves and fail when it is not on PATH.
 - Ask before adding a dependency. Never edit generated files (tokens.ts,
   database.types.ts).
 - Record architecture decisions in docs/decisions/, one short file each.
+
+## Parallel development ownership (2026-10-31)
+
+Read the root AGENTS.md before doing work. It is the shared ownership and approval
+policy for this setup; all earlier design, architecture, testing, safety and
+privacy requirements in this file and services/nova/CLAUDE.md remain in force.
+
+- Claude Code is BACKEND only: work in the sibling unseen-backend worktree on
+  agent/backend, owning services/nova/** and backend-specific tests and
+  documentation as described in AGENTS.md. Read services/nova/CLAUDE.md before
+  backend implementation.
+- OpenAI Codex is FRONTEND only: work in the sibling unseen-frontend worktree on
+  agent/frontend, owning apps/mobile/**, packages/tokens/** and frontend-specific
+  tests and documentation as described in AGENTS.md.
+- The original unseen checkout on main is for human review and integration.
+  Verify the current directory, branch and status at task start. A role or branch
+  mismatch means stop and report; do not switch branches or edit another checkout.
+- packages/shared/**, root configuration and lockfiles, CI, agent instructions,
+  shared contracts, architecture and privacy documentation require explicit
+  coordination and user approval before edits. An owned Python file participating
+  in a wire-contract change also requires that coordination.
+- Moderator messages use packages/shared/src/moderator.ts, the matching Python
+  validator in nova/moderator.py and packages/shared/fixtures/moderator.json.
+  Preserve role/session/sequence checks, mute behavior and destination restrictions.
+  Coordinate schema, validator, fixture and test changes together.
+- Do not commit, merge, push, rebase, reset, pull, cherry-pick, change branches or
+  worktrees, modify the other agent's work, or remove backup/recovery objects
+  without explicit user approval. Fetch also requires approval.
+- Never run LiveKit sessions, paid speech/voice requests or external model calls
+  without explicit user approval. Local model evaluations remain on demand and
+  require approval; preserve the required before/after model-change evaluations,
+  frozen safety checks and held-out protections.
+- Preserve production isolation, guarded model requests, private reveal decisions,
+  code-only logs, per-date cleanup, product-owner line sign-off and the existing
+  privacy notice/data-flow rules. Never expose or copy secret environment values.
+- A permission allowlist or documented runtime command is not authorization for
+  out-of-scope work or billable calls. Ask before dependencies or provisioning.
+- The user authorized separate instruction-only commits of AGENTS.md and CLAUDE.md
+  on agent/frontend and agent/backend. Future commits still require explicit user
+  approval. Preserve these instructions; setup does not authorize new features.
