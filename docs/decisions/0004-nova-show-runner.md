@@ -4,6 +4,14 @@ Date: 2026-10-13. Status: accepted.
 
 ## Decision
 
+- **Conversational mode supersedes the VAD-only turn rules below** (2026-10-26,
+  decision 0012). Local floor signals run independently of the frozen safety check.
+  Thinking, handovers and clarification keep an opportunity open; silence is bounded
+  at 20 seconds rather than treated as a pass at six. Transitions need a quiet boundary,
+  including after the old speech cap. Extra waiting has a 60-second discretionary budget;
+  free talk and the optional second room question absorb delay before protected last
+  words or decision time. Legacy callers can opt out for regression comparison.
+
 - **A deterministic runner walks the running order.** `services/nova/nova/show_runner.py`
   takes the current time and room events (speech, need a moment, a dater leaving, the
   moderator ending, audience questions, the lightning unlock) and returns cues: lines for

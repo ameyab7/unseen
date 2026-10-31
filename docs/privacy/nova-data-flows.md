@@ -1,5 +1,12 @@
 # Nova's data flows: privacy audit
 
+2026-10-26, decision 0012: transcript-derived floor and handover signals run only inside
+Nova, retain no words and add no inference recipient. Opt-in live prefixes use cleared
+date context for generation and mandatory meaning checks, subject to the existing policy
+for each model, even with `NOVA_MEANING_LIVE` off. They never enter cross-date memory.
+Two-person rehearsals pin one speech-recognition input to each configured participant;
+the speech recipients are unchanged. Cloud turn detection remains disabled.
+
 Status: audit of the code in this repository, 2026-10-24. Not a legal review, and not a
 statement of compliance. The dater notice drafted from it
 (`docs/privacy/dater-notice-draft.md`) is **DRAFT / NOT SHIPPED**.

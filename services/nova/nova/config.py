@@ -80,6 +80,12 @@ class Settings:
     # warm-up holds one request for all of it. If it fails, the doors hold for the
     # moderator (Rehearsal.hold_until_ready), never a silent date of fallbacks.
     warm_up: float = 40.0
+    # How long the doors may hold while Nova tries again to get ready, once the warm-up and
+    # the prep budget have run out (decision 0011, the product owner's choice, 2026-10-24):
+    # a model still loading or a server still starting gets more tries, after 2, 4, 8 then
+    # every 16 s; then the tries stop and the moderator decides. 120 s: ready within 3
+    # minutes of the session starting, or the moderator is told it won't be.
+    ready_retry: float = 120.0
     # How many requests for set pieces may be in flight at once while they're prepared. A
     # distress check during prep queues behind them on the same model, and with Ollama
     # serving one request at a time (OLLAMA_NUM_PARALLEL), more never prepared faster: set
@@ -119,6 +125,14 @@ class Settings:
     # How long the check on one set piece may take before the date; a live line's check gets
     # what's left of the live timeout instead. Not judged in time: the line isn't kept.
     meaning_timeout: float = 5.0
+    # Floor tracking uses no extra classifier requests. Live prefixes remain opt-in
+    # until measured on this deployment; every prefix requires a meaning check.
+    conversational_turns: bool = True
+    full_rehearsal: bool = True
+    live_bridges: bool = False
+    conversation_overrun: float = 60.0
+    left_participant: str = ""
+    right_participant: str = ""
 
     REQUIRED: ClassVar[tuple[str, ...]] = (
         "LIVEKIT_URL",
@@ -129,12 +143,19 @@ class Settings:
     ENV_NAMES: ClassVar[tuple[str, ...]] = (
         *REQUIRED,
         "NOVA_CLASSIFIER_LLM",
+        "NOVA_CONVERSATIONAL_TURNS",
+        "NOVA_FULL_REHEARSAL",
+        "NOVA_LIVE_BRIDGES",
+        "NOVA_CONVERSATION_OVERRUN_SECONDS",
+        "NOVA_LEFT_PARTICIPANT",
+        "NOVA_RIGHT_PARTICIPANT",
         "ANTHROPIC_API_KEY",
         "OLLAMA_BASE_URL",
         "NOVA_LIVE_TIMEOUT_SECONDS",
         "NOVA_PREP_TIMEOUT_SECONDS",
         "NOVA_PREP_BUDGET_SECONDS",
         "NOVA_WARM_UP_SECONDS",
+        "NOVA_READY_RETRY_SECONDS",
         "NOVA_PREP_PARALLEL",
         "NOVA_DISTRESS_TIMEOUT_SECONDS",
         "NOVA_UTTERANCE_GRACE_SECONDS",
@@ -151,6 +172,12 @@ class Settings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Self:
+        left = env.get("NOVA_LEFT_PARTICIPANT", "").strip()
+        right = env.get("NOVA_RIGHT_PARTICIPANT", "").strip()
+        if bool(left) != bool(right) or (left and left == right):
+            raise ConfigError(
+                "NOVA_LEFT_PARTICIPANT and NOVA_RIGHT_PARTICIPANT must be distinct and set together"
+            )
         missing = [name for name in cls.REQUIRED if not env.get(name, "").strip()]
         if missing:
             raise ConfigError(f"Missing in services/nova/.env: {', '.join(missing)}")
@@ -197,6 +224,7 @@ class Settings:
             prep_timeout=_seconds(env, "NOVA_PREP_TIMEOUT_SECONDS", cls.prep_timeout),
             prep_budget=_seconds(env, "NOVA_PREP_BUDGET_SECONDS", cls.prep_budget),
             warm_up=_seconds(env, "NOVA_WARM_UP_SECONDS", cls.warm_up),
+            ready_retry=_seconds(env, "NOVA_READY_RETRY_SECONDS", cls.ready_retry),
             prep_parallel=_count(env, "NOVA_PREP_PARALLEL", cls.prep_parallel),
             distress_timeout=_seconds(env, "NOVA_DISTRESS_TIMEOUT_SECONDS", cls.distress_timeout),
             utterance_grace=grace,
@@ -209,6 +237,16 @@ class Settings:
             meaning_timeout=_seconds(env, "NOVA_MEANING_TIMEOUT_SECONDS", cls.meaning_timeout),
             approved_local_hosts=_hosts(env, "NOVA_APPROVED_LOCAL_HOSTS"),
             synthetic_diagnostics=synthetic_diagnostics,
+            conversational_turns=_flag(
+                env, "NOVA_CONVERSATIONAL_TURNS", default=cls.conversational_turns
+            ),
+            full_rehearsal=_flag(env, "NOVA_FULL_REHEARSAL", default=cls.full_rehearsal),
+            live_bridges=_flag(env, "NOVA_LIVE_BRIDGES", default=cls.live_bridges),
+            conversation_overrun=_seconds(
+                env, "NOVA_CONVERSATION_OVERRUN_SECONDS", cls.conversation_overrun
+            ),
+            left_participant=left,
+            right_participant=right,
         )
 
 

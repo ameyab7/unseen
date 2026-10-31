@@ -58,7 +58,7 @@ Quick and functional: 200ms ease-out for sheets and state changes. The speaking 
 
 ## The show
 
-One date runs about ten minutes on air, in a fixed running order, so Nova carries moments rather than a whole evening.
+One date runs about ten minutes on air, in a fixed running order, so Nova carries moments rather than a whole evening. The time marks are targets: Nova waits for conversational pauses, with up to sixty seconds of discretionary overrun, shortening optional content first. Safety holds and the full private decision window are protected (decision 0012).
 
 | Time | Segment | What happens |
 | --- | --- | --- |

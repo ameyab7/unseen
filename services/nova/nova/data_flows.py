@@ -76,7 +76,7 @@ def flows(settings: Settings) -> list[Flow]:
             "speech recognition",
             frozenset({Data.TRANSCRIPT, Data.SAFETY_CONTEXT, Data.DATE_CONTEXT}),
             NOVA,
-            "replies, the safety checks, this date's context",
+            "replies, local floor and handover signals, the safety checks, this date's context",
             retention="memory only: 15 s per dater for the checks; this date's last 8 turns "
             "until the date ends; never written down or logged",
             training="none",
@@ -130,12 +130,16 @@ def flows(settings: Settings) -> list[Flow]:
                 "the meaning check",
                 _companies(to_checks),
                 when="set pieces before the date"
-                + ("; live lines too" if settings.meaning_live else ""),
+                + ("; live lines too" if settings.meaning_live else "")
+                + ("; optional live prefixes" if settings.live_bridges else ""),
             )
         )
     if policy.allows(lines, Data.DATE_CONTEXT):
-        found.append(_this_date(to_lines, "replies and silences that follow the date"))
-    live_meaning = settings.meaning_check and settings.meaning_live
+        purpose = "replies and silences that follow the date"
+        if settings.live_bridges and settings.meaning_check:
+            purpose += "; optional live prefixes to prepared questions"
+        found.append(_this_date(to_lines, purpose))
+    live_meaning = settings.meaning_check and (settings.meaning_live or settings.live_bridges)
     if live_meaning and policy.allows(checks, Data.DATE_CONTEXT):
         found.append(_this_date(to_checks, "the meaning check on live lines"))
     return found

@@ -4,8 +4,11 @@
 
 Then open agents-playground.livekit.io, choose the project and connect. Nova warms the model
 up, prepares its set pieces within the prep budget (NOVA_PREP_BUDGET_SECONDS), waits for
-you, and runs one rehearsal date (about three minutes) as the host
-of Maya and Theo. You play both daters: speak, start with "Nova, ..." to talk to Nova, and
+you, and runs one full-length date as the host of Maya and Theo (set NOVA_FULL_REHEARSAL
+false for the compressed version). Configure both participant identities for two people
+(each joins with a token from `uv run python -m nova.two_person`, and what each types is
+their own seat's), or play both daters with one microphone. Start with "Nova, ..." to talk
+to Nova, and
 type commands in the chat box (nova/rehearsal.py, Command): maya, theo, moment, back,
 unlock, ask <question>, reveal, unseen, keep, resume, end, leave, report, and for the
 moderator, mute, unmute, and start (a date Nova isn't ready for). What daters say
@@ -31,6 +34,7 @@ import logging
 import os
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -39,6 +43,7 @@ from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
+    CloseEvent,
     JobContext,
     TurnHandlingOptions,
     cli,
@@ -47,6 +52,7 @@ from livekit.agents import (
 )
 from livekit.agents.voice.transcription import TranscriptSynchronizer
 
+from nova.cards import Seat
 from nova.config import Settings, load_settings
 from nova.events import EventLog
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
@@ -54,7 +60,8 @@ from nova.models import build_classifier, build_model
 from nova.moderator import TOPIC, ModeratorControl, is_moderator
 from nova.privacy import PrivacyPolicy, check_for_real_people
 from nova.rehearsal import Command, Rehearsal, render_report
-from nova.timing import REHEARSAL
+from nova.show import Night
+from nova.timing import FULL, REHEARSAL
 
 logger = logging.getLogger("nova.agent")
 
@@ -267,6 +274,147 @@ def new_session(settings: Settings) -> AgentSession:
     )
 
 
+async def run_date(
+    ctx: JobContext,
+    session: AgentSession,
+    speaker: SessionSpeaker,
+    rehearsal: Rehearsal,
+    *,
+    seats: dict[Seat, str] | None = None,
+    other_session: AgentSession | None = None,
+) -> str | None:
+    """One date in the session's room: the moderator's control, the daters heard from
+    the session's start, Nova warmed up and ready (or held for the moderator, decision
+    0011), then the date itself. If the session closes first (the one person playing both
+    daters left, or the job shut down), the date ends there: nobody is left to hear it.
+    Returns why the session closed then, a LiveKit code; None if the date ran its course."""
+
+    def on_user_state(event: Any) -> None:
+        seat = Seat.LEFT if seats else None
+        if event.new_state == "speaking":
+            if seat is None:
+                rehearsal.speech_started()
+            else:
+                rehearsal.speech_started(seat)
+        elif event.old_state == "speaking":
+            if seat is None:
+                rehearsal.speech_ended()
+            else:
+                rehearsal.speech_ended(seat)
+
+    def on_transcript(event: Any) -> None:
+        if event.is_final:
+            if seats:
+                rehearsal.transcript(event.transcript, Seat.LEFT)
+            else:
+                rehearsal.transcript(event.transcript)
+
+    # The moderator's mute from the console (launch requirement 2, nova/moderator.py).
+    control = ModeratorControl(rehearsal, events=EventLog())
+    tell_moderators = connect_moderators(ctx.room, control)
+
+    def typed(text: str, seat: Seat | None) -> None:
+        if rehearsal.command(text, seat) in (Command.MUTE, Command.UNMUTE):
+            tell_moderators()  # the console shows what is true, however it changed
+
+    # LiveKit hands each session only its own participant's chat: with two people, what each
+    # types is their own (their moment, report or decision), never the seat that spoke last.
+    def on_chat(_session: AgentSession, event: room_io.TextInputEvent) -> None:
+        typed(event.text, Seat.LEFT if seats else None)
+
+    def on_other_chat(_session: AgentSession, event: room_io.TextInputEvent) -> None:
+        typed(event.text, Seat.RIGHT)
+
+    # Why the session closed, once it has.
+    closing: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+
+    def on_close(event: CloseEvent) -> None:
+        if not closing.done():
+            closing.set_result(event.reason.value)
+
+    session.on("user_state_changed", on_user_state)
+    session.on("user_input_transcribed", on_transcript)
+    session.on("close", on_close)
+    if other_session is not None:
+
+        def on_other_state(event: Any) -> None:
+            if event.new_state == "speaking":
+                rehearsal.speech_started(Seat.RIGHT)
+            elif event.old_state == "speaking":
+                rehearsal.speech_ended(Seat.RIGHT)
+
+        def on_other_transcript(event: Any) -> None:
+            if event.is_final:
+                rehearsal.transcript(event.transcript, Seat.RIGHT)
+
+        other_session.on("user_state_changed", on_other_state)
+        other_session.on("user_input_transcribed", on_other_transcript)
+        other_session.on("close", on_close)
+
+    async def get_ready() -> None:
+        await rehearsal.warm_up()  # a cold model loads here, not inside the prep budget
+        await rehearsal.prepare()
+
+    async def the_date() -> None:
+        if seats:
+            await asyncio.gather(
+                *(ctx.wait_for_participant(identity=who) for who in seats.values())
+            )
+        else:
+            await ctx.wait_for_participant()
+        await preparing
+        # Not ready (a model that didn't warm up, every set piece a fallback): the
+        # moderator is alerted and chooses, never a silent date of fallbacks (decision 0005).
+        if await rehearsal.hold_until_ready():
+            await rehearsal.run()
+
+    # Daters are heard on time from their first word, while set pieces are still written.
+    listening = asyncio.create_task(rehearsal.listen())
+    preparing = asyncio.create_task(get_ready())
+    try:
+        await session.start(
+            agent=Agent(instructions="Nova's lines come from the show runner; no replies here."),
+            room=ctx.room,
+            room_options=room_io.RoomOptions(
+                **({"participant_identity": seats[Seat.LEFT]} if seats else {}),
+                text_input=room_io.TextInputOptions(text_input_cb=on_chat),
+                # Otherwise LiveKit publishes what daters say, as text, to everyone in the room.
+                text_output=False,
+            ),
+            **START_OPTIONS,
+        )
+        speaker.timed = time_played_words(session)
+        if other_session is not None:
+            assert seats is not None
+            await other_session.start(
+                agent=Agent(instructions="Input only; Nova's show runner controls speech."),
+                room=ctx.room,
+                room_options=room_io.RoomOptions(
+                    participant_identity=seats[Seat.RIGHT],
+                    text_input=room_io.TextInputOptions(text_input_cb=on_other_chat),
+                    text_output=False,
+                    audio_output=False,
+                ),
+                **START_OPTIONS,
+            )
+        dating = asyncio.create_task(the_date())
+        try:
+            await asyncio.wait({dating, closing}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            dating.cancel()  # a date cut short still finishes its checks (Rehearsal.run)
+            await asyncio.gather(dating, return_exceptions=True)
+        if dating.cancelled():  # only ever by the session closing first
+            return closing.result()
+        dating.result()  # the date's own error, if it had one
+        return None
+    finally:
+        listening.cancel()
+        preparing.cancel()  # a session that ended while Nova still got ready
+        await asyncio.gather(listening, preparing, return_exceptions=True)
+        if other_session is not None:
+            await other_session.aclose()
+
+
 server = AgentServer()
 
 
@@ -277,14 +425,23 @@ async def rehearse(ctx: JobContext) -> None:
     check_for_real_people(settings)  # the log levels as LiveKit set them for this job
     session = new_session(settings)
     speaker = SessionSpeaker(session)
-    rehearsal = Rehearsal(
+    # A rehearsal is a night of one date (nova/show.py): the date's context is its own,
+    # and closed when the date ends, however it ends.
+    night = Night(make=Rehearsal)
+    with night.date(
         REHEARSAL_PAIR,
         model=build_model(settings),
         classifier=build_classifier(settings),
         speaker=speaker,
         voice=settings.voice,
         stt=settings.stt,
-        timing=REHEARSAL,
+        timing=replace(
+            FULL if settings.full_rehearsal else REHEARSAL,
+            conversation_overrun=settings.conversation_overrun,
+        ),
+        conversational=settings.conversational_turns,
+        live_bridges=settings.live_bridges,
+        input_streams=2 if settings.left_participant and settings.right_participant else 1,
         next_pair=NEXT_PAIR,
         live_timeout=settings.live_timeout,
         prep_timeout=settings.prep_timeout,
@@ -298,58 +455,31 @@ async def rehearse(ctx: JobContext) -> None:
         meaning_check=settings.meaning_check,
         meaning_live=settings.meaning_live,
         meaning_timeout=settings.meaning_timeout,
-    )
-
-    def on_user_state(event: Any) -> None:
-        if event.new_state == "speaking":
-            rehearsal.speech_started()
-        elif event.old_state == "speaking":
-            rehearsal.speech_ended()
-
-    def on_transcript(event: Any) -> None:
-        if event.is_final:
-            rehearsal.transcript(event.transcript)
-
-    # The moderator's mute from the console (launch requirement 2, nova/moderator.py).
-    control = ModeratorControl(rehearsal, events=EventLog())
-    tell_moderators = connect_moderators(ctx.room, control)
-
-    def on_chat(_session: AgentSession, event: room_io.TextInputEvent) -> None:
-        if rehearsal.command(event.text) in (Command.MUTE, Command.UNMUTE):
-            tell_moderators()  # the console shows what is true, however it changed
-
-    session.on("user_state_changed", on_user_state)
-    session.on("user_input_transcribed", on_transcript)
-
-    async def get_ready() -> None:
-        await rehearsal.warm_up()  # a cold model loads here, not inside the prep budget
-        await rehearsal.prepare()
-
-    # Daters are heard on time from their first word, while set pieces are still written.
-    listening = asyncio.create_task(rehearsal.listen())
-    preparing = asyncio.create_task(get_ready())
-    try:
-        await session.start(
-            agent=Agent(instructions="Nova's lines come from the show runner; no replies here."),
-            room=ctx.room,
-            room_options=room_io.RoomOptions(
-                text_input=room_io.TextInputOptions(text_input_cb=on_chat),
-                # Otherwise LiveKit publishes what daters say, as text, to everyone in the room.
-                text_output=False,
-            ),
-            **START_OPTIONS,
-        )
-        speaker.timed = time_played_words(session)
-        await ctx.wait_for_participant()
-        await preparing
-        # Not ready (a model that didn't warm up, every set piece a fallback): the
-        # moderator is alerted and chooses, never a silent date of fallbacks (decision 0005).
-        if await rehearsal.hold_until_ready():
-            await rehearsal.run()
-    finally:
-        listening.cancel()
+        ready_retry=settings.ready_retry,
+    ) as rehearsal:
+        if settings.left_participant and settings.right_participant:
+            other = AgentSession(
+                stt=inference.STT(settings.stt, language="en"),
+                turn_handling=TURN_HANDLING,
+                aec_warmup_duration=AEC_WARMUP,
+            )
+            closed = await run_date(
+                ctx,
+                session,
+                speaker,
+                rehearsal,
+                seats={
+                    Seat.LEFT: settings.left_participant,
+                    Seat.RIGHT: settings.right_participant,
+                },
+                other_session=other,
+            )
+        else:
+            closed = await run_date(ctx, session, speaker, rehearsal)
 
     report = render_report(rehearsal)
+    if closed is not None:
+        report += f"\nThe session closed ({closed}) before the date's end: the date ended there."
     REPORTS.mkdir(exist_ok=True)
     path = REPORTS / f"{datetime.now():%Y-%m-%d-%H%M%S}.txt"
     path.write_text(report + "\n", encoding="utf-8")

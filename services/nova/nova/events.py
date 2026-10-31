@@ -13,6 +13,7 @@ class Event(StrEnum):
     LINE = "line"  # one line chosen: where it came from, how long it took, what it broke
     PREPARED = "prepared"  # set pieces written before the date, and whether the budget ran out
     WARMUP = "warmup"  # one tiny request at the start, so a cold model loads before prep
+    OPENED = "opened"  # how a date's start was decided, how long it took, its fallbacks
     SPOKEN = "spoken"  # one line played: the delay to Nova's first word (rehearsals)
     VOICE_ERROR = "voice_error"  # Nova's voice failed on a line, which never played
     DISTRESS_CHECK = "distress_check"  # the meaning layer's verdict and time, never the words
@@ -24,6 +25,12 @@ class Event(StrEnum):
     MUTED = "muted"  # the moderator muted or unmuted Nova (launch requirement 2)
     MEANING_CHECK = "meaning_check"  # the meaning check on one of Nova's lines: label and time
     MODERATOR = "moderator"  # a control message from the console: its result, never who sent it
+    # Decision 0012's rehearsal diagnostics, on the date's clock in ms: a due transition's
+    # changes and what held it back; a final, the speech it was taken to say and what the
+    # floor made of it; whether the room heard a transition's line, and when.
+    TRANSITION = "transition"
+    FINAL = "final"
+    DELIVERED = "delivered"
 
 
 def _allowed(value: object) -> bool:

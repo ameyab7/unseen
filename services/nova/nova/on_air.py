@@ -233,10 +233,13 @@ class OnAirListener:
         """The voice detector heard a dater start speaking, which resets the silence clock
         and keeps their utterance open."""
         now = self._clock()
+        # Mark the live floor before closing older utterances: _close() ticks the
+        # runner, and must not cue a new question in the instant this dater starts.
+        cues = self._runner.speech_started(now, seat)
         self._close_due(now)
         dater = self._daters[seat]
         dater.speaking, dater.ended = True, None
-        self._send(self._runner.speech_started(now, seat))
+        self._send(cues)
 
     def speech_ended(self, seat: Seat) -> None:
         """The voice detector heard a dater stop: the end of their sentence, and the grace
@@ -263,6 +266,7 @@ class OnAirListener:
             utterance = dater.utterance = _Utterance(started=now, last_final=now)
         utterance.words.append(text)
         utterance.last_final = now
+        self._runner.turn_words(now, seat, utterance.text, to_nova=addresses_nova(*utterance.words))
         self._listener.remember(now, seat, text)
         if self._listener.unmistakable(now, seat, utterance.words) is None:
             self._unmatched(now, seat, utterance)

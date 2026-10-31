@@ -20,6 +20,13 @@ model calls only: audio and Nova's lines always go to LiveKit Inference.
 
 ## Decision
 
+- **Conversation use** (2026-10-26, decision 0012): local floor and handover signals
+  use transcripts within Nova, with no new model requests or recipients. Opt-in live
+  prefixes use the existing cleared date context for generation and mandatory meaning
+  checks; the existing policy must permit both recipients. The inventory includes
+  prefix meaning checks even when `NOVA_MEANING_LIVE` is off. No cloud turn-detection
+  or barge-in service is enabled. The inventory and draft notice describe this purpose.
+
 - **One policy, asked at each request** (`nova/privacy.py`, `PrivacyPolicy`). It decides
   who may receive this date's recent turns by the recipient of each request, not by a
   setting computed once:

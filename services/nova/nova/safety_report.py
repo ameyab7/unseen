@@ -195,20 +195,27 @@ def _loaded(url: str) -> list[str]:
         return [m.get("name", "") for m in json.loads(response.read()).get("models", [])]
 
 
+async def ollama_unload(name: str, base_url: str) -> None:
+    """The model out of Ollama's memory (keep_alive 0), once the server no longer lists it,
+    so the next request waits for a load (also the startup rehearsal's cold start)."""
+    root = base_url.rstrip("/")
+    await asyncio.to_thread(_post, f"{root}/api/generate", {"model": name, "keep_alive": 0})
+    deadline = time.monotonic() + UNLOAD_WAIT
+    while name in await asyncio.to_thread(_loaded, f"{root}/api/ps"):
+        if time.monotonic() > deadline:
+            raise RuntimeError("Ollama didn't unload the model")
+        await asyncio.sleep(0.25)
+
+
 def ollama_reload(model: LineModel, base_url: str, warm: Reload) -> Reload | None:
     """A reload for a model on Ollama: unload it (keep_alive 0), wait until the server no
     longer lists it, then warm it up, which loads it afresh. None for any other provider."""
     if not model.name.startswith("ollama/"):
         return None
-    name, root = model.name.removeprefix("ollama/"), base_url.rstrip("/")
+    name = model.name.removeprefix("ollama/")
 
     async def reload() -> None:
-        await asyncio.to_thread(_post, f"{root}/api/generate", {"model": name, "keep_alive": 0})
-        deadline = time.monotonic() + UNLOAD_WAIT
-        while name in await asyncio.to_thread(_loaded, f"{root}/api/ps"):
-            if time.monotonic() > deadline:
-                raise RuntimeError("Ollama didn't unload the model")
-            await asyncio.sleep(0.25)
+        await ollama_unload(name, base_url)
         await warm()
 
     return reload
