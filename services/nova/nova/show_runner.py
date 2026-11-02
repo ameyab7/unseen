@@ -183,6 +183,10 @@ class FinalSeen:
 # for long), it goes at the first turn gap: it never cuts a dater off.
 # Wall seconds, during which the show clock is stopped.
 TURN_WAIT_CAP = 20.0
+# How long a turn line Nova hasn't finished saying (still being written, or said) keeps a
+# silence prompt back: the room is still hearing Nova ask, so nobody has been quiet yet. A
+# cap, so a line never reported done can't keep silence prompts away for the rest of a date.
+ASKING_CAP = 30.0
 # Only speech this long without a break is talked over: a TV the voice detector hears.
 SPEECH_CAP = 30.0
 # Conduct the moderator hears about at once, with nothing said on air (decision 0006).
@@ -311,7 +315,9 @@ class ShowRunner:
         self._lightning_decided = False
         self._questions: deque[str] = deque()
         self._questions_asked = 0
-        self._quiet_since = 0.0  # show time of the last word from a dater
+        # Show time of the last word anyone said: a dater, or Nova finishing a line, so a
+        # silence prompt never follows Nova's own words before the daters had their 8 s.
+        self._quiet_since = 0.0
         self._last_nudge: float | None = None
         self._speaking: set[Seat] = set()  # daters the voice detector hears right now
         self._waiting: list[Cue] = []  # a beat's lines and sounds, held while one speaks
@@ -322,6 +328,7 @@ class ShowRunner:
         self.conversation_delay = 0.0
         self._recovered_delay = 0.0
         self._turns_unfinished = 0  # turn lines cued that Nova hasn't finished saying
+        self._asking_since: float | None = None  # show time the latest turn line was cued
         self._turn_done_at: float | None = None  # wall time Nova last finished asking one
         self._last_turn_moment: Moment | None = None
         # Wall time the show clock stopped for a turn that waits (_turn_waits), like a hold:
@@ -417,6 +424,14 @@ class ShowRunner:
         audio) to heard_until (both now if not given). Paced, the dater asked in a turn
         line gets their answer window from then; conversational, a turn line never said
         owes nobody an answer, and the next turn doesn't wait for one."""
+        if said and self._live and self._held_since is None:
+            # The room has just heard Nova: quiet counts from the end of its line (2026-11-02,
+            # a silence prompt came straight after a room question still being said), and
+            # the cooldown between silence prompts from when one was heard, not cued.
+            shown = self._show_time(now)
+            self._quiet_since = max(self._quiet_since, shown)
+            if say.moment is Moment.SILENCE:
+                self._last_nudge = max(self._last_nudge or shown, shown)
         if self.conversational and say.moment is Moment.REPLY and say.about is not None:
             if say.return_floor:
                 self.floor.replied(now, say.about)
@@ -594,6 +609,17 @@ class ShowRunner:
                 self._welcome_due = True
         return cues
 
+    def moderator_pause(self, now: float, seat: Seat) -> list[Cue]:
+        """The moderator pauses the whole date over a dater's conduct (seat): Nova stops,
+        says "We're taking a short pause.", the show clock holds for both daters and Nova
+        covers as for any hold, until the moderator resumes or ends it. Nova never pauses
+        for conduct by itself (decision 0006, 2026-11-02). Only on air and not already
+        held; otherwise nothing."""
+        cues = self._due(now)
+        if self._can_pause:
+            cues += [StopSpeaking(), *self._pause_show(now, seat)]
+        return cues
+
     def moderator_keep_waiting(self, now: float) -> list[Cue]:
         """The show stays on hold for the dater; Nova says nothing more."""
         return self._due(now)
@@ -763,21 +789,25 @@ class ShowRunner:
         *,
         street: bool = False,
         distressed: bool = False,
+        quiet: bool = False,
     ) -> list[Cue]:
         """What a dater's own words did (decision 0006), at any time; on air, Nova acts.
 
         A personal detail: the moderator is alerted, and for a street or address Nova says
         the brand book's line once the dater stops ("Let's keep street names off air.").
-        Unkind, the first time in a date: "Let's keep it kind." The second time by the same
-        dater: "We're taking a short pause.", the show clock holds for both daters, Nova
-        covers as for any hold, and the moderator is alerted and chooses resume or end.
-        Only remarks Nova answered on air count: off air (before the date, on a hold, while
-        deciding) an unkind remark only alerts the moderator. So does one from a dater who
-        may be distressed (distressed: the same check said yes or maybe), who may be
-        describing what was said to them. Harassment, sexual content, hate, a threat,
-        anything about a minor, or unsure: the moderator is alerted at once with the
-        category; Nova says nothing. No automatic mute: decision 0006 leaves that to the
-        product owner."""
+        Unkind, which the second conduct check confirmed (nova/conduct_judge.py: not
+        banter, not a dater putting themselves down): "Let's keep it kind." the first time
+        a dater is, and after that the moderator is alerted, never a pause. A pause is for
+        safety, and the moderator's to call (moderator_pause): the product owner's choice,
+        2026-11-02, after a sharp but mutual roast paused one simulated date seven times.
+        quiet: the second check couldn't confirm it (unsure, or no answer in time), so the
+        moderator is alerted and Nova says nothing. Only remarks Nova answered on air count:
+        off air (before the date, on a hold, while deciding) an unkind remark only alerts
+        the moderator. So does one from a dater who may be distressed (distressed: the same
+        check said yes or maybe), who may be describing what was said to them. Harassment,
+        sexual content, hate, a threat, anything about a minor, or unsure: the moderator is
+        alerted at once with the category; Nova says nothing. No automatic mute: decision
+        0006 leaves that to the product owner."""
         cues = self._due(now)
         speaks = self._live and self._held_since is None and self.segment in ON_AIR
         match conduct:
@@ -788,13 +818,12 @@ class ShowRunner:
                         Say(Moment.KEEP_STREETS_OFF_AIR, text=script.KEEP_STREETS_OFF_AIR)
                     ]
                     cues += self._wait_for_speech(now, line)
-            case Conduct.UNKIND if distressed or not speaks:
+            case Conduct.UNKIND if distressed or quiet or not speaks:
                 cues.append(AlertModerator(ModeratorAlert.CONDUCT_FLAG, seat, Conduct.UNKIND))
             case Conduct.UNKIND:
                 self._unkind[seat] += 1
-                if self._unkind[seat] > 1:
+                if self._unkind[seat] > 1:  # said once already: a person decides from here
                     cues.append(AlertModerator(ModeratorAlert.CONDUCT_FLAG, seat, Conduct.UNKIND))
-                    cues += [StopSpeaking(), *self._pause_show(now, seat)]
                 else:
                     kind: list[Cue] = [Say(Moment.KEEP_IT_KIND, text=script.KEEP_IT_KIND)]
                     cues += self._wait_for_speech(now, kind)
@@ -857,7 +886,7 @@ class ShowRunner:
     def _pause_show(self, now: float, seat: Seat) -> list[Cue]:
         """The whole date holds, for both daters: "We're taking a short pause.", then Nova
         covers as for any hold, until the moderator resumes or ends the date. seat: the
-        dater whose conduct paused it."""
+        dater whose conduct the moderator paused it for."""
         self._end_turn_pause(now)
         self._held_since, self._overdue, self._show_paused_by = now, False, seat
         self._drop_waiting()
@@ -975,6 +1004,8 @@ class ShowRunner:
                 ran = self._announced(beat, self._attempt(beat, shown), now)
                 if self._paced:
                     self._turns_unfinished += sum(_is_turn(cue) for cue in ran)
+                    if any(_is_turn(cue) for cue in ran):
+                        self._asking_since = shown
                     for cue in ran:
                         if isinstance(cue, Say) and cue.moment in TURN_MOMENTS:
                             self._awaiting = self._asked(cue)
@@ -1417,6 +1448,8 @@ class ShowRunner:
         due = self._quiet_since + self._timing.silence_after
         if self._last_nudge is not None:
             due = max(due, self._last_nudge + self._timing.silence_cooldown)
+        if self._paced and self._turns_unfinished and self._asking_since is not None:
+            due = max(due, self._asking_since + ASKING_CAP)  # Nova is still asking
         return due
 
     def _nudge(self, at: float) -> list[Cue]:

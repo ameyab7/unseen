@@ -77,8 +77,9 @@ def flows(settings: Settings) -> list[Flow]:
             frozenset({Data.TRANSCRIPT, Data.SAFETY_CONTEXT, Data.DATE_CONTEXT}),
             NOVA,
             "replies, local floor and handover signals, the safety checks, this date's context",
-            retention="memory only: 15 s per dater for the checks; this date's last 8 turns "
-            "until the date ends; never written down or logged",
+            retention="memory only: 15 s per dater for the checks; both daters' last 90 s "
+            "for the second conduct check; this date's last 8 turns until the date ends; never "
+            "written down or logged",
             training="none",
         ),
         Flow(
@@ -142,6 +143,10 @@ def flows(settings: Settings) -> list[Flow]:
     live_meaning = settings.meaning_check and (settings.meaning_live or settings.live_bridges)
     if live_meaning and policy.allows(checks, Data.DATE_CONTEXT):
         found.append(_this_date(to_checks, "the meaning check on live lines"))
+    if policy.allows(checks, Data.DATE_CONTEXT):
+        # Decision 0006, 2026-11-02: only for a remark the safety check labelled unkind,
+        # with both daters' last 90 s, Nova's latest line and the other dater's reaction.
+        found.append(_this_date(to_checks, "the second conduct check, on a remark labelled unkind"))
     return found
 
 

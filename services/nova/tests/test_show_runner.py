@@ -1313,7 +1313,7 @@ def test_a_moment_asked_for_during_a_conduct_pause_starts_when_the_moderator_res
     show = Show()
     show.until(100)
     show.at(100, "dater_conduct", RIGHT, Conduct.UNKIND)
-    show.at(102, "dater_conduct", RIGHT, Conduct.UNKIND)
+    show.at(102, "moderator_pause", RIGHT)
     show.at(104, "need_a_moment", LEFT)
     assert NEED_MOMENT in show.at(110, "moderator_resume")
     assert show.at(115, "back", LEFT)[-1] == WELCOME_BACK
@@ -1365,7 +1365,7 @@ def test_and_were_back_waits_for_a_hold_that_is_still_running():
 def test_and_were_back_after_a_conduct_pause_comes_when_the_moderator_resumes():
     show = resumed_without_maya()
     show.at(200, "dater_conduct", RIGHT, Conduct.UNKIND)
-    show.at(202, "dater_conduct", RIGHT, Conduct.UNKIND)
+    show.at(202, "moderator_pause", RIGHT)
     assert show.at(205, "back", LEFT) == []
     assert show.at(210, "moderator_resume")[-1] == WELCOME_BACK
 

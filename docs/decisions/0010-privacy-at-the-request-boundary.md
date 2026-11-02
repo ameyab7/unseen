@@ -96,3 +96,15 @@ model calls only: audio and Nova's lines always go to LiveKit Inference.
   - a screen in the app.
 - What happens after a request leaves Nova can't be tested here: the SDKs, LiveKit, the
   providers, and Ollama's own logs.
+
+## The second conduct check, 2026-11-02
+
+Decision 0006's second conduct check sends the classifier, for a remark the safety check
+labelled unkind, both daters' words from the 90 seconds before it, Nova's latest line and
+the other dater's next words. That is dialogue memory, not the frozen check's safety
+context: the request holds it under `this_date`, so `Guarded` sends it only to an
+approved-local endpoint or with `NOVA_DIALOGUE_TO_PROVIDER`, and a request held back is
+handled as no answer (the moderator is alerted, Nova says nothing). The words stay in the
+on-air listener's memory for 90 seconds and go when the date ends; only codes are logged.
+No new recipient: the inventory (`nova/data_flows.py`), `docs/privacy/nova-data-flows.md`
+and the draft notice say it, in this change.

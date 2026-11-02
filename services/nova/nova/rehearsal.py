@@ -26,6 +26,7 @@ from typing import Protocol
 
 from nova import script
 from nova.cards import Pair, Seat
+from nova.conduct_judge import ConductJudge
 from nova.config import Settings
 from nova.cues import (
     AlertModerator,
@@ -121,6 +122,7 @@ class Command(StrEnum):
     UNSEEN = "unseen"
     KEEP = "keep"  # moderator: keep waiting for a dater who isn't back
     RESUME = "resume"  # moderator: carry on without them
+    PAUSE = "pause"  # moderator: pause the whole date over the speaking dater's conduct
     END = "end"  # moderator: end the date
     LEAVE = "leave"  # the speaking dater leaves
     REPORT = "report"  # the speaking dater presses Report
@@ -404,6 +406,8 @@ class Rehearsal:
             grace=utterance_grace,
             max_wait=utterance_max_wait,
             context=context,
+            # The second conduct check, on the classifier like the first (decision 0006).
+            judge=ConductJudge(checks, events=self._events, gate=self._gate),
         )
         self._queue: asyncio.Queue[_Pending] = asyncio.Queue()
         self._queued = 0  # lines queued so far: which waiting lines came after a cut
@@ -810,6 +814,8 @@ class Rehearsal:
                 self._queue_cues(runner.moderator_keep_waiting(now))
             case Command.RESUME:
                 self._queue_cues(runner.moderator_resume(now))
+            case Command.PAUSE:
+                self._queue_cues(runner.moderator_pause(now, seat))
             case Command.END:
                 self._queue_cues(runner.moderator_end(now))
                 self._decided.set()  # before the date: it ends, never opens

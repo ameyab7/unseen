@@ -50,7 +50,7 @@ class Moment(StrEnum):
     MODERATOR_END = "moderator_end"
     KEEP_STREETS_OFF_AIR = "keep_streets_off_air"  # a street or address slipped
     KEEP_IT_KIND = "keep_it_kind"  # a dater's first unkind remark
-    SHOW_PAUSE = "show_pause"  # a dater's second unkind remark: the date pauses
+    SHOW_PAUSE = "show_pause"  # the moderator paused the whole date
 
 
 class Sound(StrEnum):

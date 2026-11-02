@@ -82,7 +82,7 @@ A late-night radio host at a members' club: warm, quick and curious, laughing wi
 | A long silence | "Theo, you say you can parallel park anything. Defend that." |
 | Talking over each other | "One at a time. I want both of those stories. Maya first." |
 | A personal detail slips | "Let's keep street names off air. The story's better without them anyway." |
-| An unkind remark | "Let's keep it kind." If it happens again, the date pauses: "We're taking a short pause." |
+| An unkind remark | "Let's keep it kind." Once; after that a moderator decides. Banter both daters are in on, however sharp, is left alone, and Nova never pauses a date over it. A moderator's pause: "We're taking a short pause." |
 | Someone leaves | "Theo's had to step away, and that's always allowed. Maya, thank you." |
 | Not mutual | "They're keeping it unseen tonight. Two brave people and a good conversation." |
 | Mutual | "It's mutual. What happens next is theirs." |

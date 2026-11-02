@@ -609,6 +609,27 @@ def _repeats(texts: Sequence[str]) -> tuple[int, int]:
     return near, same
 
 
+# What Nova says while the daters can't talk: the doors, a hold's cover, the decision window,
+# the result and after. Left out of Nova's share of the conversation (nova_share_talk): there
+# only Nova speaks, so a long hold made one date's whole-show share 41% (2026-11-02).
+OFF_THE_TALK = frozenset(
+    {
+        Moment.DOORS_INTRO,
+        Moment.TIME,
+        Moment.ROOM_TALK,
+        Moment.RESULT,
+        Moment.OUTRO,
+        Moment.INVITATION,
+        Moment.NEXT_UP,
+        Moment.NEED_A_MOMENT,
+        Moment.BEAR_WITH_US,
+        Moment.DATER_LEFT,
+        Moment.MODERATOR_END,
+        Moment.SHOW_PAUSE,
+    }
+)
+
+
 def measure(d: Driver, line_start: int, said_start: int) -> Run:
     """What the run shows, in numbers: from free talk on for the conversation, the whole
     date for fallbacks, guardrails and repetition."""
@@ -672,6 +693,16 @@ def measure(d: Driver, line_start: int, said_start: int) -> Run:
 
     words_nova = sum(len(_words(text)) for who, text in said if who == "Nova")
     words_all = sum(len(_words(text)) for _, text in said) or 1
+    # The same, while the daters can talk: each of Nova's entries is r.lines in order.
+    talk_nova = talk_all = 0
+    nova_lines = sum(who == "Nova" for who, _ in d.said[:said_start])
+    for who, text in said:
+        if who == "Nova":
+            k, nova_lines = nova_lines, nova_lines + 1
+            if k < len(lines) and lines[k].moment in OFF_THE_TALK:
+                continue
+            talk_nova += len(_words(text))
+        talk_all += len(_words(text))
     live_ms = sorted(line.ms for line in live if line.source is Source.MODEL)
     near, same = _repeats([line.text for line in written if line.source is not Source.FALLBACK])
     # Every reply, from the doors on: a first answer may speak to Nova too (first_answers).
@@ -694,6 +725,7 @@ def measure(d: Driver, line_start: int, said_start: int) -> Run:
         "near_duplicates": near / max(1, len(written)),
         "same_opening": same / max(1, len(written)),
         "nova_share": words_nova / words_all,
+        "nova_share_talk": talk_nova / max(1, talk_all),
         "interventions": float(unasked),
         "talk_overs": float(r.talked_over),
         "unanswered": float(max(0, d.asked_nova - replies)),
@@ -813,7 +845,8 @@ def render_full_date(run: Run) -> str:
         else "  Result: never reached",
         f"  Nova's lines: {m['lines']:.0f} (written before the date {m['prepared_lines']:.0f}, "
         f"live {m['model_lines']:.0f}, approved fixed {m['fixed_lines']:.0f}, "
-        f"fallbacks {m['fallback_lines']:.0f}); Nova's share of the words {m['nova_share']:.0%}",
+        f"fallbacks {m['fallback_lines']:.0f}); Nova's share of the words {m['nova_share']:.0%}, "
+        f"of the conversation {m['nova_share_talk']:.0%}",
         f"  Model: prep {m['prep_s']:.1f} s; live lines median {m['live_ms_median']:.0f} ms, "
         f"worst {m['live_ms_worst']:.0f} ms",
         f"  Safety checks: {m['checks']:.0f}, median {m['check_ms_median']:.0f} ms, p95 "
@@ -835,6 +868,7 @@ REPORTED = (
     ("live_lines", "Nova's live lines a scenario", "{:.1f}"),
     ("interventions", "interventions nobody asked for", "{:.1f}"),
     ("nova_share", "Nova's share of the words", "{:.0%}"),
+    ("nova_share_talk", "Nova's share of the conversation", "{:.0%}"),
     ("fallback_rate", "fallbacks", "{:.0%}"),
     ("guardrail_rate", "guardrail failures", "{:.0%}"),
     ("ungrounded", "unsupported common ground (lines)", "{:.1f}"),

@@ -473,3 +473,23 @@ Tests: `tests/test_floor.py` (what the rule hears and ignores, who was just aske
 the dater away), `tests/test_conversation.py` (the reply without Nova's name, the fallback
 when the model fails, nothing for a request to the other dater or before any question, the
 20 s window, conversational mode only). Not yet heard in a rehearsal.
+
+## The silence clock counts from what the room heard, 2026-11-02
+
+In the full-date simulation (decision 0009) a silence prompt came straight after the room's
+question, before either dater could answer. The silence clock started when Nova decided to
+ask, and Nova's own lines never reset it: a question written live (1 to 2 s) and said (about
+6 s) outlasted the 8 s of `silence_after`, and the floor's answer hold only begins once the
+room has heard the question. The gap between silence prompts (`silence_cooldown`, 20 s)
+counted from the cue too, so a prompt held back behind the floor went out 12 s late and the
+next followed 8 s after it. Now (`ShowRunner.line_done`, `_silence_due`):
+
+- the quiet counts from the end of whatever the room last heard, a dater or Nova;
+- the cooldown counts from when the room heard a silence prompt, not when it was cued;
+- no silence prompt while a turn line Nova cued (a first question, the room's question, a
+  quick-fire question, a last word) is still being written or said, for at most
+  `ASKING_CAP` (30 s), so a line never reported done can't silence the prompts for good.
+
+Deterministic, no model change; the legacy runner gets it too. Tests:
+`tests/test_conversation.py` (the room question in both modes, the reply, the cooldown),
+each failing before the change.

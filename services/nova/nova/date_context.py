@@ -127,6 +127,11 @@ class DateContext:
         if text and not self.closed:
             self._nova.append(_cut(text))
 
+    def nova_last(self) -> str | None:
+        """Nova's latest line the room heard, if any: what a dater may be answering, for the
+        second conduct check (nova/conduct_judge.py)."""
+        return self._nova[-1] if self._nova else None
+
     def spoken(self) -> list[str]:
         """Every dater turn kept: the guardrails block any proper noun from them."""
         return [turn.text for turn in self._turns if turn.text]

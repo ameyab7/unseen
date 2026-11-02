@@ -296,3 +296,11 @@ Beat gained `named` (words to Nova that don't name it), `then` and `gap` (a paus
 thought); Scenario gained `first_answers`. A reply now counts toward "every word to Nova
 answered" from the doors on, since a first answer may speak to Nova; existing scenarios
 speak to Nova only in free talk, so their numbers are unchanged. Not yet run on Gemma.
+
+## Nova's share of the conversation, 2026-11-02
+
+Nova's share of the words counts the whole show, where some moments are Nova's alone: the
+doors, a hold's cover, the decision window, the result and after. One full date's 7 conduct
+pauses made it 41%. Full dates and scenarios now also report `nova_share_talk`, Nova's share
+while the daters can talk (`benchmark.OFF_THE_TALK` lists what's left out); the brand book's
+"well under a fifth of the airtime" is judged on it. An indicator, never a gate.

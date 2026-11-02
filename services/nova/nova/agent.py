@@ -120,6 +120,20 @@ def word_timings(model: str) -> dict[str, Any]:
     return {"add_timestamps": True} if model.split("/")[0] == "cartesia" else {}
 
 
+def voice_style(model: str, settings: Settings) -> dict[str, Any]:
+    """How the voice sounds (NOVA_VOICE_EMOTION, NOVA_VOICE_SPEED), for a voice that takes
+    it through LiveKit Inference: Cartesia's. Any other voice gets none. Codes and numbers
+    only: nothing a dater said."""
+    if model.split("/")[0] != "cartesia":
+        return {}
+    style: dict[str, Any] = {}
+    if settings.voice_emotion:
+        style["emotion"] = settings.voice_emotion
+    if settings.voice_speed:
+        style["speed"] = settings.voice_speed
+    return style
+
+
 def time_played_words(session: Any) -> bool:
     """Once the session has started: Nova's audio goes through LiveKit's transcript
     synchronizer, so each line's playback_finished event carries the words that had played,
@@ -262,8 +276,9 @@ def _sent(sending: asyncio.Future[None]) -> None:
 def new_session(settings: Settings) -> AgentSession:
     model, voice = voice_parts(settings.voice)
     voice_options: dict[str, Any] = {"voice": voice} if voice else {}
-    if timings := word_timings(model):
-        voice_options["extra_kwargs"] = timings
+    timings = word_timings(model)
+    if extra := {**timings, **voice_style(model, settings)}:
+        voice_options["extra_kwargs"] = extra
     return AgentSession(
         stt=inference.STT(settings.stt, language="en"),
         tts=inference.TTS(model, **voice_options),

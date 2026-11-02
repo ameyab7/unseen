@@ -110,6 +110,11 @@ class Settings:
     utterance_max_wait: float = 1.5
     # Nova's voice as "provider/model:voice", and the speech recognition that hears daters.
     voice: str = DEFAULT_VOICE
+    # How Nova's voice sounds, for a voice that takes it (Cartesia, through LiveKit
+    # Inference): an emotion word ("excited", "enthusiastic") and a speed (0.6 to 1.5, 1 is
+    # normal). Empty: the voice's own (the product owner, 2026-11-01: a livelier host).
+    voice_emotion: str = ""
+    voice_speed: float = 0.0
     stt: str = DEFAULT_STT
     # This date's recent turns (decision 0008) go to a model that isn't approved local only
     # when this is true: off until the privacy notice covers that provider and data flow
@@ -167,6 +172,8 @@ class Settings:
         "NOVA_UTTERANCE_GRACE_SECONDS",
         "NOVA_UTTERANCE_MAX_WAIT_SECONDS",
         "NOVA_VOICE",
+        "NOVA_VOICE_EMOTION",
+        "NOVA_VOICE_SPEED",
         "NOVA_STT",
         "NOVA_DIALOGUE_TO_PROVIDER",
         "NOVA_MEANING_CHECK",
@@ -239,6 +246,8 @@ class Settings:
             utterance_grace=grace,
             utterance_max_wait=max_wait,
             voice=_voice(env.get("NOVA_VOICE", "").strip() or cls.voice),
+            voice_emotion=_emotion(env.get("NOVA_VOICE_EMOTION", "")),
+            voice_speed=_speed(env.get("NOVA_VOICE_SPEED", "")),
             stt=_stt(env.get("NOVA_STT", "").strip() or cls.stt),
             dialogue_to_provider=_flag(env, "NOVA_DIALOGUE_TO_PROVIDER"),
             meaning_check=_flag(env, "NOVA_MEANING_CHECK", default=cls.meaning_check),
@@ -300,6 +309,27 @@ def _count(env: Mapping[str, str], name: str, default: int) -> int:
     if not raw.isdigit() or int(raw) < 1:
         raise ConfigError(f"{name} must be a whole number, 1 or more")
     return int(raw)
+
+
+def _emotion(raw: str) -> str:
+    """One lowercase word or empty: never free text in a request to the voice."""
+    value = raw.strip().lower()
+    if value and not re.fullmatch(r"[a-z]{2,24}", value):
+        raise ConfigError("NOVA_VOICE_EMOTION must be one word, such as excited")
+    return value
+
+
+def _speed(raw: str) -> float:
+    """0 (the voice's own), or 0.6 to 1.5."""
+    if not raw.strip():
+        return 0.0
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not math.isfinite(value) or not 0.6 <= value <= 1.5:
+        raise ConfigError("NOVA_VOICE_SPEED must be a number from 0.6 to 1.5")
+    return value
 
 
 def _seconds(env: Mapping[str, str], name: str, default: float, *, zero: bool = False) -> float:

@@ -96,6 +96,21 @@ async def test_nova_s_voice_times_its_words_so_a_cut_line_goes_on_from_its_sente
     assert agent.word_timings("deepgram/aura-2") == {}
 
 
+def test_nova_s_voice_style_goes_to_cartesia_only_and_only_when_set():
+    """NOVA_VOICE_EMOTION and NOVA_VOICE_SPEED (the livelier host, 2026-11-02)."""
+    styled = replace(SETTINGS, voice_emotion="excited", voice_speed=1.1)
+    assert agent.voice_style("cartesia/sonic-3", styled) == {"emotion": "excited", "speed": 1.1}
+    assert agent.voice_style("cartesia/sonic-3", SETTINGS) == {}
+    assert agent.voice_style("deepgram/aura-2", styled) == {}
+
+
+def test_a_styled_voice_still_times_its_words(monkeypatch):
+    keys(monkeypatch)
+    session = new_session(replace(SETTINGS, voice_emotion="excited", voice_speed=1.1))
+    assert session.tts.capabilities.aligned_transcript
+    assert session.options.use_tts_aligned_transcript is True
+
+
 class Sink(voice_io.AudioOutput):
     """The room's audio output, as RoomIO sets it once the session starts."""
 

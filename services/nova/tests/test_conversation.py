@@ -484,3 +484,67 @@ def test_an_already_closed_voice_session_cannot_prevent_date_cleanup():
     r.close()
     r.close()
     assert r.closed and r._context.closed and len(r._context) == 0
+
+
+# --- The silence clock and Nova's own lines (2026-11-02) ----------------------------------
+
+
+def _room_question_cued(*, conversational: bool) -> tuple[Show, float, Say]:
+    """A paced date that reaches the room's question with the daters talking up to it, and
+    Nova not yet done saying it: the cue's time and the cue."""
+    from test_show_runner import approved
+
+    show = Show(paced=True, conversational=conversational)
+    show.at(10, "queue_question", approved("What's the best meal you've ever had?"))
+    talk = [(t, "speech_started", LEFT) for t in range(100, 236, 8)]
+    talk += [(t + 6, "speech_stopped", LEFT) for t in range(100, 236, 8)]
+    paced_date(show, 236, sorted(talk))
+    show.until(260)
+    asked = show.says(Moment.FROM_THE_ROOM)
+    assert asked, "the room's question was never cued"
+    return show, *asked[0]
+
+
+def test_no_silence_prompt_while_the_room_is_still_hearing_nova_ask():
+    # 2026-11-02, the full-date simulation: a room question written live (about 1-2 s) and
+    # said (about 6 s) took longer than the 8 s silence clock, so a silence prompt followed
+    # it before either dater could answer. The clock now waits for Nova to finish asking.
+    for conversational in (True, False):
+        show, cued, question = _room_question_cued(conversational=conversational)
+        show.until(cued + 12)  # still writing and saying it: no line_done yet
+        silences = [t for t, _ in show.says(Moment.SILENCE) if t >= cued]
+        assert silences == [], (conversational, silences)
+        show.runner.line_done(show.now, question)
+        heard = show.now
+        show.until(heard + 7)
+        silences = [t for t, _ in show.says(Moment.SILENCE) if t >= cued]
+        assert silences == [], (conversational, silences)
+
+
+def test_the_silence_clock_counts_from_the_end_of_novas_own_line():
+    # A reply finishing 5 s after the dater stopped: the 8 s of quiet count from its end.
+    # Without the conversational floor, which would hold for the unanswered first questions.
+    for paced in (False, True):
+        show = Show(paced=paced)
+        paced_date(show, 89) if paced else show.until(89)
+        for start in range(90, 112, 6):  # free talk, nobody quiet for long
+            show.at(start, "speech_started", LEFT)
+            show.at(start + 4, "speech_stopped", LEFT)
+        show.runner.line_done(117, Say(Moment.REPLY, about=LEFT))
+        show.until(124.5)
+        assert [t for t, _ in show.says(Moment.SILENCE) if t >= 106] == [], paced
+        show.until(126)
+        assert [t for t, _ in show.says(Moment.SILENCE) if t >= 106] == [125.0], paced
+
+
+def test_the_gap_between_silence_prompts_counts_from_when_the_room_heard_one():
+    # The cooldown used to count from the cue: a prompt said 12 s late was followed 8 s on.
+    show = Show()
+    show.until(99)
+    first = show.says(Moment.SILENCE)
+    assert [t for t, _ in first] == [98.0]
+    show.runner.line_done(110, first[0][1])  # said late, after a hold or a slow line
+    show.until(129.5)
+    assert [t for t, _ in show.says(Moment.SILENCE)] == [98.0]
+    show.until(130.5)
+    assert [t for t, _ in show.says(Moment.SILENCE)] == [98.0, 130.0]

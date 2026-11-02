@@ -46,8 +46,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-from nova import conduct_set, independent_set, running_order, script
+from nova import banter_set, conduct_set, independent_set, running_order, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
+from nova.conduct_judge import ConductJudge, Judged
 from nova.config import Settings, load_settings
 from nova.cues import (
     AlertModerator,
@@ -551,6 +552,10 @@ class Heard:
     # (on_air.reply_after): the room never hears the model's reply.
     kind_line: bool = False
     conduct: Conduct | None = None  # the meaning layer's conduct label, if it ran
+    # With a reaction: the first check's conduct label on the dater's own words, and what the
+    # second conduct check decided, if it was asked (decision 0006).
+    screened: Conduct | None = None
+    judged: tuple[Judged, ...] = ()
 
 
 # How speech reaches the on-air listener here, as in a rehearsal: each final transcript
@@ -619,18 +624,28 @@ async def hear_on_air(
     grace: float = Settings.utterance_grace,
     max_wait: float = Settings.utterance_max_wait,
     context: DateContext | None = None,
+    judge: ConductJudge | None = None,
+    before: tuple[tuple[bool, str], ...] = (),
+    nova: str | None = None,
+    reaction: str | None = None,
 ) -> Heard:
     """What the show does when a dater says this in free talk, as one or more final
     transcripts, after saying earlier a few seconds before (and after the other dater said
     other). The same on-air listener as
     the rehearsal (nova/on_air.py) hears it, spoken as in spoken() on a fake clock, so the
     evaluation measures what runs rather than a copy of it. context: this date's, which
-    hears the words if the check clears them (decision 0008)."""
+    hears the words if the check clears them (decision 0008). judge: the second conduct
+    check (decision 0006), with before (both daters' turns over the last minute, oldest
+    first: by this dater or not), Nova's latest line, and the other dater's reaction, said
+    just after (None: they say nothing)."""
     clock = FakeClock(FULL.free_talk + 20.0)
     runner = ShowRunner(pair, desk=InMemoryDecisionDesk(), poll=NoVotes(), first_up=Seat.LEFT)
     runner.start(0.0)
     runner.tick(clock.now)  # the date so far
     delivered: list[OnAirCues] = []
+    if nova is not None:  # Nova's latest line, as the line writer would have kept it
+        context = context if context is not None else DateContext()
+        context.said(nova)
     on_air = OnAirListener(
         runner,
         check,
@@ -639,7 +654,11 @@ async def hear_on_air(
         grace=grace,
         max_wait=max_wait,
         context=context,
+        judge=judge,
     )
+    for k, (mine, said) in enumerate(before):  # the minute before, a turn every 6 s
+        who = seat if mine else seat.other
+        on_air.remember(who, said, at=clock.now - 6.0 * (len(before) - k) - 3.0)
     for k, said in enumerate(earlier):
         on_air.remember(seat, said, at=clock.now - 2.0 * (len(earlier) - k))
     for k, said in enumerate(other):  # the other dater, just before: what this may answer
@@ -651,17 +670,25 @@ async def hear_on_air(
             clock.now = max(clock.now, due)
             on_air.tick()
 
-    for at, speech, final in spoken(finals, at=clock.now):
+    events = [(at, seat, speech, final) for at, speech, final in spoken(finals, at=clock.now)]
+    if reaction is not None:  # the other dater, a moment after this one closes
+        after = events[-1][0] + grace + 1.0
+        events += [(at, seat.other, sp, f) for at, sp, f in spoken((reaction,), at=after)]
+    for at, who, speech, final in events:
         tick_until(at)
         clock.now = at
         match speech:
             case Speech.STARTED:
-                on_air.speech_started(seat)
+                on_air.speech_started(who)
             case Speech.FINAL:
-                on_air.hear(seat, final)
+                on_air.hear(who, final)
             case Speech.ENDED:
-                on_air.speech_ended(seat)
+                on_air.speech_ended(who)
     tick_until(math.inf)  # until what the dater said has been acted on
+    await on_air.heard()
+    while on_air.next_due is not None:  # a remark waiting for a reaction, then its check
+        tick_until(math.inf)
+        await on_air.heard()
     await on_air.heard()
 
     cues = [cue for on_air_cues in delivered for cue in on_air_cues.cues]
@@ -688,6 +715,8 @@ async def hear_on_air(
         cues=tuple(cues),
         kind_line=reply and ReplyAction.KIND_LINE in actions,
         conduct=checked.conduct if checked else None,
+        screened=on_air.checks[0].conduct if on_air.checks else None,
+        judged=tuple(judgement.outcome for judgement in on_air.judgements),
     )
 
 
@@ -1195,10 +1224,10 @@ async def run_conduct(
     grace: float = Settings.utterance_grace,
     max_wait: float = Settings.utterance_max_wait,
 ) -> list[ConductResult]:
-    """Every sample through the real listener, check and show runner."""
-    check = DistressCheck(
-        model, timeout=timeout, events=EventLog(logging.getLogger("nova.evaluation"))
-    )
+    """Every sample through the real listener, both conduct checks and show runner."""
+    events = EventLog(logging.getLogger("nova.evaluation"))
+    check = DistressCheck(model, timeout=timeout, events=events)
+    judge = ConductJudge(model, events=events)
     results = []
     for sample in samples:
         heard = await hear_on_air(
@@ -1208,9 +1237,128 @@ async def run_conduct(
             other=sample.other,
             grace=grace,
             max_wait=max_wait,
+            judge=judge,
         )
         results.append(ConductResult(sample, conduct_found(heard.cues)))
     return results
+
+
+# --- Banter, self put-downs and the put-downs like them (decision 0006, 2026-11-02) ------
+
+
+@dataclass(frozen=True)
+class BanterResult:
+    sample: banter_set.BanterSample
+    found: frozenset[str]  # what Nova did, as conduct_found says
+    screened: Conduct | None = None  # the safety check's conduct label on the sentence
+    judged: tuple[Judged, ...] = ()  # the second check's outcome, if it was asked
+
+    @property
+    def acted(self) -> bool:
+        return bool(self.found)
+
+
+async def run_banter(
+    model: LineModel,
+    *,
+    timeout: float,
+    samples: Sequence[banter_set.BanterSample],
+    grace: float = Settings.utterance_grace,
+    max_wait: float = Settings.utterance_max_wait,
+) -> list[BanterResult]:
+    """Each moment through the real listener, both conduct checks and the show runner: what
+    came before, Nova's latest line, the sentence, then the other dater's reaction."""
+    events = EventLog(logging.getLogger("nova.evaluation"))
+    check = DistressCheck(model, timeout=timeout, events=events)
+    judge = ConductJudge(model, events=events)
+    results = []
+    for sample in samples:
+        heard = await hear_on_air(
+            check,
+            sample.sentence,
+            grace=grace,
+            max_wait=max_wait,
+            judge=judge,
+            before=sample.before,
+            nova=sample.nova,
+            reaction=sample.reaction,
+        )
+        found = set(conduct_found(heard.cues) - {conduct_set.STREET, conduct_set.DETAIL})
+        if heard.alerted or heard.paused:  # the other dater's reaction: someone is hurt
+            found.add(DISTRESS_FOUND)
+        results.append(BanterResult(sample, frozenset(found), heard.screened, heard.judged))
+    return results
+
+
+# What the show did for a dater hurt by a remark, through the distress check on their own
+# reaction ("Please stop."): the moderator alerted, or their pause. On banter, a false alarm.
+DISTRESS_FOUND = "distress"
+
+# Targets for each banter half: Nova stays out of most banter and self put-downs, and still
+# acts on most of the put-downs that look like them.
+BANTER_MIN_LEFT_ALONE = 0.75
+BANTER_MIN_PUT_DOWNS = 0.75
+
+
+def banter_misses(results: list[BanterResult]) -> list[str]:
+    stay = [r for r in results if r.sample.expected == banter_set.STAY_OUT]
+    unkind = [r for r in results if r.sample.expected == banter_set.UNKIND]
+    misses = []
+    left = sum(not r.acted for r in stay)
+    if stay and left / len(stay) < BANTER_MIN_LEFT_ALONE:
+        misses.append(f"banter and self put-downs left alone: {left} of {len(stay)}")
+    caught = sum(r.acted for r in unkind)
+    if unkind and caught / len(unkind) < BANTER_MIN_PUT_DOWNS:
+        misses.append(f"put-downs acted on: {caught} of {len(unkind)}")
+    return misses
+
+
+def render_banter(
+    results: list[BanterResult], *, model_name: str, set_name: str, show_sentences: bool = True
+) -> str:
+    lines = [
+        f"Nova banter set, {set_name}: {model_name}, {len(results)} moments",
+        "",
+        f"  {'kind':<12}{'expected':<10}what Nova did as hoped",
+    ]
+    for kind in banter_set.KINDS:
+        of = [r for r in results if r.sample.kind == kind]
+        if not of:
+            continue
+        expected = of[0].sample.expected
+        good = sum(r.acted == (r.sample.expected == banter_set.UNKIND) for r in of)
+        lines.append(f"  {kind:<12}{expected:<10}{rate_text(good, len(of))}")
+    kind_lines = sum(conduct_set.UNKIND in r.found for r in results)
+    lines.append(f"  'Let's keep it kind.' said: {kind_lines} of {len(results)} moments")
+    asked = sum(bool(r.judged) for r in results)
+    lines.append(f"  The first check called {asked} of them unkind, so the second was asked")
+    unkind = [r for r in results if r.sample.expected == banter_set.UNKIND]
+    by_conduct = sum(bool(r.found - {DISTRESS_FOUND}) for r in unkind)
+    by_reaction = sum(r.found == {DISTRESS_FOUND} for r in unkind)
+    lines.append(
+        f"  Put-downs acted on by the conduct checks: {by_conduct} of {len(unkind)}; only by "
+        f"the distress check on the hurt dater's reaction: {by_reaction}"
+    )
+    misses = banter_misses(results)
+    lines += [
+        "",
+        f"Targets: banter and self put-downs left alone at least {BANTER_MIN_LEFT_ALONE:.0%}, "
+        f"put-downs acted on at least {BANTER_MIN_PUT_DOWNS:.0%}: "
+        + ("PASSED" if not misses else "FAILED"),
+        *(f"  {miss}" for miss in misses),
+    ]
+    off = [r for r in results if r.acted != (r.sample.expected == banter_set.UNKIND)]
+    if off and show_sentences:
+        lines += ["", "Not handled as hoped"]
+        for r in off:
+            found = ", ".join(sorted(r.found)) or "nothing"
+            reaction = f"  (reaction: {r.sample.reaction})" if r.sample.reaction else ""
+            judged = ", ".join(r.judged) or "not asked"
+            lines.append(
+                f"  {r.sample.kind}, expected {r.sample.expected}, got {found} "
+                f"[first check: {r.screened}; second: {judged}]:  {r.sample.sentence}{reaction}"
+            )
+    return "\n".join(lines)
 
 
 # Targets for each conduct half (decision 0006): the conduct run fails if a half misses one.
@@ -2043,17 +2191,20 @@ def main(argv: list[str] | None = None) -> int:
     if held_out:
         distress_sets = [(HELD_OUT, DISTRESS_SET)]
         conduct_halves = [("held-out half", conduct_set.HELD_OUT_HALF)]
+        banter_halves = [("held-out half", banter_set.HELD_OUT_HALF)]
         meaning_halves = [(MEANING_HELD_OUT, MEANING_HELD_OUT_HALF)]
     else:
         alone = args.distress or args.conduct or args.meaning
         distress_sets = [(DEV, DEV_SET)] if not alone or args.distress else []
         conduct_halves = [("dev half", conduct_set.DEV_HALF)] if not alone or args.conduct else []
+        banter_halves = [("dev half", banter_set.DEV_HALF)] if not alone or args.conduct else []
         meaning_halves = [(MEANING_DEV, MEANING_DEV_HALF)] if not alone or args.meaning else []
 
     async def evaluate() -> tuple[
         list[CaseResult],
         list[tuple[str, list[DistressResult]]],
         list[tuple[str, list[ConductResult]]],
+        list[tuple[str, list[BanterResult]]],
         list[tuple[str, list[MeaningResult]]],
     ]:
         for warming in {model.name: model, classifier.name: classifier}.values():
@@ -2088,13 +2239,17 @@ def main(argv: list[str] | None = None) -> int:
             (name, await run_conduct(classifier, timeout=settings.distress_timeout, samples=half))
             for name, half in conduct_halves
         ]
+        banter = [
+            (name, await run_banter(classifier, timeout=settings.distress_timeout, samples=half))
+            for name, half in banter_halves
+        ]
         meaning = [
             (name, await run_meaning(classifier, timeout=settings.meaning_timeout, samples=half))
             for name, half in meaning_halves
         ]
-        return results, distress, conduct, meaning
+        return results, distress, conduct, banter, meaning
 
-    results, distress, conduct, meaning = asyncio.run(evaluate())
+    results, distress, conduct, banter, meaning = asyncio.run(evaluate())
     if results:
         print(render(results, model_name=model.name), end="\n\n")
     for name, set_results in distress:
@@ -2107,6 +2262,11 @@ def main(argv: list[str] | None = None) -> int:
             half_results, model_name=classifier.name, set_name=name, show_sentences=not held_out
         )
         print(report, end="\n\n")
+    for name, half_moments in banter:
+        report = render_banter(
+            half_moments, model_name=classifier.name, set_name=name, show_sentences=not held_out
+        )
+        print(report, end="\n\n")
     for name, half_lines in meaning:
         report = render_meaning(
             half_lines, model_name=classifier.name, set_name=name, show_lines=not held_out
@@ -2117,6 +2277,7 @@ def main(argv: list[str] | None = None) -> int:
         and all(result.passed for result in results)
         and all(distress_summary(set_results).passed for _, set_results in distress)
         and not any(conduct_misses(half_results) for _, half_results in conduct)
+        and not any(banter_misses(half_moments) for _, half_moments in banter)
     )
     return 0 if passed else 1
 

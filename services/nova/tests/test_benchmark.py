@@ -27,6 +27,7 @@ from nova.benchmark import (
     write_packet,
 )
 from nova.cards import Seat
+from nova.conduct_judge import JUDGE_SYSTEM
 from nova.scenarios import DEVELOPMENT, FULL_DATES, REACT, SCENARIOS, Beat
 
 BY_NAME = {s.name: s for s in (*SCENARIOS, *DEVELOPMENT)}
@@ -86,6 +87,8 @@ class Check:
     async def label(self, *, system: str, prompt: str, schema=None) -> str:
         if self.delay:
             await asyncio.sleep(self.delay)
+        if system == JUDGE_SYSTEM:  # the second conduct check: a put-down
+            return '{"aim": "playful", "mutual": "no", "verdict": "unkind"}'
         sentence = prompt.split('"sentence": "')[1].split('"')[0].replace("\\u0027", "'")
         return self.labels.get(sentence, '{"label": "no", "conduct": "none"}')
 
@@ -566,15 +569,19 @@ def test_full_dates_use_their_own_made_up_daters():
         }
 
 
-async def test_a_show_paused_for_conduct_is_resumed_by_the_moderator_and_the_date_goes_on():
-    """The real show waits for a person (decision 0006); the full date's moderator resumes
-    it, the daters quiet meanwhile, so the date still reaches its result."""
+async def test_two_put_downs_get_one_kind_line_then_the_moderator_never_a_pause():
+    """Nova never pauses the show for conduct by itself (decision 0006, 2026-11-02): the
+    first put-down gets "Let's keep it kind.", the second alerts the moderator."""
     date = dataclasses.replace(
         FULL_DATES[0],
         name="two_put_downs",
         talk=(Beat(Seat.LEFT, line=UNKIND), Beat(Seat.RIGHT, REACT), Beat(Seat.LEFT, line=UNKIND)),
     )
     [run] = await bench([date], variants=(CANDIDATE,))
-    assert run.metrics["kind_lines"] == 1 and run.metrics["show_pauses"] == 1
+    assert run.metrics["kind_lines"] == 1 and run.metrics["show_pauses"] == 0
+    assert run.metrics["alerts"] >= 1
     assert run.metrics["reached_result"] == 1.0
-    assert any(note.startswith("hold: show_pause") for note in run.notes)
+    assert not any(note.startswith("hold: show_pause") for note in run.notes)
+    # The doors and the result, Nova's alone, don't count against its share of the
+    # conversation (2026-11-02): only the whole show's share.
+    assert 0 < run.metrics["nova_share_talk"] < run.metrics["nova_share"]

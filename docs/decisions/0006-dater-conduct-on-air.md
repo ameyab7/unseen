@@ -140,3 +140,63 @@ anything the model misjudges; the evaluation measures the last.
   category, the second as urgent as a report for harassment, a threat or a minor.
 - A listener delay (decision 0007, proposed) would let a moderator, or the instant layer,
   keep a slipped detail from reaching listeners at all.
+
+## Banter, and no show pause for unkindness, 2026-11-02
+
+The full-date simulation (decision 0009) paused one date seven times: a dater roasting the
+other, who kept roasting back. Each time the moderator resumed, the next barb paused it
+again, since the second unkind remark always paused and the count never reset. Run on Gemma
+(`gemma4:26b`), the frozen check showed why, three runs each, on made-up sentences:
+
+- every sharp line of that mutual roast was labelled unkind, with or without the other
+  dater's own jokes shown before it, and with "Ha" added: its rules make any put-down of the
+  other dater's "mind, worth or being dull" unkind, and one sentence through 15 seconds
+  can't show that both are in on it (and speech-to-text drops laughter anyway);
+- six ordinary self put-downs ("Sorry, I'm terrible at this") were left alone, but "Um,
+  sweet? Sorry, that's such a predictable choice." was unkind every time, and "Um, sweet?
+  Sorry, my answer's so predictable." never: the check never hears Nova's question, so
+  "that choice" reads as a jab at the other dater's.
+
+The product owner's decisions: banter is part of a good date and never pauses it; Nova never
+pauses the show for unkindness at all; and a smarter second check decides whether to act.
+
+- **The second conduct check** (`nova/conduct_judge.py`), asked only when the frozen check
+  says unkind, which stays byte-identical. It sees Nova's latest line, both daters' words
+  from the 90 s before (flagged lines and laughs included, which this date's context leaves
+  out), and the other dater's reaction: the listener waits up to 6 s for their next words
+  (`on_air.OnAirListener`). It answers what the remark makes fun of (self, something said or
+  done, or who the other dater is), whether the other dater is in on it, and a verdict;
+  `decide()` is never more lenient than the verdict, except for a dater mocking themselves.
+  The line the product owner drew: sharp mock insults about someone's jokes, taste, wit or
+  standards are banter when both are in on it; the same words after "okay, that stung", to
+  someone who was being sincere, or a remark about looks, voice, body, intelligence,
+  background or identity, are not.
+- **What Nova does** (`ShowRunner.dater_conduct`): banter or a self put-down, nothing; a
+  put-down, "Let's keep it kind." the first time for that dater, and after that the
+  moderator is alerted (`conduct_flag`), never a pause; unsure, or no answer in time (4 s,
+  a failure, an unreadable answer, or the privacy policy holding it back), a quiet alert and
+  nothing on air. A remark still waiting when the date ends is judged at once, and one never
+  judged reaches the moderator anyway.
+- **Pauses are the moderator's**: `ShowRunner.moderator_pause` (the rehearsal's `pause`
+  command) holds the whole date with "We're taking a short pause." as before; only resume or
+  end lifts it. The console's wire messages have no pause yet (packages/shared, mute only).
+- **Words to Nova**: teasing Nova is banter. Words said to Nova that the frozen check labels
+  unkind get the second check at once (`said_to_nova`, no reaction to wait for: Nova is who
+  it's aimed at), and the reply waits for it: banter or a self put-down, Nova plays along; a
+  put-down of the other dater, or no answer, no reply (2026-11-02: "Nova, are you just
+  programmed to be this boring?" went unanswered).
+- **A hurt reaction**: when the other dater sounds hurt or objects within 20 s ("that
+  stung", "none taken", "please stop", a flat "Oh. Right."; milder words like "harsh" or
+  "mean" only in a reaction of ten words or fewer, since "that's a bit harsh, don't you
+  think? I'll have you know..." is mock offence), the remark before it gets the second
+  check even if the frozen check found nothing: sarcasm reads as ordinary on its own.
+- **Unchanged**: harassment, sexual content, hate, threats, minors and unsure still alert at
+  once; distress is untouched.
+- **Privacy** (decision 0010): the request carries this date's turns under `this_date`, so
+  it goes only where dialogue memory may.
+- **Measured** by the conduct halves, now through both checks (a second check that clears a
+  real put-down fails their recall gate), and the banter set (`nova/banter_set.py`): each
+  moment with what came before, Nova's line, the sentence and the reaction, written without
+  laughter; banter and self put-downs must be left alone at least 75%, their mirrors acted
+  on at least 75%. Dev half tuned on; the held-out half, on other topics, run once with
+  `--held-out`. Both run with `--conduct` and the default run.
