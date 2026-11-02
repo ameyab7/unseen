@@ -25,6 +25,21 @@ LIVE_FICTION = re.compile(
     re.IGNORECASE,
 )
 LIVE_MOMENTS = frozenset((Moment.REPLY, Moment.SILENCE, Moment.FROM_THE_ROOM))
+# What talk to the room can't know (2026-11-02: "plenty of people tuning in from all over",
+# "the chat has been lovely", "your questions have been wonderful", none of it given): how
+# many are listening or where from, what the chat says, how good the questions have been.
+ROOM_FICTION = re.compile(
+    r"\b(?:so many|plenty|lots|loads|hundreds|thousands|a lot) of (?:you|people|listeners)\b"
+    r"|\b(?:people|listeners|you) (?:tuning|listening) in from\b|\bfrom all over\b"
+    r"|\b(?:the|your) chat(?:'s| has| is| was| have)\b"
+    r"|\bmessages? (?:coming|pouring|flooding|rolling|flying)\b"
+    r"|\b(?:seeing|see|saw) (?:plenty|lots|so many|messages|comments|questions)\b"
+    r"|\b(?:the|your) questions(?: from (?:the room|the audience|listeners|you))?"
+    r" (?:have been|are|were|keep) (?:wonderful|great|lovely|amazing"
+    r"|brilliant|fantastic|excellent|coming|pouring|rolling|flooding)\b"
+    r"|\b(?:quiet|busy|packed|buzzing) (?:night|room|chat) (?:for|tonight)\b",
+    re.IGNORECASE,
+)
 
 # The segments a line could name, by the words that name them.
 NAMED: dict[Segment, re.Pattern[str]] = {
@@ -52,6 +67,8 @@ SET_PIECE_SEGMENT = {
 
 def invents_show_fact(moment: Moment, text: str) -> bool:
     """A show fact the line's task never gave it."""
+    if moment is Moment.ROOM_TALK and ROOM_FICTION.search(text):
+        return True
     if moment in SHOW_MOMENTS:
         return SHOW_FICTION.search(text) is not None
     if moment in LIVE_MOMENTS:

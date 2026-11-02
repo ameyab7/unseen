@@ -34,6 +34,7 @@ class Moment(StrEnum):
     SILENCE = "silence"
     FROM_THE_ROOM = "from_the_room"
     LIGHTNING_UNLOCKED = "lightning_unlocked"
+    LIGHTNING_INTRO = "lightning_intro"  # the round's approved intro, as it starts
     LIGHTNING_QUESTION = "lightning_question"
     LAST_WORD = "last_word"
     TIME = "time"

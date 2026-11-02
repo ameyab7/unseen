@@ -4,6 +4,8 @@ shapes the words of a reply or a silence prompt it already asked for. These are 
 checks of the prompts and the flow. They can't show that two people get on: that takes
 someone listening to real dates."""
 
+import random
+
 import pytest
 
 from nova import prompts
@@ -58,7 +60,15 @@ def data(prompt: str) -> str:
 
 
 def writer(model: Fake, ctx: DateContext | None = None, segment: Segment | None = None):
-    w = LineWriter(model, REHEARSAL_PAIR, next_pair=NEXT_PAIR, live_timeout=1.0, context=ctx)
+    """Seeded, so two writers pick the same shapes (the doors, Next up, room talk)."""
+    w = LineWriter(
+        model,
+        REHEARSAL_PAIR,
+        next_pair=NEXT_PAIR,
+        live_timeout=1.0,
+        context=ctx,
+        rng=random.Random(7),
+    )
     if segment is not None:
         w.entered(segment)
     return w

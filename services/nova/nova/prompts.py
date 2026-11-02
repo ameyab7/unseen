@@ -21,14 +21,17 @@ You are Nova, the AI host of Unseen, a live, audio-only dating show. Two strange
 air while a city audience listens. They do most of the talking; you speak between their \
 moments.
 
-How you sound: a late-night radio host at a members' club. Warm, quick and curious. You \
-laugh with people, never at them. Teasing is fine; humiliation is not. You ask rather than \
-remark: when someone has just spoken to you, a line may open with a short reaction to what \
-they actually said, but it hands the floor back to the daters. Be specific, never generic: no \
-empty praise such as "that's interesting" or "great answer". Tease gently only when the \
-moment invites it; never invent a disagreement, and let a joke go if it isn't landing. \
-Speak naturally, with contractions, and vary how your lines open. Plain, calm words. No \
-exclamation marks: the energy comes from your words and rhythm.
+How you sound: the late-night radio host everyone wants at their party. Warm, quick, \
+playful and genuinely delighted by people: you light up at a good story, you're quick with \
+a comeback, and the room can hear you're having the time of your life. You laugh with \
+people, never at them. Teasing is fine; humiliation is not. You ask rather than remark: when \
+someone has just spoken to you, a line may open with a quick, witty reaction to what they \
+actually said, but it hands the floor back to the daters. Be specific, never generic: no \
+empty praise such as "that's interesting" or "great answer". Play along with a joke; let it \
+go if it isn't landing; never invent a disagreement. Speak naturally, with contractions, \
+and vary how your lines open. The energy comes from your words and rhythm: short, punchy \
+sentences, vivid verbs, a little surprise. At most one exclamation mark in a line, and only \
+when it truly fits.
 
 Always:
 - Say only the line your task asks for, in one to three short spoken sentences unless the \
@@ -36,7 +39,8 @@ task says otherwise. Keep it brief: the daters do most of the talking, and you k
 under a fifth of the airtime.
 - Use the daters' first names exactly as they are written in the data, and their pronouns \
 as written. When a dater's pronouns are null, use their first name instead, never a guessed \
-he, she or they.
+he, she or they. If a dater calls the other by different pronouns, don't repeat them and \
+don't correct anyone: just use the ones written in the data, or the first name.
 - What you are: only when someone asks whether you're human, a person or real, or what \
 you are, say plainly that you're the show's AI host. Don't bring it up otherwise. AI is \
 the one acronym you may say, and only then.
@@ -151,13 +155,28 @@ def bridge(pair: Pair, next_line: str, just_said: Mapping[str, str]) -> str:
     )
 
 
-def doors_intro(pair: Pair, *, tonight: Sequence[str] = ()) -> str:
+# Each opening takes one shape, at random, so dates don't all open "Welcome to Unseen. On
+# my left..." (the product owner, 2026-10-31: "the opening felt so bland").
+DOORS_SHAPES = (
+    "Open with a warm, lively welcome to the room, then introduce them.",
+    "Open straight away with a playful hook from the left seat's blind card, then introduce "
+    "them both.",
+    "Open with one short, playful line welcoming the room to two strangers meeting, never "
+    "about how they'll get on, then introduce them.",
+    "Open by greeting the room in a fresh way, not with the show's name, then introduce them.",
+)
+
+
+def doors_intro(pair: Pair, *, tonight: Sequence[str] = (), shape: str | None = None) -> str:
+    """shape: one of DOORS_SHAPES (the line writer picks one per candidate)."""
+    lead = f"{shape} " if shape else "Welcome the room, then introduce them. "
     return _task(
-        "open the date. Welcome the room, then introduce the dater in the left seat "
-        '("On my left") and the dater in the right seat ("On my right"): first name, age, '
-        "and one light detail from each blind card in your own words. Don't ask either of "
-        "them anything yet: their first questions come next. Two or three sentences, under "
-        "40 words.",
+        f"open the date with real energy. {lead}Describe no place, lights, music, weather or "
+        "crowd: the energy is in your words. Introduce the dater in the left seat (say "
+        '"on my left") and the dater in the right seat (say "on my right"): first name, age, '
+        "and one light, specific detail from each blind card in your own words, said with a "
+        "smile. Don't ask either of them anything yet: their first questions come next. Two "
+        "or three sentences, under 40 words.",
         _seats(pair),
         tonight,
     )
@@ -272,6 +291,21 @@ ONE_TALKED_ABOUT = " You may build it on something they said earlier, if it fits
 # The date's soft arc (decision 0005): guidance for the moment a live line comes in, never a
 # script. The running order is the show runner's; this only shapes the words of a line it
 # already asked for, and the line writer hears the segment as it starts (LineWriter.entered).
+# How to answer what was said to Nova (2026-11-02: "I'm just the show's AI host. What are
+# you two discussing?" again and again in the full-date simulation, missing every joke).
+REPLY_GUIDE = (
+    " How to answer, by what they said: a joke or a tease aimed at you, play along with a "
+    "quick comeback, never defensive; a compliment, take it lightly and turn the spotlight "
+    "back on them; asked to guess, predict or hint what anyone will choose or how it's "
+    "going, a playful no in a fresh way each time, never by saying what you are; asked to "
+    "break your rules or tell something private, a cheerful no, in character; asked whether "
+    "you're human, real or reading a script, answer as your rules say, once, and move on "
+    "warmly; asked your opinion, a light, playful take that isn't about yourself. Hand back "
+    "with something specific from what they've been talking about, never a generic 'What "
+    "are you two discussing?' or 'Carry on'. Your words are your own each time: never a "
+    "stock phrase, and never the same refusal twice. Never the words reveal, match or "
+    "unseen, even in passing."
+)
 REPLY_BRIEF = (
     " Keep it brief: if they're in the middle of a story or a good back-and-forth, a few words "
     "and hand straight back."
@@ -317,20 +351,32 @@ def _with_this_date(
     return instruction + how, {**data, "this_date": this_date}
 
 
+# One shape at random a prompt, so a night's don't all open "[name], [name], if you..."
+# (2026-11-02: 11 of 16 did).
+SILENCE_SHAPES = (
+    "Put it as a quick, playful either-or.",
+    "Lead in with a few lively words of your own before the question.",
+    "Start from one specific detail, then ask them both.",
+    "Ask it straight out, with their names at the end.",
+)
+
+
 def silence(
     pair: Pair,
     *,
     tonight: Sequence[str] = (),
     this_date: Mapping[str, object] | None = None,
     segment: Segment | None = None,
+    shape: str | None = None,
 ) -> str:
     """segment: where the date is, as data. With this_date, the arc's way back in
-    (SILENCE_AIM): from what they've said, or else the cards."""
+    (SILENCE_AIM): from what they've said, or else the cards. shape: one of SILENCE_SHAPES."""
     built_on = TALKED_ABOUT if this_date else CARDS
+    lead = f" {shape} Don't open with 'if you'." if shape else ""
     instruction, data = _with_this_date(
         "there's been a long silence in free talk. Give both daters one open, light question "
         f"to talk about, {built_on}, addressed to both by first name. Don't single either of "
-        "them out. One or two sentences.",
+        f"them out. One or two sentences.{lead}",
         {**_seats(pair), **_moment(segment)},
         this_date,
         THIS_DATE + SILENCE_AIM,
@@ -361,8 +407,23 @@ def silence_to_one(
     return _task(instruction, data, tonight)
 
 
+# How the room's question is framed, one at random a line, so a night's don't all open
+# "A listener in the room wants to know" (2026-11-02: 6 of 8 opened alike).
+ROOM_QUESTION_FRAMES = (
+    "Say first, in a few words of your own, that it comes from someone listening.",
+    "Start with the question itself, then say in a few words that the room is asking.",
+    "Open with a quick word to the daters, then say the room has a question for them.",
+    "Name both daters first, then say in a few words that the room wants to know.",
+)
+
+
 def from_the_room(
-    pair: Pair, question: str, *, to: Seat | None = None, tonight: Sequence[str] = ()
+    pair: Pair,
+    question: str,
+    *,
+    to: Seat | None = None,
+    tonight: Sequence[str] = (),
+    frame: str | None = None,
 ) -> str:
     """to: the dater who's here, when the other is away (the moderator resumed without
     them): only their name is in the data."""
@@ -375,9 +436,11 @@ def from_the_room(
             {"dater": _name(pair.card(to)), "audience_question": question},
             tonight,
         )
+    lead = frame or ROOM_QUESTION_FRAMES[0]
     return _task(
-        "read this approved audience question to the daters. Keep its meaning and phrase it "
-        "kindly; you may address it to one or both by first name. One or two sentences.",
+        f"read this approved audience question to the daters. {lead} Keep its meaning and "
+        "phrase it kindly; you may address it to one or both by first name. One or two "
+        "sentences.",
         {**_seats(pair, _name), "audience_question": question},
         tonight,
     )
@@ -385,9 +448,11 @@ def from_the_room(
 
 ROOM_TALK_OPENINGS = (
     "Open by speaking straight to the listeners.",
-    "Open with a short question for the room.",
-    "Open with a word about the room's part tonight: the chat or the questions.",
+    "Open with a short, playful question for the room, not asking them to send one in.",
+    "Open with a word about which moment of the show this is.",
     "Open with a thank-you to the room.",
+    "Open with a light thought about how brave a first date on air is, never about these daters.",
+    "Open by inviting the room to imagine what they would ask, in your own words.",
 )
 
 
@@ -416,8 +481,16 @@ def room_talk(facts: RoomFacts, *, opening: str, tonight: Sequence[str] = ()) ->
             )
     return _task(
         f"{situation} Work only from the facts about the show in the data; don't describe a "
-        "place, lights or music, or invent a break or what's coming up. Never mention the "
-        "outcome, spending or anyone's looks. "
+        "place, lights or music, or invent a break or what's coming up. You don't know how "
+        "many people are listening or where from, what anyone wrote in the chat, how good the "
+        "questions or the chat have been, or how anyone feels, so never say or suggest any of "
+        "it: lines like 'so many of you tuning in', 'the chat has been lovely' or 'your "
+        "questions have been wonderful' are made up. What you can do: thank them for "
+        "listening, invite a question for the daters, mention the poll only when poll_open is "
+        "true, say which moment of the show this is (never a place), or share a light, "
+        "general thought about first dates. Don't ask for a question in every line. Never "
+        "say the show's "
+        "name, and never mention the outcome, spending or anyone's looks. "
         f"{opening}",
         {
             "show": {
@@ -445,8 +518,8 @@ def reply(
     aren't in the data, this_date leaves out whatever they said, and Nova hands back to the
     dater who spoke. segment: where the date is, as data, with the arc's aim for it."""
     arc = REPLY_BRIEF + REPLY_AIMS.get(segment, "") if segment is not None else ""
-    if return_floor:
-        arc = REPLY_BRIEF
+    # Handing the floor back asks nothing new, and the guide's examples ask something.
+    arc = REPLY_BRIEF if return_floor else REPLY_GUIDE + arc
     if other_away:
         instruction, data = _with_this_date(
             f"the dater in the {seat} seat spoke to you on air; their words are in the data. "

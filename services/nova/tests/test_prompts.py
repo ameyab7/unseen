@@ -145,7 +145,8 @@ def test_room_talk_works_from_safe_show_facts_only():
     assert "Room, stay with us." in data, "what it said tonight, so it opens differently"
     for name in ("Maya", "Theo", "haircut"):
         assert name not in prompt, "no names or card text: nobody stepped away by name"
-    assert "Never mention the outcome, spending or anyone's looks" in instructions
+    assert "never mention the outcome, spending or anyone's looks" in instructions
+    assert "Never say the show's name" in instructions, "a decision word on air"
     assert OPENING in instructions
     assert "deciding" in instructions
     assert "deciding" not in split(prompts.room_talk(PAUSE, opening=OPENING))[0]
@@ -227,7 +228,7 @@ def test_nova_asks_rather_than_remarks_but_may_react_briefly_first():
     system = flat(prompts.SYSTEM_PROMPT)
     assert "ask rather than remark" in system
     assert "when someone has just spoken to you" in system, "never a lead-in to a set piece"
-    assert "short reaction to what they actually said" in system
+    assert "witty reaction to what they actually said" in system
     assert "hands the floor back" in system
 
 
@@ -244,7 +245,8 @@ def test_nova_is_told_to_be_specific_natural_and_calm():
     system = flat(prompts.SYSTEM_PROMPT)
     for intent in ("specific, never generic", "empty praise", "contractions", "vary how"):
         assert intent in system, intent
-    assert "no exclamation marks" in system and "!" not in prompts.SYSTEM_PROMPT
+    assert "at most one exclamation mark in a line" in system
+    assert "!" not in prompts.SYSTEM_PROMPT
 
 
 def test_nova_keeps_its_lines_brief_and_the_first_question_short():
@@ -277,9 +279,9 @@ def test_the_output_rules_ask_for_nothing_the_guardrails_would_block():
 
 def test_teasing_is_only_where_the_moment_invites_it_and_never_humiliates():
     system = flat(prompts.SYSTEM_PROMPT)
-    for intent in ("humiliation is not", "only when the moment invites it", "invent a disagree"):
+    for intent in ("humiliation is not", "let it go if it isn't landing", "invent a disagree"):
         assert intent in system, intent
-    assert "let a joke go" in system
+    assert "let it go if it isn't landing" in system
 
 
 def test_nova_never_invents_show_facts_in_any_task():
@@ -344,3 +346,43 @@ def test_the_outro_never_has_to_mention_anything_from_the_date():
     the date, so no detail from it can sound like a hint about the result."""
     task = prompts.outro(REHEARSAL_PAIR)
     assert "this_date" not in task and "earlier" not in flat(split(task)[0])
+
+
+# --- The livelier voice and its moments (2026-11-02) ---------------------------------------
+
+
+def test_the_doors_take_one_of_several_shapes_and_still_name_both_seats():
+    shapes = {prompts.doors_intro(REHEARSAL_PAIR, shape=shape) for shape in prompts.DOORS_SHAPES}
+    assert len(shapes) == len(prompts.DOORS_SHAPES)
+    for shape in prompts.DOORS_SHAPES:
+        told = flat(prompts.doors_intro(REHEARSAL_PAIR, shape=shape).split("<data>")[0])
+        assert '"on my left"' in told and '"on my right"' in told and "under 40 words" in told
+
+
+def test_the_rooms_question_is_said_to_come_from_the_room():
+    for frame in prompts.ROOM_QUESTION_FRAMES:
+        told = prompts.from_the_room(REHEARSAL_PAIR, "Mountains or sea?", frame=frame)
+        assert frame in told.split("<data>")[0]
+    assert any("listening" in f for f in prompts.ROOM_QUESTION_FRAMES)
+
+
+def test_room_talk_is_told_what_it_cant_know_and_never_offered_the_chat_as_an_opening():
+    facts = RoomFacts(Segment.TIME, True, 1, Situation.DECIDING)
+    told = flat(prompts.room_talk(facts, opening=prompts.ROOM_TALK_OPENINGS[0]))
+    for unknown in ("how many people are listening", "what anyone wrote in the chat"):
+        assert unknown in told
+    assert "mention the poll only when poll_open is true" in told
+    assert not any("chat" in opening for opening in prompts.ROOM_TALK_OPENINGS)
+
+
+def test_replies_get_the_guide_but_handing_the_floor_back_never_does():
+    guide = "how to answer, by what they said"
+    assert guide in flat(prompts.reply(REHEARSAL_PAIR, Seat.LEFT, "Nova, are you a robot?"))
+    asked_again = prompts.reply(REHEARSAL_PAIR, Seat.LEFT, "Sorry?", return_floor=True)
+    assert guide not in flat(asked_again), "its examples ask a question"
+    assert "never a stock phrase" in prompts.REPLY_GUIDE and "'Nice try" not in prompts.REPLY_GUIDE
+
+
+def test_nova_never_repeats_or_corrects_another_daters_pronouns():
+    system = flat(prompts.SYSTEM_PROMPT)
+    assert "don't repeat them and don't correct anyone" in system

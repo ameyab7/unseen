@@ -226,7 +226,9 @@ def fallback_lines(pair: Pair, next_pair: Pair | None) -> list[tuple[Moment, str
         *((Moment.SILENCE, s) for s in script.silence_fallbacks(pair)),
         (Moment.FROM_THE_ROOM, script.from_the_room_fallback(pair)),
         (Moment.ROOM_TALK, script.ROOM_TALK_FALLBACK),
-        (Moment.REPLY, script.REPLY_FALLBACK),
+        (Moment.ROOM_TALK, script.ROOM_TALK_ENDED_FALLBACK),
+        *((Moment.REPLY, r) for r in script.REPLY_FALLBACKS),
+        *((Moment.LIGHTNING_INTRO, i) for i in script.LIGHTNING_INTROS),
         (Moment.REPLY, script.TAKE_YOUR_TIME),
     ]
     if next_pair is not None:
@@ -282,6 +284,7 @@ class LineWriter:
         self._prep_budget = prep_budget
         self._events = events or EventLog()
         self._rng = rng or random.Random()  # picks shapes and openings, so lines vary
+        self._reply_fallbacks = 0  # reply fallbacks said this date: they're taken in turn
         # This date's lightning questions: one of each format, in a random order.
         self._lightning_forms = self._rng.sample(
             prompts.LIGHTNING_FORMS, len(prompts.LIGHTNING_FORMS)
@@ -806,14 +809,15 @@ class LineWriter:
                     if self._fallback_in_hold:
                         return ""  # never the same fallback twice in one hold
                     self._fallback_in_hold = True
-                return script.ROOM_TALK_FALLBACK
+                return script.ROOM_TALK_ENDED_FALLBACK if ended else script.ROOM_TALK_FALLBACK
             case Moment.REPLY:
                 words = say.detail or ""
                 if is_unmistakable(words) or has_warning(words):
                     return script.TAKE_YOUR_TIME  # never "I'll stay out of that one"
                 if say.away is not None:
                     return ""  # the fallback hands back to both daters
-                return script.REPLY_FALLBACK
+                turn, self._reply_fallbacks = self._reply_fallbacks, self._reply_fallbacks + 1
+                return script.REPLY_FALLBACKS[turn % len(script.REPLY_FALLBACKS)]
         raise ValueError(f"No fallback for {say.moment}")
 
     def _said_again(self, say: Say) -> str | None:
@@ -857,7 +861,8 @@ class LineWriter:
         pair, tonight = self._pair, self._tonight.said(say.moment, limit=limit)
         match say.moment:
             case Moment.DOORS_INTRO:
-                return prompts.doors_intro(pair, tonight=tonight)
+                shape = self._rng.choice(prompts.DOORS_SHAPES)
+                return prompts.doors_intro(pair, tonight=tonight, shape=shape)
             case Moment.FIRST_QUESTION:
                 return prompts.first_question(pair, _seat(say), tonight=tonight)
             case Moment.LIGHTNING_QUESTION:
@@ -877,10 +882,16 @@ class LineWriter:
                     return prompts.silence_to_one(
                         pair, say.about, tonight=tonight, this_date=this_date, segment=segment
                     )
-                return prompts.silence(pair, tonight=tonight, this_date=this_date, segment=segment)
+                shape = self._rng.choice(prompts.SILENCE_SHAPES)
+                return prompts.silence(
+                    pair, tonight=tonight, this_date=this_date, segment=segment, shape=shape
+                )
             case Moment.FROM_THE_ROOM:
                 to = say.away.other if say.away is not None else None
-                return prompts.from_the_room(pair, say.detail or "", to=to, tonight=tonight)
+                frame = self._rng.choice(prompts.ROOM_QUESTION_FRAMES)
+                return prompts.from_the_room(
+                    pair, say.detail or "", to=to, tonight=tonight, frame=frame
+                )
             case Moment.ROOM_TALK:
                 opening = self._rng.choice(prompts.ROOM_TALK_OPENINGS)
                 return prompts.room_talk(_room(say), opening=opening, tonight=tonight)

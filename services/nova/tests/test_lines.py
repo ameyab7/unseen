@@ -244,7 +244,7 @@ async def test_a_candidate_that_breaks_a_guardrail_is_never_kept_however_fresh()
     tonight = Tonight()
     tonight.remember(Moment.OUTRO, "Thank you, Sam and Priya.", names=["Sam", "Priya"])
     model = outro_candidates(
-        "Thank you, Maya and Theo.", "What a night, Maya and Theo!", "Thank you, Maya and Theo."
+        "Thank you, Maya and Theo.", "What a night, Maya and Theo!!", "Thank you, Maya and Theo."
     )
     w = writer(model, tonight=tonight)
     await w.prepare()
@@ -368,7 +368,7 @@ async def test_a_failing_model_gets_the_fallback_line(error, kind):
 
 
 async def test_a_line_that_breaks_a_guardrail_is_never_spoken():
-    line = await writer(FakeModel("What a night, room!")).line_for(PAUSE_TALK)
+    line = await writer(FakeModel("What a night, room! Wow!")).line_for(PAUSE_TALK)
     assert line.source is Source.FALLBACK
     assert Violation.EXCLAMATION in line.violations
     assert line.text == script.ROOM_TALK_FALLBACK
@@ -662,7 +662,7 @@ async def test_questions_about_personal_details_or_looks_are_never_read_or_decli
     assert model.prompts == []
 
 
-@pytest.mark.parametrize("model", [FakeModel(error=RuntimeError("down")), FakeModel("Hi!")])
+@pytest.mark.parametrize("model", [FakeModel(error=RuntimeError("down")), FakeModel("Hi!!")])
 async def test_if_the_model_fails_nova_never_reads_the_question_itself(model):
     """Fallbacks are never built from free text (decision 0005), so not even an approved
     audience question is read word for word."""
@@ -891,7 +891,7 @@ async def test_a_date_ending_early_long_after_a_hold_still_gets_the_fallback():
     w = writer(FakeModel(error=DOWN))
     await w.line_for(Say(Moment.ROOM_TALK, room=PAUSED, number=1, of=3))
     await w.line_for(Say(Moment.WELCOME_BACK, text=script.WELCOME_BACK))  # the hold is over
-    assert (await w.line_for(ENDED)).text == script.ROOM_TALK_FALLBACK
+    assert (await w.line_for(ENDED)).text == script.ROOM_TALK_ENDED_FALLBACK, "its own line"
 
 
 async def spoken(w: LineWriter, say: Say) -> str:
@@ -1014,3 +1014,60 @@ async def test_set_piece_requests_in_flight_are_capped(limit):
     w = LineWriter(model, REHEARSAL_PAIR, next_pair=NEXT_PAIR, prep_parallel=limit)
     await w.prepare()
     assert model.most == limit
+
+
+@pytest.mark.parametrize(
+    "made_up",
+    [
+        "I'm still seeing plenty of people tuning in from all over.",
+        "Your chat has been lovely so far. Any questions for our daters?",
+        "Your questions have been wonderful. Keep them coming, room.",
+        "The questions from the room have been coming in steadily.",
+    ],
+)
+async def test_talk_to_the_room_never_claims_what_nova_cant_know(made_up):
+    """2026-11-02: Nova knows the segment, the poll and how many questions were read, never
+    the audience's size, the chat or how good the questions were."""
+    line = await writer(FakeModel(made_up)).line_for(PAUSE_TALK)
+    assert line.source is Source.FALLBACK
+    assert Violation.INVENTS_SHOW_FACT in line.violations
+
+
+async def test_honest_talk_to_the_room_is_said():
+    honest = "Thanks for listening, room. Got a question for our daters? Send it in."
+    line = await writer(FakeModel(honest)).line_for(PAUSE_TALK)
+    assert line.source is Source.MODEL
+
+
+async def test_reply_fallbacks_take_turns_and_never_say_nova_is_staying_out_of_it():
+    """Approved on 2026-11-02 (docs/sign-off/2026-10-reply-fallback.md)."""
+    w = writer(FakeModel(error=DOWN))
+    said = [
+        (await w.line_for(Say(Moment.REPLY, about=Seat.LEFT, detail="Nova, tea or coffee?"))).text
+        for _ in range(4)
+    ]
+    assert said == [*script.REPLY_FALLBACKS, script.REPLY_FALLBACKS[0]]
+    assert not any("AI host" in line for line in script.REPLY_FALLBACKS)
+
+
+def test_the_approved_lines_pass_the_guardrails_for_their_moments():
+    from nova.guardrails import check
+    from nova.lines import rules_for
+
+    for moment, text in (
+        *((Moment.LIGHTNING_INTRO, line) for line in script.LIGHTNING_INTROS),
+        (Moment.ROOM_TALK, script.ROOM_TALK_FALLBACK),
+        (Moment.ROOM_TALK, script.ROOM_TALK_ENDED_FALLBACK),
+        *((Moment.REPLY, line) for line in script.REPLY_FALLBACKS),
+    ):
+        rules = rules_for(moment)
+        found = check(
+            text,
+            names=frozenset({"Nova"}),
+            max_chars=rules.max_chars,
+            max_sentences=rules.max_sentences,
+            questions=rules.questions,
+            open_with_names=rules.open_with_names,
+        )
+        assert found == (), (moment, text, found)
+    assert "chat" not in script.ROOM_TALK_FALLBACK + script.ROOM_TALK_ENDED_FALLBACK

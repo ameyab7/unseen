@@ -1293,9 +1293,12 @@ class ShowRunner:
                 closed = self._close_meter()
                 if not self._lightning_unlocked:
                     return [*closed, *self._enter(Segment.FREE_TALK, at)]
+                left, right = self._pair.left.first_name, self._pair.right.first_name
+                intro = Say(Moment.LIGHTNING_INTRO, text=script.lightning_intro(left, right))
                 return [
                     *closed,
                     *self._enter(Segment.LIGHTNING_ROUND, at),
+                    intro,  # the daters and the room hear the round start (2026-11-02)
                     running_order.lightning_question(1),
                 ]
             case "lightning_question":

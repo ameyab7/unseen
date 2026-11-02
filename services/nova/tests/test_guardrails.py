@@ -152,7 +152,8 @@ def test_humiliation_is_caught(line):
 
 
 def test_voice_and_format_rules():
-    assert V.EXCLAMATION in found("What a night!")
+    assert V.EXCLAMATION not in found("What a night!"), "one, when it fits (2026-11-02)"
+    assert V.EXCLAMATION in found("What a night! Wow!")
     assert V.FORMATTING in found("**Bold** move, Theo.")
     assert V.FORMATTING in found("Love that, Maya 😍")
     assert V.EMPTY in found("   ")

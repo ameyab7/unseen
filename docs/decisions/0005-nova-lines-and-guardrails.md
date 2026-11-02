@@ -1098,3 +1098,47 @@ right-hand column above). Before the first real show, Nova needs these:
   hyphens, at most 20 characters. Casting must not pair two daters with the same first
   name, ignoring case. The schema and the console also carry `approved_for_air`, set when a
   person at casting has approved the card's text (decision 0005's proposed card fallbacks).
+
+## A livelier voice, honest room talk, and replies that play along, 2026-11-02
+
+The product owner's 2026-10-31 rehearsal found a flat host and a bland opening ("Nova needs
+to be livelier... the audience should be in awe of Nova's enthusiasm"), and the full-date
+simulation (decision 0009) found invented room facts and robotic replies. Changed together,
+and measured with the evaluation before and after:
+
+- **The voice** (`prompts.SYSTEM_PROMPT`): "the late-night radio host everyone wants at their
+  party", genuinely delighted by people, quick with a comeback, short punchy sentences. At
+  most one exclamation mark in a line, when it truly fits: the guardrails now reject two or
+  more, not one (`Violation.EXCLAMATION`).
+- **Pronouns**: if a dater calls the other by different pronouns, Nova never repeats them and
+  never corrects anyone on air; it uses the ones written in the data, or the first name.
+- **Openings** (`prompts.DOORS_SHAPES`): one of four shapes per candidate, so a night's dates
+  don't all open "Welcome to Unseen. On my left...". Both seats are still named. A first
+  shape that set "the mood of a night like this" made scenery up ("the lights are low",
+  "the stars are out"), so the doors are told to describe no place, lights, music, weather
+  or crowd.
+- **The room's question** says it comes from the room, framed one of four ways at random
+  (`prompts.ROOM_QUESTION_FRAMES`): asked only to vary it, 6 of 8 in a night opened alike.
+- **Room talk** is told what Nova can't know (how many are listening or where from, the
+  chat, how good the questions were, how anyone feels) and offered only what it can say;
+  the opening "a word about... the chat or the questions" is gone. `show_state.ROOM_FICTION`
+  rejects a room-talk line that claims any of it (the 2026-11-02 lines it would have
+  caught: "plenty of people tuning in from all over", "your chat has been lovely", "your
+  questions have been wonderful"). "The poll is open" stays: the data says when it is. It
+  never says the show's name, which on air is a decision word ("keeping it unseen") the
+  guardrails reject.
+- **Replies** (`prompts.REPLY_GUIDE`): how to answer a joke at Nova, a compliment, a push to
+  guess or to break the rules, "are you human", a request for an opinion; a hand-back
+  built on what they were talking about, never "What are you two discussing?"; never a
+  stock phrase. It had two example replies, which Gemma said word for word ("Nice try, I
+  don't do predictions, I do questions"), so it has none. Not for a reply that hands the floor back, which may ask nothing.
+  Robotic replies aren't rejected: the reply fallback was the robotic line itself ("I'm
+  the AI host, so I'll stay out of that one."), so the product owner approved the three
+  drafts in docs/sign-off/2026-10-reply-fallback.md instead, taken in turn
+  (`script.REPLY_FALLBACKS`).
+
+Approved by the product owner on 2026-11-02 (docs/sign-off/2026-11-livelier-nova.md): the
+lightning round's intro, three taken in turn (`script.LIGHTNING_INTROS`), and two honest
+room-talk fallbacks in place of "Thanks for keeping the chat kind tonight, room."
+(`script.ROOM_TALK_FALLBACK`, and `ROOM_TALK_ENDED_FALLBACK` for a date that ended early).
+Two pending room-talk drafts revised.

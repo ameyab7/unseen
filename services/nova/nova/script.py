@@ -63,9 +63,40 @@ LIGHTNING_FALLBACKS = (
 LIGHTNING_LAST_FALLBACKS = (  # only ever for the last question of the round
     "Last quick one: the best thing you ate this week?",
 )
-ROOM_TALK_FALLBACK = "Thanks for keeping the chat kind tonight, room."
-# Never for a dater who clearly wants to stop: they never get a reply cue at all.
-REPLY_FALLBACK = "I'm the AI host, so I'll stay out of that one. Back to you two."
+# Approved by the product owner on 2026-11-02 (docs/sign-off/2026-11-livelier-nova.md),
+# in place of "Thanks for keeping the chat kind tonight, room.", which claimed something
+# about the chat Nova never sees: one for a hold, one for the end of a date that ended early.
+ROOM_TALK_FALLBACK = (
+    "Thanks for staying with us, room. If a question for our daters comes to mind, send it in."
+)
+ROOM_TALK_ENDED_FALLBACK = "Room, thank you for being here with us tonight."
+# Never for a dater who clearly wants to stop: they never get a reply cue at all. Approved
+# on 2026-11-02 (docs/sign-off/2026-10-reply-fallback.md), in place of "I'm the AI host, so
+# I'll stay out of that one. Back to you two.", which sounded as if the dater had asked
+# something off limits when the model was only slow. Taken in turn.
+REPLY_FALLBACKS = (
+    "Good question. I'll hand that one back to you two.",
+    "I'll let you two take that one. Over to you.",
+    "That one's yours to answer, not mine. Back to you both.",
+)
+REPLY_FALLBACK = REPLY_FALLBACKS[0]
+
+# The lightning round's own intro, said as it starts, before its first question. Approved on
+# 2026-11-02 (docs/sign-off/2026-11-livelier-nova.md): the product owner "wasn't made aware
+# that question was a lightning round question". One a date, by the daters' names, so a
+# night's dates take them in turn.
+LIGHTNING_INTROS = (
+    "Lightning round. Three quick ones, first thing that comes to mind.",
+    "Quick-fire time. Three questions, no overthinking allowed.",
+    "Lightning round. Short answers, big honesty. Here we go.",
+)
+
+
+def lightning_intro(left: str, right: str) -> str:
+    """This date's intro, chosen by the daters' first names (stable, never random)."""
+    return LIGHTNING_INTROS[sum(map(ord, left + right)) % len(LIGHTNING_INTROS)]
+
+
 # Instead of the line above when what the dater said might be distress ("help").
 TAKE_YOUR_TIME = "Take all the time you need."
 

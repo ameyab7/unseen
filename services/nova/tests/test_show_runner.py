@@ -1717,3 +1717,24 @@ def test_paced_the_cap_counts_from_when_nova_finished_asking():
     show.reported.add(first)
     paced_date(show, 300, [(263, "speech_started", LEFT), (270, "speech_stopped", LEFT)])
     assert audience_question_times(show) == [240.0, 276.0], "6 s after Maya, Theo's chance"
+
+
+def test_the_lightning_round_opens_with_its_approved_intro_before_the_first_question():
+    """Approved on 2026-11-02 (docs/sign-off/2026-11-livelier-nova.md): the daters and the room
+    hear that the round has started."""
+    show = Show()
+    show.at(200, "unlock_lightning_round")
+    show.until(340)
+    says = [
+        say
+        for _, say in show.says()
+        if say.moment in (Moment.LIGHTNING_INTRO, Moment.LIGHTNING_QUESTION)
+    ]
+    assert says[0] == Say(Moment.LIGHTNING_INTRO, text=script.lightning_intro("Maya", "Theo"))
+    assert says[1].moment is Moment.LIGHTNING_QUESTION
+    assert script.lightning_intro("Maya", "Theo") in script.LIGHTNING_INTROS
+    picks = {
+        script.lightning_intro(a, b)
+        for a, b in (("Maya", "Theo"), ("Sam", "Priya"), ("Esme", "Rory"), ("Wyn", "Pia"))
+    }
+    assert len(picks) > 1, "a night's dates take them in turn"

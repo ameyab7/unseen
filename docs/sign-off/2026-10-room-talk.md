@@ -20,12 +20,15 @@ looks, or describes a place. Each passes the guardrails for talk to the room (ch
 
 | # | Line | Characters |
 | --- | --- | --- |
-| 1 | Room, thanks for staying with us. The chat has been lovely tonight. | 67 |
+| 1 | Room, thanks for staying with us tonight. Questions for our daters are always welcome. | 86 |
 | 2 | While we wait, room, what would you ask next? Tell us in the chat. | 66 |
 | 3 | Stay with us, room. Good conversations are worth a short wait. | 62 |
-| 4 | Room, a quick thank-you for keeping the chat kind and curious. | 62 |
+| 4 | Room, a quick thank-you for being here with us. | 47 |
 | 5 | We will be right back with you, room. Thanks for your patience. | 63 |
 | 6 | Room, your questions keep this show going. Thank you for every one of them. | 75 |
+
+Lines 1 and 4 were revised on 2026-11-02: Nova can't know what the chat is like, so no line
+says it is lovely or kind (decision 0005, room talk).
 
 Lines 2, 3 and 5 suit a hold; 1, 4 and 6 also suit the end of a date that ended early,
 where Nova thanks the room without saying why.

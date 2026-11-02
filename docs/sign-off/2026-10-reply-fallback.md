@@ -1,7 +1,6 @@
 # Sign-off: a neutral reply fallback
 
-Status: proposed. Waiting for the product owner. Until then `REPLY_FALLBACK` in
-`services/nova/nova/script.py` stays as it is.
+Status: approved by the product owner on 2026-11-02; in `services/nova/nova/script.py`.
 
 ## Why
 
@@ -24,6 +23,6 @@ One replaces today's line, or all three take turns like the other fallbacks.
 
 ## Sign-off
 
-- Product owner: ____________________
-- Date: ____________________
-- Approved line(s): ____________________
+- Product owner: approved in the Claude Code session of 2026-11-02
+- Date: 2026-11-02
+- Approved line(s): all three, taken in turn

@@ -409,7 +409,7 @@ def check(
 
     if len(text) > max_chars or len(SENTENCE_END.findall(text)) > max_sentences:
         found.add(Violation.TOO_LONG)
-    if "!" in text:
+    if text.count("!") > 1:  # one, when it truly fits (the livelier voice, 2026-11-02)
         found.add(Violation.EXCLAMATION)
     if _has_formatting(text):
         found.add(Violation.FORMATTING)
