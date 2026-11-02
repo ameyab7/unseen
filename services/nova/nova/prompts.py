@@ -407,6 +407,64 @@ def silence_to_one(
     return _task(instruction, data, tonight)
 
 
+# Stepping in although nobody went quiet (decision 0013, nova/steering.py): what each kind
+# asks for. {seat} is the seat it's for.
+STEER_TASKS: Mapping[str, str] = {
+    "easy_win": (
+        "give the dater in the {seat} seat an easy win: one light, specific question about "
+        "something on their own blind card that they'd enjoy talking about, warmly, with no "
+        "teasing in it, addressed to them by first name."
+    ),
+    "turn_around": (
+        "playfully turn the conversation round: the dater in the {seat} seat has been asking "
+        "the questions, so invite them, by first name, to answer one light question "
+        "themselves, built on their own blind card."
+    ),
+    "bring_in": (
+        "bring the dater in the {seat} seat into the conversation: by first name, one light "
+        "question that picks up what was just being talked about, or else something on their "
+        "own blind card."
+    ),
+    "lighten": (
+        "change the pace: give both daters one quick, playful either-or question built on a "
+        "detail from each of their blind cards, addressed to both by first name."
+    ),
+    "move_on": (
+        "move the conversation somewhere new: give both daters one light, open question built "
+        "on a detail from each of their blind cards, addressed to both by first name. Never "
+        "come back to what they were just talking about."
+    ),
+}
+STEER_RULES = (
+    " Never comment on how the conversation has been going: not on apologies, nerves, who has "
+    "been talking or asking, or anything someone didn't want to answer. One or two short "
+    "sentences, with energy."
+)
+
+
+def steer(
+    pair: Pair,
+    kind: str,
+    seat: Seat | None,
+    *,
+    tonight: Sequence[str] = (),
+    this_date: Mapping[str, object] | None = None,
+    segment: Segment | None = None,
+) -> str:
+    """kind: a nova.steering.Steer value. seat: who it's for (None: both). Moving on never
+    sees this date's context, so it can't steer back to what was passed on."""
+    task = STEER_TASKS[kind].format(seat=seat.value if seat is not None else "")
+    instruction = f"the daters are talking, but the conversation needs a lift. {task}"
+    context = None if kind == "move_on" else this_date
+    instruction, data = _with_this_date(
+        instruction + STEER_RULES,
+        {**_seats(pair), **_moment(segment)},
+        context,
+        THIS_DATE,
+    )
+    return _task(instruction, data, tonight)
+
+
 # How the room's question is framed, one at random a line, so a night's don't all open
 # "A listener in the room wants to know" (2026-11-02: 6 of 8 opened alike).
 ROOM_QUESTION_FRAMES = (

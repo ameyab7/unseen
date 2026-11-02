@@ -52,6 +52,10 @@ class Moment(StrEnum):
     KEEP_STREETS_OFF_AIR = "keep_streets_off_air"  # a street or address slipped
     KEEP_IT_KIND = "keep_it_kind"  # a dater's first unkind remark
     SHOW_PAUSE = "show_pause"  # the moderator paused the whole date
+    # Nova steps in although nobody went quiet (decision 0013): a model line, and the brand
+    # book's line for daters talking over each other.
+    STEER = "steer"
+    ONE_AT_A_TIME = "one_at_a_time"
 
 
 class Sound(StrEnum):
@@ -141,6 +145,7 @@ class Say:
     away: Seat | None = None
     bridge: bool = False  # optional live prefix; the prepared question remains intact
     return_floor: bool = False  # a reply preserves this dater's pending question
+    steer: str | None = None  # a step-in's kind (nova/steering.py, Steer), as a code
     due: float | None = field(default=None, compare=False, repr=False)
 
 

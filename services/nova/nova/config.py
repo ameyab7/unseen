@@ -140,6 +140,9 @@ class Settings:
     conversational_turns: bool = True
     full_rehearsal: bool = True
     live_bridges: bool = False
+    # Nova steps in when a conversation is going wrong, not only when it stops (decision
+    # 0013): off until a rehearsal with two people accepts it.
+    steering: bool = False
     conversation_overrun: float = 60.0
     left_participant: str = ""
     right_participant: str = ""
@@ -156,6 +159,7 @@ class Settings:
         "NOVA_CONVERSATIONAL_TURNS",
         "NOVA_FULL_REHEARSAL",
         "NOVA_LIVE_BRIDGES",
+        "NOVA_STEERING",
         "NOVA_CONVERSATION_OVERRUN_SECONDS",
         "NOVA_LEFT_PARTICIPANT",
         "NOVA_RIGHT_PARTICIPANT",
@@ -260,6 +264,7 @@ class Settings:
             ),
             full_rehearsal=_flag(env, "NOVA_FULL_REHEARSAL", default=cls.full_rehearsal),
             live_bridges=_flag(env, "NOVA_LIVE_BRIDGES", default=cls.live_bridges),
+            steering=_flag(env, "NOVA_STEERING", default=cls.steering),
             conversation_overrun=_seconds(
                 env, "NOVA_CONVERSATION_OVERRUN_SECONDS", cls.conversation_overrun
             ),

@@ -458,6 +458,7 @@ async def rehearse(ctx: JobContext) -> None:
             ),
             conversational=settings.conversational_turns,
             live_bridges=settings.live_bridges,
+            steering=settings.steering,
             input_streams=2 if settings.left_participant and settings.right_participant else 1,
             next_pair=NEXT_PAIR,
             live_timeout=settings.live_timeout,

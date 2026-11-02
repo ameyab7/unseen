@@ -94,8 +94,9 @@ NOVA_WORDS_A_SECOND = 2.5  # 150 words a minute
 ACTOR_TIMEOUT = 20.0
 NEAR_DUPLICATE = 0.7
 # Nova's lines that come during the conversation: these are what the indicators read.
-LIVE = frozenset({Moment.SILENCE, Moment.REPLY, Moment.FROM_THE_ROOM})
-UNASKED = frozenset({Moment.SILENCE, Moment.FROM_THE_ROOM})  # interventions nobody asked for
+LIVE = frozenset({Moment.SILENCE, Moment.REPLY, Moment.FROM_THE_ROOM, Moment.STEER})
+# Interventions nobody asked for: a step-in is one too (decision 0013).
+UNASKED = frozenset({Moment.SILENCE, Moment.FROM_THE_ROOM, Moment.STEER, Moment.ONE_AT_A_TIME})
 DISTRESS_ALERTS = frozenset({ModeratorAlert.DATER_DISTRESSED, ModeratorAlert.POSSIBLE_DISTRESS})
 # More invalid runs than this, and the machine was too busy for a comparison at all.
 MAX_INVALID = 1 / 3
@@ -259,8 +260,10 @@ class Driver:
         prep_parallel: int | None,
         distress_timeout: float,
         echo: Echo | None = None,
+        steering: bool = True,
     ) -> None:
-        """echo: each line as it's said, with what Nova's line was made of (--live)."""
+        """echo: each line as it's said, with what Nova's line was made of (--live).
+        steering: today's Nova steps in when the talk goes wrong (decision 0013)."""
         self.scenario, self.variant, self.seed = scenario, variant, seed
         self.echo = echo
         self._shown = {"lines": 0, "segments": 0, "cues": 0, "checks": 0}
@@ -292,6 +295,7 @@ class Driver:
             events=EventLog(logging.getLogger("nova.benchmark")),
             live_context=variant == CANDIDATE,
             conversational=variant == CANDIDATE,
+            steering=variant == CANDIDATE and steering,
             privacy=PrivacyPolicy.for_synthetic_data(),  # the benchmark's daters are made up
         )
         self.asked_nova = 0
@@ -559,6 +563,9 @@ class FullDriver(Driver):
         if moment is Moment.SILENCE:
             seat = self._named_first(line.text) or self._last_speaker.other
             return (Beat(seat, "answer what Nova just asked"),)
+        if moment in (Moment.STEER, Moment.ONE_AT_A_TIME):
+            seat = self._named_first(line.text) or self._last_speaker.other
+            return (Beat(seat, "answer what Nova just asked, or take the floor it gave you"),)
         return ()
 
     def _named_first(self, text: str) -> Seat | None:
@@ -819,6 +826,8 @@ def full_date_metrics(d: FullDriver) -> dict[str, float]:
         "kind_lines": float(sum(cue.moment is Moment.KEEP_IT_KIND for cue in says)),
         "show_pauses": float(sum(cue.moment is Moment.SHOW_PAUSE for cue in says)),
         "breathers": float(sum(kind == BREATHER for kind, _, _ in d.holds)),
+        # Nova stepping in although nobody went quiet (decision 0013): cued, said or not.
+        "steers": float(sum(cue.moment in (Moment.STEER, Moment.ONE_AT_A_TIME) for cue in says)),
         "reached_result": float(any(cue.moment is Moment.RESULT for cue in says)),
         "mutual": float(any(cue.text == script.RESULT_MUTUAL for cue in says)),
     }
@@ -829,7 +838,12 @@ def full_date_notes(d: FullDriver) -> tuple[str, ...]:
     order = " ".join(f"{segment}@{_clock(at)}" for segment, at in d.r.segments)
     fallbacks = [_made_of(line) for line in d.r.lines if line.source is Source.FALLBACK]
     holds = [f"hold: {kind} {_clock(since)}-{_clock(until)}" for kind, since, until in d.holds]
-    return (f"order: {order}", *holds, *(f"fallback: {why}" for why in fallbacks))
+    stepped = [
+        f"stepped in: {cue.steer or 'one_at_a_time'}"
+        for cue in d.r.cues
+        if isinstance(cue, Say) and cue.moment in (Moment.STEER, Moment.ONE_AT_A_TIME)
+    ]
+    return (f"order: {order}", *holds, *stepped, *(f"fallback: {why}" for why in fallbacks))
 
 
 def render_full_date(run: Run) -> str:
@@ -853,7 +867,8 @@ def render_full_date(run: Run) -> str:
         f"{m['check_ms_p95']:.0f} ms, worst {m['check_ms_worst']:.0f} ms, unchecked "
         f"{m['unchecked']:.0f}; moderator alerts {m['alerts']:.0f}",
         f"  Conduct: 'Let's keep it kind.' {m['kind_lines']:.0f}, show paused "
-        f"{m['show_pauses']:.0f}, breathers {m['breathers']:.0f}",
+        f"{m['show_pauses']:.0f}, breathers {m['breathers']:.0f}; Nova stepped in "
+        f"{m.get('steers', 0):.0f}",
         "  Gates: " + ("all passed" if not failed else "FAILED " + ", ".join(failed)),
     ]
     lines += [f"  {note}" for note in run.notes]
@@ -1028,6 +1043,7 @@ async def run_benchmark(
     prep_parallel: int | None,
     distress_timeout: float,
     echo: Echo | None = None,
+    steering: bool = True,
 ) -> list[Run]:
     """Every scenario, variant and seed, one after another, never two at once, so no run
     queues behind another on the model. The second version of a scenario and seed starts
@@ -1063,6 +1079,7 @@ async def run_benchmark(
                     prep_parallel=prep_parallel,
                     distress_timeout=distress_timeout,
                     echo=echo,
+                    steering=steering,
                 )
                 run = await driver.run(like=first)
                 runs.append(run)
@@ -1084,6 +1101,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--compare", nargs=2, type=Path, metavar=("BEFORE", "AFTER"))
     parser.add_argument("--full", action="store_true", help="whole dates, doors to result")
     parser.add_argument("--live", action="store_true", help="print each line as it's said")
+    parser.add_argument(
+        "--no-steering", action="store_true", help="today's Nova never steps in (decision 0013)"
+    )
     args = parser.parse_args(argv)
 
     if args.compare:
@@ -1115,6 +1135,7 @@ def main(argv: list[str] | None = None) -> int:
             prep_parallel=settings.prep_parallel,
             distress_timeout=settings.distress_timeout,
             echo=echo,
+            steering=not args.no_steering,
         )
 
     if echo is not None:

@@ -55,6 +55,7 @@ from nova.distress import Verdict, is_unmistakable
 from nova.floor import FINAL_LEAD, Floor, Move, asks_again, move, possible_completion
 from nova.guardrails import screen_question
 from nova.questions import AudienceQuestion
+from nova.steering import Steering
 from nova.timing import FULL, Timing
 
 # Segments where the daters are on air and can ask for a moment.
@@ -187,6 +188,17 @@ TURN_WAIT_CAP = 20.0
 # silence prompt back: the room is still hearing Nova ask, so nobody has been quiet yet. A
 # cap, so a line never reported done can't keep silence prompts away for the rest of a date.
 ASKING_CAP = 30.0
+# Stepping in although nobody went quiet (decision 0013, nova/steering.py), only: from a
+# minute into free talk, STEER_AFTER_NOVA after Nova last spoke, never with a beat due within
+# STEER_BEFORE_BEAT, after STEER_GAP of quiet, and while Nova's share of the last
+# STEER_AIRTIME_WINDOW seconds' airtime is at most STEER_AIRTIME.
+STEER_SETTLE = 60.0
+STEER_AFTER_NOVA = 45.0
+STEER_BEFORE_BEAT = 20.0
+STEER_GAP = 1.2
+STEER_AIRTIME_WINDOW = 180.0
+STEER_AIRTIME = 0.2
+OVERLAP_MIN = 0.5  # the other dater had been speaking this long: talking over, not a laugh
 # Only speech this long without a break is talked over: a TV the voice detector hears.
 SPEECH_CAP = 30.0
 # Conduct the moderator hears about at once, with nothing said on air (decision 0006).
@@ -257,6 +269,7 @@ class ShowRunner:
         rng: random.Random | None = None,
         paced: bool = False,
         conversational: bool = False,
+        steering: bool = False,
         observe: Callable[[TransitionSeen | FinalSeen], None] | None = None,
     ) -> None:
         """paced: whoever plays the cues reports each of Nova's lines as it finishes
@@ -328,6 +341,11 @@ class ShowRunner:
         self.conversation_delay = 0.0
         self._recovered_delay = 0.0
         self._turns_unfinished = 0  # turn lines cued that Nova hasn't finished saying
+        # Stepping in (decision 0013): off unless asked for (NOVA_STEERING).
+        self._steering = Steering() if steering else None
+        self._free_talk_at: float | None = None  # show time free talk first started
+        self._nova_done_at: float | None = None  # show time Nova last finished a line
+        self._airtime: deque[tuple[float, float, bool]] = deque(maxlen=64)  # wall, Nova?
         self._asking_since: float | None = None  # show time the latest turn line was cued
         self._turn_done_at: float | None = None  # wall time Nova last finished asking one
         self._last_turn_moment: Moment | None = None
@@ -424,7 +442,10 @@ class ShowRunner:
         audio) to heard_until (both now if not given). Paced, the dater asked in a turn
         line gets their answer window from then; conversational, a turn line never said
         owes nobody an answer, and the next turn doesn't wait for one."""
+        if said and heard_from is not None and heard_until is not None:
+            self._airtime.append((heard_from, heard_until, True))
         if said and self._live and self._held_since is None:
+            self._nova_done_at = self._show_time(now)
             # The room has just heard Nova: quiet counts from the end of its line (2026-11-02,
             # a silence prompt came straight after a room question still being said), and
             # the cooldown between silence prompts from when one was heard, not cued.
@@ -457,6 +478,12 @@ class ShowRunner:
         if len(self.floor.expected) == 1:
             return next(iter(self.floor.expected))
         return None
+
+    def turn_closed(self, now: float, seat: Seat, words: str, *, to_nova: bool = False) -> None:
+        """A dater's whole turn, once the listener closes it: what stepping in looks at
+        (decision 0013), as numbers and flags only, never kept as words."""
+        if self._steering is not None and self._live and self._held_since is None:
+            self._steering.heard(self._show_time(now), seat, words, to_nova=to_nova)
 
     def asks_again(self, now: float, seat: Seat, words: str) -> bool:
         """A dater Nova has just asked a question asks to hear it again ("Sorry, can you
@@ -518,7 +545,17 @@ class ShowRunner:
 
     def speech_started(self, now: float, seat: Seat) -> list[Cue]:
         """The voice detector hears a dater start speaking. Until they stop, a beat's lines
-        and sounds wait (up to timing.talk_over_grace), and no silence prompt comes."""
+        and sounds wait (up to timing.talk_over_grace), and no silence prompt comes. Starting
+        over the other dater, who's been going a while, is talking over them (decision
+        0013)."""
+        other = seat.other
+        if (
+            self._steering is not None
+            and self._live
+            and other in self._speaking
+            and now - self._seat_began.get(other, now) >= OVERLAP_MIN
+        ):
+            self._steering.overlap(self._show_time(now), other)
         if self.conversational:
             if self.held:
                 self.floor.revision += 1
@@ -542,6 +579,9 @@ class ShowRunner:
         """The voice detector hears a dater stop. The silence clock counts from now, and
         once nobody is speaking, anything that waited goes out, in order."""
         self._speaking.discard(seat)
+        began = self._seat_began.get(seat)
+        if began is not None:
+            self._airtime.append((began, now, False))
         self._speech_ended_at = self._stopped[seat] = now
         if not self._speaking:
             self._speech_since = None
@@ -772,6 +812,8 @@ class ShowRunner:
         request to stop. Maybe: the moderator is alerted. The check failed or was too slow:
         the moderator is alerted to listen in. No: nothing."""
         cues = self._due(now)
+        if verdict is not Verdict.NO and self._steering is not None and self.started:
+            self._steering.safety(self._show_time(now))  # the moderator's: Nova stays out
         match verdict:
             case Verdict.YES:
                 cues += self._wants_to_stop(now, seat)
@@ -810,6 +852,8 @@ class ShowRunner:
         0006 leaves that to the product owner."""
         cues = self._due(now)
         speaks = self._live and self._held_since is None and self.segment in ON_AIR
+        if conduct is not Conduct.NONE and self._steering is not None and self.started:
+            self._steering.safety(self._show_time(now))
         match conduct:
             case Conduct.PERSONAL_DETAIL:
                 cues.append(AlertModerator(ModeratorAlert.PERSONAL_DETAIL_ON_AIR, seat))
@@ -975,8 +1019,12 @@ class ShowRunner:
             shown = self._show_time(now)
             beat_at = self._beats[0].at if self._beats else math.inf
             silence_at = self._silence_due(now)
-            if min(beat_at, silence_at) > shown:
+            steer_at = self._steer_due(now, shown)
+            if min(beat_at, silence_at, steer_at) > shown:
                 break
+            if steer_at < min(beat_at, silence_at):
+                cues += self._step_in(now, shown)
+                continue
             if beat_at <= silence_at:
                 if (
                     self.conversational
@@ -1323,6 +1371,8 @@ class ShowRunner:
     def _enter(self, segment: Segment, at: float) -> list[Cue]:
         self.segment = segment
         self._quiet_since = at
+        if segment is Segment.FREE_TALK and self._free_talk_at is None:
+            self._free_talk_at = at
         if self.conversational and segment is Segment.FREE_TALK:
             # If an earlier turn ran long, recover it from this optional stretch.
             self._recover_slack(self._started_at + self._held + at)
@@ -1454,6 +1504,68 @@ class ShowRunner:
         if self._paced and self._turns_unfinished and self._asking_since is not None:
             due = max(due, self._asking_since + ASKING_CAP)  # Nova is still asking
         return due
+
+    def _steer_due(self, now: float, shown: float) -> float:
+        """When Nova steps in although nobody went quiet (decision 0013): only in free talk
+        and the room's questions, never in its first minute, within STEER_AFTER_NOVA of a
+        line of Nova's, while a question of Nova's is still being asked, while anyone speaks
+        or the floor holds, with a beat due soon, with a dater away, or once Nova has more
+        than STEER_AIRTIME of the recent airtime. Then after STEER_GAP of quiet."""
+        steering = self._steering
+        if steering is None or not self._live or self._held_since is not None:
+            return math.inf
+        if self.segment not in SILENCE_RULE or self._speaking or self._absent:
+            return math.inf
+        if self._away is not None or self._turns_unfinished or self._waiting:
+            return math.inf
+        if self._free_talk_at is None or shown < self._free_talk_at + STEER_SETTLE:
+            return math.inf
+        if self._nova_done_at is not None and shown < self._nova_done_at + STEER_AFTER_NOVA:
+            return math.inf
+        if self._last_nudge is not None and shown < self._last_nudge + STEER_AFTER_NOVA:
+            return math.inf
+        if self._beats and self._beats[0].at < shown + STEER_BEFORE_BEAT:
+            return math.inf
+        if self.conversational and self.floor.waiting(now):
+            return math.inf
+        if self._nova_airtime(now) > STEER_AIRTIME:
+            return math.inf
+        if steering.talking_over(shown) is None and steering.due(shown) is None:
+            return math.inf
+        return max(shown, self._quiet_since + STEER_GAP)
+
+    def _step_in(self, now: float, shown: float) -> list[Cue]:
+        """The step-in that's due: the brand book's line for talking over each other, or
+        one the line writer writes for this kind (nova/steering.py). It counts as a nudge, so
+        no silence prompt comes straight after it."""
+        steering = self._steering
+        assert steering is not None
+        self._last_nudge = shown
+        first = steering.talking_over(shown)
+        if first is not None:
+            steering.said_one_at_a_time(shown)
+            name = self._pair.card(first).first_name
+            line: list[Cue] = [Say(Moment.ONE_AT_A_TIME, text=script.one_at_a_time(name))]
+            return self._wait_for_speech(now, line)
+        found = steering.due(shown)
+        if found is None:
+            return []
+        steer, seat = found
+        steering.stepped_in(shown, steer)
+        return self._wait_for_speech(now, [Say(Moment.STEER, about=seat, steer=steer.value)])
+
+    def _nova_airtime(self, now: float) -> float:
+        """Nova's share of what the room heard over the last STEER_AIRTIME_WINDOW seconds:
+        its lines against the daters' speech, by time."""
+        since = now - STEER_AIRTIME_WINDOW
+        nova = daters = 0.0
+        for start, end, novas in self._airtime:
+            heard = max(0.0, min(end, now) - max(start, since))
+            if novas:
+                nova += heard
+            else:
+                daters += heard
+        return nova / (nova + daters) if nova + daters else 0.0
 
     def _nudge(self, at: float) -> list[Cue]:
         """An open prompt to both daters: nobody is singled out for being quiet. With one

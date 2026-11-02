@@ -13,6 +13,14 @@ from nova.text import plain
 RESULT_MUTUAL = "It's mutual. What happens next is theirs."
 KEEP_STREETS_OFF_AIR = "Let's keep street names off air. The story's better without them anyway."
 KEEP_IT_KIND = "Let's keep it kind."
+
+
+def one_at_a_time(first: str) -> str:
+    """The brand book's line for daters talking over each other (Nova on air): the name of
+    whoever was speaking first, from the card's first name."""
+    return f"One at a time. I want both of those stories. {first} first."
+
+
 SHOW_PAUSE = "We're taking a short pause."  # if an unkind remark happens again
 RESULT_NOT_MUTUAL = "They're keeping it unseen tonight. Two brave people and a good conversation."
 INVITATION = "If that sounded like your kind of night, there are seats this week."

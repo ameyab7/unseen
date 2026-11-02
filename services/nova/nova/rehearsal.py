@@ -287,6 +287,7 @@ class Rehearsal:
         clock: Callable[[], float] = time.monotonic,
         timing: Timing = REHEARSAL,
         conversational: bool = False,
+        steering: bool = False,
         live_bridges: bool = False,
         input_streams: int = 1,
         next_pair: Pair | None = None,
@@ -363,6 +364,7 @@ class Rehearsal:
             first_up=first_up,
             paced=True,  # every line is reported as it finishes (_speak, _stop)
             conversational=conversational,
+            steering=steering,  # stepping in although nobody went quiet (decision 0013)
             observe=self._observe,
         )
         self.timing = timing  # the running order's, for the report
@@ -1181,7 +1183,9 @@ class Rehearsal:
             closed = closed_at if kind is Kind.REPLY else None
             held = hold if cue.moment is Moment.REPLY else None
             item = _Pending(cue, kind, now, ends, line, held, closed)
-            if self._runner.conversational and (cue.moment is Moment.SILENCE or cue.bridge):
+            # Optional lines new speech voids: a silence prompt, a prefix, a step-in.
+            optional = cue.moment in (Moment.SILENCE, Moment.STEER, Moment.ONE_AT_A_TIME)
+            if self._runner.conversational and (optional or cue.bridge):
                 item.revision = self._runner.floor.revision
                 self._optional.append(item)
             elif self._runner.conversational and kind is Kind.REPLY and cue.moment is Moment.REPLY:

@@ -50,6 +50,9 @@ from nova.lines import LIVE_REACTIONS, SET_PIECES, Source
 from nova.quality import EITHER_OR, FINISH_THE_SENTENCE, ONE_WORD, form_problems, names_word
 
 EXPECTED = {
+    "an easy win for a dater putting themselves down",
+    "turning it round on the dater asking every question",
+    "moving on after a dater passed",
     "intro from a blind card",
     "first question from a blind card",
     "first question from a claim on the card",

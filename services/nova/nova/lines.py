@@ -76,12 +76,14 @@ SET_PIECES = frozenset(
         Moment.NEXT_UP,
     }
 )
-LIVE_REACTIONS = frozenset({Moment.SILENCE, Moment.FROM_THE_ROOM, Moment.ROOM_TALK, Moment.REPLY})
+LIVE_REACTIONS = frozenset(
+    {Moment.SILENCE, Moment.FROM_THE_ROOM, Moment.ROOM_TALK, Moment.REPLY, Moment.STEER}
+)
 # Live reactions kept in tonight's memory. Not audience questions or replies: their lines
 # carry what a listener or dater said, and the memory reaches every later date's prompts.
 REMEMBERED_LIVE = frozenset({Moment.SILENCE, Moment.ROOM_TALK})
 # Live reactions that see this date's context (decision 0008).
-WITH_THIS_DATE = frozenset({Moment.SILENCE, Moment.REPLY})
+WITH_THIS_DATE = frozenset({Moment.SILENCE, Moment.REPLY, Moment.STEER})
 # Questions an optional live prefix may lead into (decision 0012). Not a lightning question:
 # its one sentence leaves a prefix no room.
 BRIDGED = frozenset({Moment.FIRST_QUESTION, Moment.FROM_THE_ROOM, Moment.LAST_WORD})
@@ -96,6 +98,7 @@ ASKED_AGAIN = frozenset(
         Moment.LIGHTNING_QUESTION,
         Moment.LAST_WORD,
         Moment.SILENCE,
+        Moment.STEER,
     }
 )
 CANDIDATES = 3  # model lines written for each set piece; the best one is kept
@@ -803,6 +806,8 @@ class LineWriter:
                     # sign-off: docs/sign-off/2026-10-one-dater.md).
                     return ""
                 return script.from_the_room_fallback(pair)
+            case Moment.STEER:
+                return ""  # stepping in is optional: staying out is always safe (0013)
             case Moment.ROOM_TALK:
                 ended = say.room is not None and say.room.situation is Situation.ENDED_EARLY
                 if say.number is not None or ended:  # a hold's cover, or the close after one
@@ -885,6 +890,15 @@ class LineWriter:
                 shape = self._rng.choice(prompts.SILENCE_SHAPES)
                 return prompts.silence(
                     pair, tonight=tonight, this_date=this_date, segment=segment, shape=shape
+                )
+            case Moment.STEER:
+                return prompts.steer(
+                    pair,
+                    say.steer or "lighten",
+                    say.about,
+                    tonight=tonight,
+                    this_date=self._this_date(say),
+                    segment=self._segment,
                 )
             case Moment.FROM_THE_ROOM:
                 to = say.away.other if say.away is not None else None

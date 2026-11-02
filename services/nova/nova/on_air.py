@@ -514,6 +514,8 @@ class OnAirListener:
                 turn=None if capped else (words, to_nova),  # a capped one isn't whole
                 said=said,
             )
+        if not capped:  # a whole turn: what stepping in looks at (decision 0013)
+            runner.turn_closed(now, seat, words, to_nova=to_nova)
         if not capped and to_nova:  # one reply, to the whole utterance
             asked = runner.dater_asked_nova(now, seat, words, wants_to_stop=False, again=again)
             self._send(asked, ended, hold, now)

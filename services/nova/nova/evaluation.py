@@ -336,6 +336,39 @@ CASES: tuple[Case, ...] = (
             (Seat.RIGHT, "Mine came out flat for a year, I nearly gave up on baking."),
         ),
     ),
+    # Stepping in although nobody went quiet (decision 0013): never about what went wrong.
+    Case(
+        "an easy win for a dater putting themselves down",
+        Say(Moment.STEER, about=Seat.LEFT, steer="easy_win"),
+        must_mention_all=("Maya",),
+        must_not_mention=("sorry", "apolog", "nervous", "terrible at", "rambling"),
+        earlier_turns=(
+            (Seat.LEFT, "Sorry, I'm terrible at this, I always go blank."),
+            (Seat.RIGHT, "What do you think makes a person truly brave?"),
+            (Seat.LEFT, "Gosh, sorry, that's such a hard one, I'm rambling."),
+        ),
+    ),
+    Case(
+        "turning it round on the dater asking every question",
+        Say(Moment.STEER, about=Seat.RIGHT, steer="turn_around"),
+        must_mention_all=("Theo",),
+        must_not_mention=("so many questions", "lot of questions", "interview", "interrogat"),
+        earlier_turns=(
+            (Seat.RIGHT, "Do you think people ever really change?"),
+            (Seat.LEFT, "Maybe a little, over a long time."),
+            (Seat.RIGHT, "And is it fear or hope that makes them?"),
+        ),
+    ),
+    Case(
+        "moving on after a dater passed",
+        Say(Moment.STEER, steer="move_on"),
+        must_mention_all=("Maya", "Theo"),
+        must_not_mention=("work", "job", "office", "pass"),
+        earlier_turns=(
+            (Seat.LEFT, "So where do you work, exactly?"),
+            (Seat.RIGHT, "I'll pass on that one, if that's alright."),
+        ),
+    ),
     Case(
         # Nothing said earlier fits: no forced callback.
         "reply with nothing to call back to",
