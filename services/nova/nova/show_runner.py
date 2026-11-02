@@ -52,7 +52,7 @@ from nova.cues import (
 )
 from nova.decisions import DecisionDesk, Outcome
 from nova.distress import Verdict, is_unmistakable
-from nova.floor import FINAL_LEAD, Floor, Move, move, possible_completion
+from nova.floor import FINAL_LEAD, Floor, Move, asks_again, move, possible_completion
 from nova.guardrails import screen_question
 from nova.questions import AudienceQuestion
 from nova.timing import FULL, Timing
@@ -443,6 +443,16 @@ class ShowRunner:
             return next(iter(self.floor.expected))
         return None
 
+    def asks_again(self, now: float, seat: Seat, words: str) -> bool:
+        """A dater Nova has just asked a question asks to hear it again ("Sorry, can you
+        repeat that?"): words for Nova, though they don't name it. Conversational only, on
+        air, and only for a question the room heard put to them (Floor.just_asked)."""
+        if not self.conversational or not self._live or self.held:
+            return False
+        if not self.floor.just_asked(now, seat):
+            return False
+        return asks_again(words, other_name=self._pair.card(seat.other).first_name)
+
     def turn_words(self, now: float, seat: Seat, words: str, *, to_nova: bool = False) -> None:
         """Local floor hints on each transcript, before advancing the clock. No safety
         verdict is inferred here; the listener still checks exactly the same utterances."""
@@ -682,7 +692,13 @@ class ShowRunner:
         return cues
 
     def dater_asked_nova(
-        self, now: float, seat: Seat, words: str, *, wants_to_stop: bool | None = None
+        self,
+        now: float,
+        seat: Seat,
+        words: str,
+        *,
+        wants_to_stop: bool | None = None,
+        again: bool = False,
     ) -> list[Cue]:
         """A dater spoke to Nova on air. Their words are data for the reply, never
         instructions. Only while they're on air: not on a pause, not while deciding.
@@ -695,7 +711,9 @@ class ShowRunner:
         listener's instant layer heard in the whole utterance (nova/on_air.py), which
         decides; None hears words here. Anything else that needs a closer listen is checked
         for meaning outside the runner, and the verdict comes back through distress_check;
-        whoever runs the show holds the reply until then."""
+        whoever runs the show holds the reply until then. again: they asked to hear the
+        question again (asks_again), so it's still theirs to answer once Nova has said it,
+        even if something they said first ("Sorry,") was taken for an answer."""
         cues = self._due(now)
         if is_unmistakable(words) if wants_to_stop is None else wants_to_stop:
             return cues + self._wants_to_stop(now, seat)
@@ -707,7 +725,7 @@ class ShowRunner:
                     about=seat,
                     detail=words,
                     away=away,
-                    return_floor=self.conversational and seat in self.floor.expected,
+                    return_floor=self.conversational and (again or seat in self.floor.expected),
                 )
             )
         return cues

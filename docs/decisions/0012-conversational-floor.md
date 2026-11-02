@@ -439,3 +439,37 @@ check that only fixed synthetic examples are sent. `tests/test_bridges.py` cover
 - only the first sentence kept, and a repeated question said once;
 - only the turn just taken shown, and none when it was held back;
 - no model call where a question leaves no room, and no lightning question bridged.
+
+## Asked to hear the question again, 2026-11-01
+
+In the 2026-10-31 rehearsal a dater asked Nova to repeat its question and heard silence:
+words reach Nova's reply only when they name Nova (`on_air.addresses_nova`), and "Can you
+repeat the question?" doesn't. The product owner chose a narrow rule over a wider sense of
+being addressed (risk of Nova cutting into the daters' own conversation), with the model
+answering:
+
+- **The rule** (`floor.asks_again`): a sentence that is only a request to hear it again,
+  after at most a filler or Nova's name ("Sorry, can you repeat that?", "What was the
+  question?", "I didn't catch that.", "Sorry?"). Never a dater saying something again
+  themselves ("Let me say that again."), an apology ("Sorry."), or a request naming the
+  other dater ("Theo, say that again?"). Local English rules, no model request, no words
+  kept.
+- **Only from someone just asked** (`Floor.just_asked`, `ShowRunner.asks_again`): the room
+  heard Nova put a question to this dater (first question, room question, lightning
+  question, last word) at most `floor_wait` (20 s) ago, in conversational mode, on air and
+  not held. Anywhere else the words are the daters' own, as before.
+- **The model answers it**, as any words to Nova: the reply prompt already tells it to use
+  its recent question for a clarification. The reply hands the floor back, so the question
+  stays theirs to answer, even if a "Sorry," before the request was taken for an answer.
+  A reply that hands the floor back may not ask anything (the guardrails), so a model line
+  that simply asks the question again is rejected; then, or when the reply is late or
+  fails, Nova says the latest line it put to the daters, word for word, as the room heard
+  it (`LineWriter._said_again`). No new wording: it was approved or checked when first
+  said. Never instead of the kind line when the words might be distress, and never while
+  one dater is away, since the line may name them.
+
+Tests: `tests/test_floor.py` (what the rule hears and ignores, who was just asked),
+`tests/test_lines.py` (the word-for-word fallback, the latest question, the kind line and
+the dater away), `tests/test_conversation.py` (the reply without Nova's name, the fallback
+when the model fails, nothing for a request to the other dater or before any question, the
+20 s window, conversational mode only). Not yet heard in a rehearsal.

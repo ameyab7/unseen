@@ -91,6 +91,11 @@ class Settings:
     # serving one request at a time (OLLAMA_NUM_PARALLEL), more never prepared faster: set
     # it to match OLLAMA_NUM_PARALLEL.
     prep_parallel: int = 1
+    # How long Ollama keeps Nova's models in memory after a date ends (decision 0011): an
+    # hour, so a second rehearsal or the next date finds Gemma warm instead of loading it
+    # again (29 s on 2026-10-31). 0: never asked, and Ollama's own default applies. While it's
+    # loaded, Gemma holds most of the graphics card: `ollama stop <model>` frees it.
+    ollama_keep_alive: float = 3600.0
     # How long the distress check (decision 0005, the meaning layer) may take before the
     # moderator is alerted instead. A "yes" pauses the dater only once it arrives, so this
     # also bounds how late the kind line can come.
@@ -157,6 +162,7 @@ class Settings:
         "NOVA_WARM_UP_SECONDS",
         "NOVA_READY_RETRY_SECONDS",
         "NOVA_PREP_PARALLEL",
+        "NOVA_OLLAMA_KEEP_ALIVE_SECONDS",
         "NOVA_DISTRESS_TIMEOUT_SECONDS",
         "NOVA_UTTERANCE_GRACE_SECONDS",
         "NOVA_UTTERANCE_MAX_WAIT_SECONDS",
@@ -226,6 +232,9 @@ class Settings:
             warm_up=_seconds(env, "NOVA_WARM_UP_SECONDS", cls.warm_up),
             ready_retry=_seconds(env, "NOVA_READY_RETRY_SECONDS", cls.ready_retry),
             prep_parallel=_count(env, "NOVA_PREP_PARALLEL", cls.prep_parallel),
+            ollama_keep_alive=_seconds(
+                env, "NOVA_OLLAMA_KEEP_ALIVE_SECONDS", cls.ollama_keep_alive, zero=True
+            ),
             distress_timeout=_seconds(env, "NOVA_DISTRESS_TIMEOUT_SECONDS", cls.distress_timeout),
             utterance_grace=grace,
             utterance_max_wait=max_wait,
@@ -293,7 +302,8 @@ def _count(env: Mapping[str, str], name: str, default: int) -> int:
     return int(raw)
 
 
-def _seconds(env: Mapping[str, str], name: str, default: float) -> float:
+def _seconds(env: Mapping[str, str], name: str, default: float, *, zero: bool = False) -> float:
+    """zero: 0 is allowed too (a setting that 0 turns off)."""
     raw = env.get(name, "").strip()
     if not raw:
         return default
@@ -301,8 +311,9 @@ def _seconds(env: Mapping[str, str], name: str, default: float) -> float:
         value = float(raw)
     except ValueError:
         value = math.nan
-    if not math.isfinite(value) or value <= 0:
-        raise ConfigError(f"{name} must be a positive number of seconds")
+    if not math.isfinite(value) or value < 0 or (value == 0 and not zero):
+        kind = "zero or a positive" if zero else "a positive"
+        raise ConfigError(f"{name} must be {kind} number of seconds")
     return value
 
 

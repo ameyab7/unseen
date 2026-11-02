@@ -134,3 +134,34 @@ Findings:
   shorter `NOVA_READY_RETRY_SECONDS` brings it sooner.
 - The classifier is unchanged: no new infrastructure in this change. Isolating it is still
   the product owner's choice (decision 0005, "The classifier's slot").
+
+## Getting ready faster, 2026-11-01
+
+The first conversational rehearsal (2026-10-31) took 29.1 s to load Gemma, then ran out of
+the 20 s prep budget: 6 of 10 set pieces were fallbacks, among them the right-hand dater's
+first question. The product owner approved two changes:
+
+- **Set pieces in running order.** With `NOVA_PREP_PARALLEL` limiting the requests in flight
+  (1 by default), the free slot used to go to whichever request arrived first. Every
+  moment's first candidates arrived together, and a piece's meaning check, or the second
+  piece of a moment, queued behind all of them: the right-hand first question waited
+  behind the lightning round, the last words, the outro and Next up. Now the slot goes to
+  the waiting request whose piece comes first in the running order (`nova/priority.py`,
+  `Slots`), so the opening and both first questions are written, candidates and meaning
+  checks, before anything later. The budget, the candidates and the checks are unchanged;
+  only the order is. When the budget runs out, the fallbacks fall on the pieces needed
+  last. Pieces still missing are never written during the date: on one Ollama they would
+  queue in front of the safety checks.
+- **Gemma kept loaded between dates.** After each date, however it ends, the agent asks
+  Ollama to keep its models in memory for `NOVA_OLLAMA_KEEP_ALIVE_SECONDS` (default 3600;
+  0 turns it off), so the next rehearsal or date finds Gemma warm (`models.keep_loaded`). It
+  goes through Ollama's own API (`/api/generate`, the model's name and a keep-alive, no
+  prompt), because its OpenAI-compatible API takes no keep-alive and a request there may
+  set the time back to Ollama's default. It carries no text of any kind, so no data flow
+  changes (decision 0010). A failure is only counted and logged as a number: the next
+  warm-up loads the model anyway. While loaded, Gemma holds most of the 16 GB graphics card;
+  `ollama stop <model>` frees it.
+
+Not measured yet: neither change has run against the real model or in a rehearsal. The
+benchmark's prep timings (`uv run python -m nova.benchmark`) and the next rehearsal's
+report say whether fewer set pieces fall back.

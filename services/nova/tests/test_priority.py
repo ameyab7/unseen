@@ -3,12 +3,16 @@ out of time sent once, never again (decision 0005). Fake models, a real event lo
 
 import asyncio
 
+from nova import running_order
+from nova.cards import Seat
 from nova.cues import Moment, Say
 from nova.distress import CheckError, DistressCheck
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
 from nova.lines import ErrorKind, LineWriter, Source
-from nova.priority import SafetyFirst
+from nova.priority import SafetyFirst, Slots
 from nova.rehearsal import Rehearsal
+
+LEFT, RIGHT = Seat.LEFT, Seat.RIGHT
 
 
 class Slot:
@@ -152,3 +156,82 @@ async def test_set_pieces_that_run_out_of_budget_are_never_asked_for_again():
     sent = model.writes
     await asyncio.sleep(0.05)
     assert model.writes == sent, "nothing more after the budget"
+
+
+# --- Set pieces in running order (decision 0011) -----------------------------------------
+
+
+async def test_the_next_free_slot_goes_to_the_lowest_priority_number_then_the_earliest():
+    slots, ran = Slots(1), []
+    holding = asyncio.Event()
+
+    async def take(name: str, priority: int) -> None:
+        async with slots.slot(priority):
+            ran.append(name)
+            await holding.wait()
+
+    first = asyncio.create_task(take("first", 5))
+    await asyncio.sleep(0)
+    waiters = [
+        asyncio.create_task(take(name, priority))
+        for name, priority in (("late", 9), ("soon", 1), ("also soon", 1), ("middle", 4))
+    ]
+    await asyncio.sleep(0)
+    holding.set()
+    await asyncio.gather(first, *waiters)
+    assert ran == ["first", "soon", "also soon", "middle", "late"]
+
+
+async def test_a_waiter_cancelled_never_holds_a_slot_and_one_cancelled_as_granted_passes_it_on():
+    slots, ran = Slots(1), []
+    release = asyncio.Event()
+
+    async def take(name: str) -> None:
+        async with slots.slot():
+            ran.append(name)
+            await release.wait()
+
+    holder = asyncio.create_task(take("holder"))
+    await asyncio.sleep(0)
+    gone, granted_then_cancelled, last = (asyncio.create_task(take(n)) for n in "abc")
+    await asyncio.sleep(0)
+    gone.cancel()
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.sleep(0)  # the holder finishes and hands the slot to b, which hasn't run
+    assert holder.done() and not granted_then_cancelled.done()
+    granted_then_cancelled.cancel()
+    await asyncio.gather(gone, granted_then_cancelled, return_exceptions=True)
+    await asyncio.wait_for(last, 1)
+    assert ran == ["holder", "c"]
+    async with slots.slot():  # and the slot is free again
+        pass
+
+
+async def test_with_one_slot_set_pieces_are_written_in_running_order():
+    """Arrival order once queued the second first question behind every later moment's
+    first request (rehearsal, 2026-10-31)."""
+    model = Slot(takes=0.001)
+    w = LineWriter(model, REHEARSAL_PAIR, next_pair=NEXT_PAIR, prep_parallel=1)
+    await w.prepare()
+    order = [say.moment for say in running_order.set_pieces(REHEARSAL_PAIR, NEXT_PAIR)]
+    assert [selection.moment for selection in w.selections] == order
+
+
+async def test_when_the_budget_runs_out_the_opening_and_first_questions_are_the_models():
+    """Each request takes 0.05 s, three candidates a piece, one at a time: 0.75 s covers the
+    first three pieces with room to spare, never the outro or Next up."""
+    model = Slot(takes=0.05)
+    w = LineWriter(model, REHEARSAL_PAIR, next_pair=NEXT_PAIR, prep_parallel=1, prep_budget=0.75)
+    await w.prepare()
+    pieces = running_order.set_pieces(REHEARSAL_PAIR, NEXT_PAIR)
+    lines = {
+        say.moment if say.about is None else (say.moment, say.about): await w.line_for(say)
+        for say in pieces
+    }
+    assert w.budget_exhausted
+    assert lines[Moment.DOORS_INTRO].source is Source.PREPARED
+    for seat in (LEFT, RIGHT):
+        assert lines[(Moment.FIRST_QUESTION, seat)].source is Source.PREPARED
+    assert lines[Moment.OUTRO].source is Source.FALLBACK
+    assert lines[Moment.NEXT_UP].source is Source.FALLBACK

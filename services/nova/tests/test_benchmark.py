@@ -3,6 +3,7 @@ These check the benchmark itself (the runs, the metrics, the gates, the report);
 real model does in the scenarios is the benchmark's own on-demand run."""
 
 import asyncio
+import dataclasses
 import json
 import logging
 import re
@@ -26,7 +27,7 @@ from nova.benchmark import (
     write_packet,
 )
 from nova.cards import Seat
-from nova.scenarios import DEVELOPMENT, SCENARIOS
+from nova.scenarios import DEVELOPMENT, FULL_DATES, REACT, SCENARIOS, Beat
 
 BY_NAME = {s.name: s for s in (*SCENARIOS, *DEVELOPMENT)}
 UNKIND = "That has to be the most boring hobby anyone's ever had."
@@ -112,7 +113,14 @@ class Actor:
 
 
 async def bench(
-    scenarios=SCENARIOS, *, seeds=1, variants=VARIANTS, nova=None, check=None, timeout=1.0
+    scenarios=SCENARIOS,
+    *,
+    seeds=1,
+    variants=VARIANTS,
+    nova=None,
+    check=None,
+    timeout=1.0,
+    echo=None,
 ):
     return await run_benchmark(
         scenarios,
@@ -126,6 +134,7 @@ async def bench(
         prep_budget=5.0,
         prep_parallel=None,
         distress_timeout=timeout,
+        echo=echo,
     )
 
 
@@ -288,6 +297,8 @@ def test_every_scenario_is_made_up_and_says_what_it_looks_for(scenario):
         or expect.avoid
         or expect.max_words is not None
         or expect.openings_vary
+        or bool(expect.never)
+        or expect.asked_again
     )
     assert looks_for, "a scenario that checks nothing measures nothing"
 
@@ -458,3 +469,112 @@ async def test_echoing_the_sentence_answered_or_the_cards_is_no_callback_and_no_
     assert all(run.valid for run in runs)
     assert all(run.metrics["callback_rate"] == 0.0 for run in runs)
     assert all(run.metrics["link_rate"] == 0.0 for run in runs)
+
+
+# --- Full dates and the 2026-10-31 observations (decision 0009, 2026-11-01) -------------
+
+
+async def test_a_full_date_runs_from_the_doors_to_the_result_both_ways():
+    runs = await bench(FULL_DATES)
+    assert len(runs) == 2 * len(FULL_DATES)
+    assert all(run.valid for run in runs), [(r.scenario, r.invalid) for r in runs if r.invalid]
+    assert gate_failures([run.numbers() for run in runs]) == []
+    for run in runs:
+        date = next(d for d in FULL_DATES if d.name == run.scenario)
+        assert run.metrics["reached_result"] == 1.0, run.scenario
+        mutual = all(choice == "reveal" for choice in date.choices.values())
+        assert run.metrics["mutual"] == float(mutual)
+        segments = run.notes[0]
+        for segment in ("doors", "first_question", "free_talk", "from_the_room", "time"):
+            assert segment in segments, (run.scenario, segments)
+        assert ("lightning_round" in segments) is date.unlock
+        assert run.metrics["real_s"] >= 0 and run.metrics["date_s"] > 400, "a whole date"
+
+
+async def test_every_turn_nova_gives_a_dater_on_a_full_date_is_answered():
+    """The room's question by both daters, each quick-fire question by both, each last
+    word by the dater it's for: whoever Nova hands the floor to speaks next."""
+    [run] = await bench(FULL_DATES[:1], variants=(CANDIDATE,))
+    said = run.said
+    names = {"Esme", "Rory"}
+    for k, (who, _) in enumerate(said):
+        if who == "Nova" and k + 1 < len(said) and said[k + 1][0] != "Nova":
+            assert said[k + 1][0] in names
+    turns = [text for who, text in said if who == "Rory"]
+    assert turns[0] == "Sorry, what was the question?", "asked again, without naming Nova"
+    assert run.gates["every_word_to_nova_answered"]
+
+
+async def test_live_shows_each_line_as_it_is_said_and_never_a_decision():
+    shown: list[str] = []
+    await bench(FULL_DATES[1:2], variants=(CANDIDATE,), echo=shown.append)
+    text = "\n".join(shown)
+    assert "--- The doors (0:00) ---" in text and "--- The decision window" in text
+    assert "  Nova: " in text and "[doors_intro | " in text
+    assert "  Niko: " in text and "  Talia: " in text
+    assert "Niko has decided, privately" in text and "Talia has decided, privately" in text
+    decided = [line for line in shown if "decided" in line]
+    assert not any(word in line for line in decided for word in ("reveal", "unseen"))
+    assert "=== boundary_tester (candidate, seed 1)" in text, "and each date's report after it"
+    assert "Safety checks:" in text and "Result: not mutual" in text
+
+
+async def test_a_full_dates_results_hold_numbers_codes_and_ids_never_words():
+    runs = await bench(FULL_DATES[2:], variants=(CANDIDATE,))
+    stored = json.dumps([run.numbers() for run in runs])
+    for _, text in runs[0].said:
+        assert text not in stored
+    assert all(note.startswith(("order: ", "hold: ", "fallback: ")) for note in runs[0].notes)
+
+
+async def test_a_full_date_packet_pairs_both_versions_of_each_date(tmp_path):
+    runs = await bench(FULL_DATES[:1])
+    write_packet(runs, tmp_path)
+    assert (tmp_path / "for-raters" / "packet.md").exists()
+    assert set(json.loads((tmp_path / "dialogues.json").read_text(encoding="utf-8"))) == {
+        "rambler_and_deadpan-1"
+    }
+
+
+async def test_a_dater_who_asks_again_without_naming_nova_is_answered():
+    """Only the conversational floor knows who Nova just asked (decision 0012): the gate is
+    the candidate's; the baseline never counts the request as words to Nova."""
+    runs = await bench([BY_NAME["asks_again"]])
+    candidate = next(run for run in runs if run.variant == CANDIDATE)
+    baseline = next(run for run in runs if run.variant == BASELINE)
+    assert candidate.gates["answers_asked_again"]
+    assert "answers_asked_again" not in baseline.gates
+    assert ["Cal", "Sorry, can you repeat the question?"] in [list(s) for s in candidate.said]
+
+
+async def test_a_pause_mid_thought_is_two_stretches_of_speech_with_quiet_between():
+    [run] = await bench([BY_NAME["mid_thought_pause"]], variants=(CANDIDATE,))
+    said = [text for who, text in run.said if who == "Gus"]
+    first = said.index("So the reason I took up rowing, and this will sound strange, is because")
+    assert said[first + 1] == "my grandad rowed the same river every Sunday until he was ninety."
+    assert run.gates["stays_out"]
+
+
+def test_full_dates_use_their_own_made_up_daters():
+    others = {c.first_name for s in (*SCENARIOS, *DEVELOPMENT) for c in (s.pair.left, s.pair.right)}
+    for date in FULL_DATES:
+        assert date.about and date.talk and date.questions
+        assert {date.pair.left.first_name, date.pair.right.first_name}.isdisjoint(others)
+        assert set(date.choices) == set(Seat) and set(date.choices.values()) <= {
+            "reveal",
+            "unseen",
+        }
+
+
+async def test_a_show_paused_for_conduct_is_resumed_by_the_moderator_and_the_date_goes_on():
+    """The real show waits for a person (decision 0006); the full date's moderator resumes
+    it, the daters quiet meanwhile, so the date still reaches its result."""
+    date = dataclasses.replace(
+        FULL_DATES[0],
+        name="two_put_downs",
+        talk=(Beat(Seat.LEFT, line=UNKIND), Beat(Seat.RIGHT, REACT), Beat(Seat.LEFT, line=UNKIND)),
+    )
+    [run] = await bench([date], variants=(CANDIDATE,))
+    assert run.metrics["kind_lines"] == 1 and run.metrics["show_pauses"] == 1
+    assert run.metrics["reached_result"] == 1.0
+    assert any(note.startswith("hold: show_pause") for note in run.notes)

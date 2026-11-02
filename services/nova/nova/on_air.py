@@ -266,7 +266,10 @@ class OnAirListener:
             utterance = dater.utterance = _Utterance(started=now, last_final=now)
         utterance.words.append(text)
         utterance.last_final = now
-        self._runner.turn_words(now, seat, utterance.text, to_nova=addresses_nova(*utterance.words))
+        to_nova = addresses_nova(*utterance.words) or self._runner.asks_again(
+            now, seat, utterance.text
+        )
+        self._runner.turn_words(now, seat, utterance.text, to_nova=to_nova)
         self._listener.remember(now, seat, text)
         if self._listener.unmistakable(now, seat, utterance.words) is None:
             self._unmatched(now, seat, utterance)
@@ -415,7 +418,9 @@ class OnAirListener:
         if self._listener.unmistakable(now, seat, utterance.words, loose=True) is not None:
             self._possible_request(now, seat, utterance)
         hold: asyncio.Future[ReplyAction] | None = None
-        to_nova = addresses_nova(*utterance.words)
+        # A request to hear Nova's question again is for Nova, its name or not (decision 0012).
+        again = runner.asks_again(now, seat, words)
+        to_nova = addresses_nova(*utterance.words) or again
         if hearing.check is not None:
             hold = asyncio.get_running_loop().create_future()
             self._act_later(
@@ -429,7 +434,7 @@ class OnAirListener:
                 turn=None if capped else (words, to_nova),  # a capped one isn't whole
             )
         if not capped and to_nova:  # one reply, to the whole utterance
-            asked = runner.dater_asked_nova(now, seat, words, wants_to_stop=False)
+            asked = runner.dater_asked_nova(now, seat, words, wants_to_stop=False, again=again)
             self._send(asked, ended, hold, now)
 
     def _recheck(self, now: float, seat: Seat, dater: _Dater, utterance: _Utterance) -> None:

@@ -259,6 +259,59 @@ async def test_the_kind_line_is_said_whatever_either_dater_says_after_it():
     r.close()
 
 
+async def test_a_dater_asking_to_hear_the_question_again_is_answered_without_naming_nova():
+    clock = Clock()
+    r = await asked_first(clock)
+    await to_nova(r, clock, LEFT, "Sorry, can you repeat the question?")
+    await r.speak_queued()
+    assert len(replies(r)) == 1
+    floor = r._runner.floor
+    assert floor.expected == {LEFT}, "and the question is still Maya's to answer"
+    r.close()
+
+
+async def test_if_that_reply_fails_the_dater_hears_the_question_again_word_for_word():
+    clock = Clock()
+    model = FakeModel()
+    r = await asked_first(clock, model=model)
+    asked = [line.text for line in r.lines if line.moment is Moment.FIRST_QUESTION]
+    model.write_error = RuntimeError("the model is down")
+    await to_nova(r, clock, LEFT, "What was the question?")
+    await r.speak_queued()
+    assert replies(r) == asked[-1:]
+    r.close()
+
+
+async def test_a_repeat_request_for_the_other_dater_or_before_any_question_gets_no_reply():
+    clock = Clock()
+    r = await asked_first(clock)
+    await to_nova(r, clock, LEFT, "Theo, can you say that again?")
+    await r.speak_queued()
+    assert replies(r) == [], "Maya asked Theo, not Nova"
+    r.close()
+    clock = Clock()
+    r = rehearsal(clock)
+    r.start()
+    await r.speak_queued()
+    clock.now = 10
+    await to_nova(r, clock, LEFT, "Can you repeat that?")
+    await r.speak_queued()
+    assert replies(r) == [], "nobody has been asked anything yet"
+    r.close()
+
+
+def test_a_repeat_request_is_for_nova_only_from_someone_just_asked():
+    show = first_question()  # Maya's first question, heard at 48 s
+    runner = show.runner
+    assert runner.asks_again(49, LEFT, "Sorry, can you repeat that?")
+    assert not runner.asks_again(49, RIGHT, "Sorry, can you repeat that?"), "Theo wasn't asked"
+    assert not runner.asks_again(49, LEFT, "Let me say that again.")
+    assert not runner.asks_again(48 + FULL.floor_wait + 0.5, LEFT, "Can you repeat that?")
+    legacy = Show(paced=True, conversational=False)
+    legacy.until(48)
+    assert not legacy.runner.asks_again(49, LEFT, "Can you repeat that?"), "conversational only"
+
+
 async def test_a_reply_the_other_dater_talks_over_is_dropped_never_said_over_them():
     clock = Clock()
     r = await asked_first(clock)

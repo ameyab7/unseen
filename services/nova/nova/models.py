@@ -9,8 +9,10 @@ load aborts the load too, which is why the warm-up holds one request for its who
 """
 
 import asyncio
+import json
 import time
-from collections.abc import Mapping, Sequence
+import urllib.request
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
@@ -47,6 +49,26 @@ class LineModel(Protocol):
         ...
 
 
+# How long asking Ollama to keep a model loaded may take. The model is loaded already when
+# it's asked, after a date's last request, so this is only a request's round trip.
+KEEP_LOADED_TIMEOUT = 10.0
+
+type Post = Callable[[str, bytes, float], Awaitable[None]]
+
+
+async def _post_json(url: str, body: bytes, timeout: float) -> None:
+    """POSTs a JSON body and reads the answer, in a thread (the standard library's client)."""
+
+    def send() -> None:
+        request = urllib.request.Request(
+            url, data=body, headers={"Content-Type": "application/json"}, method="POST"
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            response.read()
+
+    await asyncio.to_thread(send)
+
+
 class OllamaModel:
     """A local model (development: Gemma) through Ollama's OpenAI-compatible API.
 
@@ -58,7 +80,12 @@ class OllamaModel:
     LABEL_TOKENS = 32  # room for a small JSON object, not just a word
 
     def __init__(
-        self, model: str, *, base_url: str = "http://localhost:11434", client: Any = None
+        self,
+        model: str,
+        *,
+        base_url: str = "http://localhost:11434",
+        client: Any = None,
+        post: Post | None = None,
     ) -> None:
         self.name = f"ollama/{model}"
         self.endpoint = base_url  # where requests go: local or not (nova/privacy.py)
@@ -66,6 +93,19 @@ class OllamaModel:
         self._client = client or AsyncOpenAI(
             base_url=f"{base_url.rstrip('/')}/v1", api_key="ollama", max_retries=0
         )
+        self._post = post or _post_json
+
+    async def keep_loaded(self, seconds: float) -> None:
+        """Asks Ollama to keep this model in memory for `seconds` from now, so the next date
+        (or rehearsal) finds it warm instead of waiting about 30 s for it to load (decision
+        0011). No prompt and no text: only the model's name, through Ollama's own API, which
+        loads a model sent no prompt and writes nothing. Its OpenAI-compatible API takes no
+        keep-alive, and a request there may set the model's time back to Ollama's default
+        (5 minutes, unless OLLAMA_KEEP_ALIVE says otherwise), so this goes after a date's
+        last request."""
+        body = json.dumps({"model": self._model, "keep_alive": f"{int(seconds)}s"})
+        url = f"{self.endpoint.rstrip('/')}/api/generate"
+        await self._post(url, body.encode("utf-8"), KEEP_LOADED_TIMEOUT)
 
     async def write(self, *, system: str, prompt: str) -> str:
         return await self._complete(system, prompt, max_tokens=self.MAX_TOKENS, temperature=0.8)
@@ -260,6 +300,28 @@ async def warm_up(
             else:
                 error = WarmUpError.REJECTED if _rejected(caught) else WarmUpError.ERROR
         return Warmed(ms_since(started), error, tried)
+
+
+async def keep_loaded(models: Sequence[Any], seconds: float) -> tuple[int, int]:
+    """Asks each Ollama model among these (guarded or not, each once) to stay in memory for
+    `seconds` (NOVA_OLLAMA_KEEP_ALIVE_SECONDS; 0: never asked). Any other model is skipped.
+    A failure is only counted: the next warm-up loads the model anyway. Returns how many
+    were kept and how many failed."""
+    kept = failed = 0
+    if seconds <= 0:
+        return kept, failed
+    seen: set[tuple[str, str]] = set()
+    for model in models:
+        inner = getattr(model, "inner", model)  # a guarded model (nova/privacy.py)
+        if not isinstance(inner, OllamaModel) or (inner.endpoint, inner.name) in seen:
+            continue
+        seen.add((inner.endpoint, inner.name))
+        try:
+            await inner.keep_loaded(seconds)
+            kept += 1
+        except Exception:  # unreachable, refused, timed out: the next warm-up loads it
+            failed += 1
+    return kept, failed
 
 
 def build_model(settings: Settings, choice: LlmChoice | None = None) -> LineModel:

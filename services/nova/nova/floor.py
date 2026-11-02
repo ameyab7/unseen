@@ -67,6 +67,38 @@ _COMPLETION = re.compile(
 )
 
 
+# A request to hear Nova's question again: "Can you repeat that?", "What was the question?",
+# "Sorry, I didn't catch that." Only a request, never a dater saying something again
+# themselves ("Let me say that again."). The whole sentence, after at most a filler or
+# Nova's name. "Sorry?" or "Pardon?" alone only as a question: "Sorry." is an apology.
+_FILLERS = r"(?:(?:sorry|um|uh|oh|okay|ok|wait|so|nova|please|hey|hi)[, ]+)*"
+_AGAIN = re.compile(
+    rf"^{_FILLERS}(?:"
+    r"(?:(?:can|could|would|will) you (?:please )?)?"
+    r"(?:repeat(?: (?:that|it|the question|your question|the last bit))?"
+    r"|(?:say|ask) (?:that|it|the question|your question|the last bit))"
+    r"(?: (?:again|one more time))?"
+    r"|what was the question(?: again)?|what(?:'s| is) the question(?: again)?"
+    r"|come again|say again"
+    r"|i didn(?:'t| not) (?:catch|hear|get) (?:that|it|the question|what you said)"
+    r")(?:[, ]+(?:sorry|please|nova))*[.?!]*$"
+    r"|^(?:sorry|pardon(?: me)?)(?:[, ]+nova)?\?+$",
+    re.IGNORECASE,
+)
+_SENTENCES = re.compile(r"[^.?!]+[.?!]*")
+
+
+def asks_again(words: str, *, other_name: str) -> bool:
+    """A dater asks for Nova's question again, in one sentence of their own: "Sorry, can you
+    repeat that?". Never when it names the other dater ("Theo, say that again?"), who would
+    be the one asked. Whether Nova has just asked them anything is the Floor's to say
+    (Floor.just_asked); this only reads the words."""
+    text = plain(words).strip()
+    if re.search(rf"\b{re.escape(other_name)}\b", text, re.IGNORECASE):
+        return False
+    return any(_AGAIN.match(s.strip()) for s in _SENTENCES.findall(text))
+
+
 def possible_completion(words: str) -> bool:
     """The utterance ends on a closing phrase ("That's about it for me."): possibly, never
     certainly, the end of the thought. A phrase with more words after it doesn't count."""
@@ -101,6 +133,9 @@ class Floor:
     wait: float = 20.0
     revision: int = 0
     expected: set[Seat] = field(default_factory=set)
+    # Who the question was put to, answered or not: someone who said "Sorry," first and
+    # then asked for it again was still asked it.
+    asked_of: set[Seat] = field(default_factory=set)
     holder: Seat | None = None
     handover: Seat | None = None
     clarifying: Seat | None = None
@@ -132,6 +167,7 @@ class Floor:
         self.clear()
         self.active = True
         self.expected = set(seats)
+        self.asked_of = set(seats)
 
     def asked(
         self, now: float, *, heard_from: float | None = None, heard_until: float | None = None
@@ -147,9 +183,17 @@ class Floor:
                 self.expected.discard(seat)
         self.early.clear()
 
+    def just_asked(self, now: float, seat: Seat) -> bool:
+        """The room heard Nova put a question to this dater, at most `wait` ago: a request
+        to hear it again (asks_again) is for Nova, not the other dater."""
+        if not self.active or self.window is None or seat not in self.asked_of:
+            return False
+        return now <= self.window[1] + self.wait
+
     def withdrawn(self) -> None:
         """The question was never said, or not all of it (dropped, stopped for a pause,
         superseded): nobody owes it an answer, so nothing waits for one."""
+        self.asked_of.clear()
         self.expected.clear()
         self.window = None
         self.early.clear()
@@ -253,6 +297,7 @@ class Floor:
     def clear(self) -> None:
         self.revision += 1
         self.expected.clear()
+        self.asked_of.clear()
         self.holder = self.handover = self.clarifying = None
         self.last_move = Move.UNKNOWN
         self.since = None

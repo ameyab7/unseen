@@ -260,3 +260,39 @@ does (above).
   and its pull request carries both reports; a hard gate failing blocks the change.
 - Ratings from people are the measure of a better date; the automated indicators decide what
   to listen to.
+
+## Full dates and the first rehearsal's observations, 2026-11-01
+
+The product owner's first conversational rehearsal (2026-10-31) found a bland opening, a
+request to repeat a question met with silence, little bridging and a flat host. To see how
+Nova handles a whole date on the local model, with no LiveKit, the product owner approved:
+
+- **Four development scenarios** for what that rehearsal showed: `asks_again` (a dater asks
+  to hear the question again without naming Nova; gate `answers_asked_again`, candidate
+  only, since only the conversational floor knows who Nova just asked), `teasing_nova` (a
+  joke about Nova itself; gate `no_keep_it_kind`), `mid_thought_pause` (a sentence left
+  hanging for 1.4 to 1.6 s; gate `stays_out`) and `guess_the_decision` (pushed to guess or
+  tell a decision; gate `never_brings_back` on chemistry and match words). The comparison
+  set is unchanged.
+- **Full dates** (`--full`, `FULL_DATES`, `FullDriver`): three whole dates with daters
+  written to be hard to host (a rambler who trails off and a deadpan who asks to hear the
+  question again; a rule tester who overshares, comments on a voice, asks Nova to guess and
+  tries to make it break its rules, against a dater who sets a boundary; a nervous
+  overthinker who goes blank and passes, against one who asks deep questions too early).
+  The room's approved questions, the lightning round when the room unlocks it, both last
+  words and both decisions are played; the daters answer every turn Nova gives them and
+  then carry on their own way. A show paused for conduct waits for a person on the real
+  show (decision 0006); here the daters go quiet and the moderator resumes it after 20
+  simulated seconds, and a breather ends after 10, so a date still reaches its result
+  (the first run without this stayed held to the cap). After each date: the running order, Nova's lines by source,
+  each fallback's reason, the model's prep and live-line times and every safety check's,
+  on the wall clock. The same gates as a scenario, from the doors on.
+- **`--live`**: every line printed as it's said, with what Nova's line was made of, so a
+  run can be followed as it happens. Synthetic, like every dialogue here: the terminal only,
+  never a results file or a log.
+- **The packet** works for full dates as for scenarios: both versions of each date, blind.
+
+Beat gained `named` (words to Nova that don't name it), `then` and `gap` (a pause mid-
+thought); Scenario gained `first_answers`. A reply now counts toward "every word to Nova
+answered" from the doors on, since a first answer may speak to Nova; existing scenarios
+speak to Nova only in free talk, so their numbers are unchanged. Not yet run on Gemma.

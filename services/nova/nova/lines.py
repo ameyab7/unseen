@@ -40,6 +40,7 @@ from nova.cues import Moment, RoomFacts, Say, Segment, Situation
 from nova.date_context import DateContext
 from nova.distress import has_warning, is_unmistakable
 from nova.events import Event, EventLog
+from nova.floor import asks_again
 from nova.grounding import dramatized, unsupported
 from nova.guardrails import (
     SENTENCE_END,
@@ -60,7 +61,7 @@ from nova.models import (
     Warmed,
     warm_up,
 )
-from nova.priority import SafetyFirst
+from nova.priority import SafetyFirst, Slots
 from nova.privacy import Data, PrivacyPolicy
 from nova.text import plain
 from nova.tonight import SHOWN, SHOWN_LIVE, Remembered, Tonight, mask
@@ -85,6 +86,18 @@ WITH_THIS_DATE = frozenset({Moment.SILENCE, Moment.REPLY})
 # its one sentence leaves a prefix no room.
 BRIDGED = frozenset({Moment.FIRST_QUESTION, Moment.FROM_THE_ROOM, Moment.LAST_WORD})
 PREFIX_ROOM = 40  # characters a question must leave for a prefix, or none is written
+# Lines that put something to the daters: a dater who asks to hear it again ("Sorry, can
+# you repeat that?") hears the latest of them word for word if the model's reply is late
+# or rejected (decision 0012). Already said and already checked, so it's no new wording.
+ASKED_AGAIN = frozenset(
+    {
+        Moment.FIRST_QUESTION,
+        Moment.FROM_THE_ROOM,
+        Moment.LIGHTNING_QUESTION,
+        Moment.LAST_WORD,
+        Moment.SILENCE,
+    }
+)
 CANDIDATES = 3  # model lines written for each set piece; the best one is kept
 # What Nova says while the show is held, or as a date ends early: any other line means the
 # hold is over, and the next hold may use the room-talk fallback again.
@@ -258,7 +271,10 @@ class LineWriter:
             meaning.guard(self._privacy)
         self._segment: Segment | None = None  # where the date is (entered), for the arc
         self._model = self._privacy.guard(model)
-        self._prep_slots = asyncio.Semaphore(prep_parallel) if prep_parallel else None
+        self._prep_slots = Slots(prep_parallel) if prep_parallel else None
+        # Each set piece's place in the running order: with limited slots, the pieces
+        # needed first are written first (Slots).
+        self._prep_order: dict[_Key, int] = {}
         self._pair = pair
         self._next_pair = next_pair
         self._live_timeout = live_timeout
@@ -279,6 +295,9 @@ class LineWriter:
         self.budget_exhausted = False  # the prep budget ran out before every piece was ready
         self.selections: list[Selection] = []  # how each set piece was chosen (evaluation)
         self._fallback_in_hold = False  # the room-talk fallback was said in this hold
+        # The latest line the room heard that put something to the daters (ASKED_AGAIN):
+        # the fallback when one asks to hear it again.
+        self._asked: str | None = None
 
     # --- Before the date ------------------------------------------------------------------
 
@@ -312,7 +331,9 @@ class LineWriter:
         pieces that fell back, once the model is ready after all (Rehearsal.hold_until_ready);
         the model's own lines stay as they are. budget: instead of the prep budget."""
         started = time.monotonic()
-        cues = [say for say in self._set_piece_cues() if not again or self._fell_back(say)]
+        pieces = self._set_piece_cues()
+        self._prep_order = {_key(say): place for place, say in enumerate(pieces)}
+        cues = [say for say in pieces if not again or self._fell_back(say)]
         if again:  # each fallback stays until a line replaces it, so none goes missing
             self.budget_exhausted = False
         chains: dict[Moment, list[Say]] = {}
@@ -375,6 +396,8 @@ class LineWriter:
             self._tonight.remember(line.moment, line.text, names=self._names)
         if self._context is not None and line.text and line.source in WRITTEN:
             self._context.said(line.text)
+        if line.text and line.moment in ASKED_AGAIN:
+            self._asked = line.text
 
     async def attempt_for(self, say: Say) -> Attempt:
         """One model attempt for a cue, with no fallback: for the evaluation script. An
@@ -540,8 +563,7 @@ class LineWriter:
         chosen = quality.best(scored)
         judged: list[tuple[int, Judged]] = []
         while chosen is not None and self._meaning is not None:
-            slot = self._prep_slots or contextlib.nullcontext()
-            async with slot:  # a request like a candidate's: a check during prep waits for one
+            async with self._prep_slot(say):  # a request like a candidate's: a check waits
                 verdict = await self.judge(say, attempts[chosen].text or "")
             judged.append((chosen, verdict))
             if verdict.passed:
@@ -615,9 +637,15 @@ class LineWriter:
     async def _prepare_attempt(self, say: Say) -> Attempt:
         """One candidate, taking a slot if NOVA_PREP_PARALLEL limits them, so a distress
         check during prep never queues behind a dozen requests on the same model."""
-        slot = self._prep_slots or contextlib.nullcontext()
-        async with slot:
+        async with self._prep_slot(say):
             return await self._attempt(say, self._prompt_for(say), self._prep_timeout)
+
+    def _prep_slot(self, say: Say) -> contextlib.AbstractAsyncContextManager[None]:
+        """A slot for one of this set piece's requests, if NOVA_PREP_PARALLEL limits them:
+        the earlier the piece comes in the running order, the sooner it gets one."""
+        if self._prep_slots is None:
+            return contextlib.nullcontext()
+        return self._prep_slots.slot(self._prep_order.get(_key(say), len(self._prep_order)))
 
     async def _attempt(self, say: Say, prompt: str, timeout: float) -> Attempt:
         started = time.monotonic()
@@ -725,6 +753,10 @@ class LineWriter:
         """An approved fallback line, never built from what a dater or listener said (one
         exception is proposed, behind a switch that's off: an approved audience question,
         framed)."""
+        if say.moment is Moment.REPLY:
+            again = self._said_again(say)
+            if again is not None:
+                return again
         if say.moment is Moment.REPLY and say.return_floor:
             return script.TAKE_YOUR_TIME
         pair = self._pair
@@ -783,6 +815,19 @@ class LineWriter:
                     return ""  # the fallback hands back to both daters
                 return script.REPLY_FALLBACK
         raise ValueError(f"No fallback for {say.moment}")
+
+    def _said_again(self, say: Say) -> str | None:
+        """For a dater who asked to hear Nova's question again (floor.asks_again): the
+        latest line that put something to them, word for word, as the room heard it. Never
+        over what might be distress, which gets the kind line, and never while one dater is
+        away, since the line may name them."""
+        words = say.detail or ""
+        if self._asked is None or say.about is None or say.away is not None:
+            return None
+        if is_unmistakable(words) or has_warning(words):
+            return None
+        other = self._pair.card(say.about.other).first_name
+        return self._asked if asks_again(words, other_name=other) else None
 
     def _card_line(self, say: Say, pair: Pair, build: Callable[[Pair], str]) -> bool:
         """Proposed, off until signed off (script.CARD_FALLBACKS_ON): a fallback quoting
