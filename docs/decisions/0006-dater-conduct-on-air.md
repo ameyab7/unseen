@@ -200,3 +200,8 @@ pauses the show for unkindness at all; and a smarter second check decides whethe
   laughter; banter and self put-downs must be left alone at least 75%, their mirrors acted
   on at least 75%. Dev half tuned on; the held-out half, on other topics, run once with
   `--held-out`. Both run with `--conduct` and the default run.
+- **Held-out, once** (2026-11-02, `gemma4:26b`, counts only): the banter set's held-out
+  half, consulted for the first time, 12 of 12 as hoped (banter 4 of 4 and self put-downs 3
+  of 3 left alone, put-downs 5 of 5 acted on); the conduct held-out half through both
+  checks passes as before (harassment 3 of 4, threat 2 of 3, ordinary talk left alone 12 of
+  14). Never tuned against from here.

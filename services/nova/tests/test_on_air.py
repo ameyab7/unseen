@@ -12,7 +12,7 @@ from nova import script
 from nova.cards import Seat
 from nova.cues import AlertModerator, Conduct, ModeratorAlert, Moment, Say
 from nova.decisions import InMemoryDecisionDesk
-from nova.distress import DistressCheck, Verdict
+from nova.distress import FIGURATIVE_SYSTEM, DistressCheck, Verdict
 from nova.evaluation import FakeClock as Clock
 from nova.evaluation import Speech, hear_on_air, spoken
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
@@ -51,6 +51,8 @@ class Model:
         return "Here we go, Maya and Theo."
 
     async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
+        if system == FIGURATIVE_SYSTEM:
+            return '{"figurative": false}'  # the third question after a yes: the yes stands
         data = prompt.split("<data>")[1]
         sentence = data.split('"sentence": "')[1].split('"')[0]
         self.checked.append((data.split('"earlier": "')[1].split('"')[0], sentence))

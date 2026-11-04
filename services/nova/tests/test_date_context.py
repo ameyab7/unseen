@@ -496,6 +496,52 @@ def test_a_question_declined_after_acknowledgements_stays_hidden():
     assert ctx.unanswered() == []
 
 
+HAIRCUT = "So what was your worst haircut ever?"  # on Maya's card: "Ask me about my worst haircut."
+
+
+def test_a_question_answered_with_a_pass_is_declined_too():
+    """A pass the checks let through ("I'd rather not say") declines the question as a held
+    boundary does: never shown, and kept only for the check on Nova's own lines."""
+    ctx = context((RIGHT, HAIRCUT), (LEFT, "Ha, I'd rather not say, honestly."))
+    assert all("haircut" not in said for _, said in shown_said(ctx))
+    assert ctx.declined() == [HAIRCUT]
+    held = context((RIGHT, HAIRCUT))
+    held.spoke(LEFT)
+    assert held.declined() == [HAIRCUT]
+    answered = context((RIGHT, HAIRCUT), (LEFT, "A bowl cut my mum did with the kitchen scissors."))
+    assert answered.declined() == []
+
+
+@pytest.mark.parametrize(
+    "say",
+    [Say(Moment.STEER, about=LEFT, steer="easy_win"), Say(Moment.STEER, steer="lighten")],
+)
+async def test_a_step_in_never_takes_up_a_question_a_dater_declined_even_from_their_card(say):
+    """2026-11-02: Remy passed on his worst first date, and the easy win asked him about it
+    from his card. The check rejects the line, and a step-in that fails says nothing."""
+    ctx = context((RIGHT, HAIRCUT))
+    ctx.spoke(LEFT)  # a calm boundary, held back by the check
+    line = await writer(
+        Fake("Maya, tell us the story of that worst haircut of yours."), ctx
+    ).line_for(say)
+    assert line.text == "" and Violation.DECLINED in line.violations
+    fresh = "Maya, Theo, beach walk or bakery run this Sunday?"
+    assert (await writer(Fake(fresh), ctx).line_for(say)).text == fresh
+
+
+async def test_a_silence_prompt_never_takes_up_a_declined_question_but_a_reply_may():
+    """A silence prompt is Nova's own idea: rejected, and the approved fallback is said. A
+    reply answers the dater's own words, which may come back to it themselves."""
+    ctx = context((RIGHT, HAIRCUT))
+    ctx.spoke(LEFT)
+    taken_up = "Maya, Theo, worst haircut or worst holiday: which story is better?"
+    silence = await writer(Fake(taken_up), ctx).line_for(Say(Moment.SILENCE))
+    assert silence.source is Source.FALLBACK and Violation.DECLINED in silence.violations
+    asked = Say(Moment.REPLY, about=LEFT, detail="Nova, fine, ask me about the worst haircut.")
+    reply = await writer(Fake("Maya, the floor is yours: the worst haircut."), ctx).line_for(asked)
+    assert Violation.DECLINED not in reply.violations
+
+
 def test_an_acknowledgement_is_nobody_s_evidence_of_a_shared_interest():
     """ "Me too" isn't Theo saying he swims: Nova may never say they both do."""
     ctx = context((LEFT, "I love sea swimming, I go every morning."))

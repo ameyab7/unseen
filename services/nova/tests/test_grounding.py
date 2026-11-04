@@ -4,7 +4,7 @@ not, with injection inside a dater's own words. All made up."""
 
 import pytest
 
-from nova.grounding import claims, dramatized, root, unsupported
+from nova.grounding import claims, dramatized, root, takes_up, unsupported
 from nova.guardrails import OWN_FEELINGS
 
 POTTERY = {
@@ -144,3 +144,27 @@ OPPOSITES = {
 )  # fmt: skip
 def test_a_difference_is_only_as_big_as_the_daters_made_it(line, evidence, ok):
     assert (dramatized(line, evidence) == []) is ok
+
+
+@pytest.mark.parametrize(
+    ("line", "question", "taken_up"),
+    [
+        # 2026-11-02: Remy passed, and the easy win asked him from his card.
+        ("Remy, can you tell us about the absolute worst first date you've ever had?",
+         "But wait, please spill, what is the absolute worst first date you have ever been on?",
+         True),
+        ("Remy and Zoe, worst first date or best first kiss?",
+         "What's the worst first date you've ever been on?", True),
+        ("Remy, Zoe, pepperoni or pineapple: which side are you on?",
+         "What's the worst first date you've ever been on?", False),
+        # One fact word in the question, filler aside: that one is enough.
+        ("Maya, Theo, how was your work week?", "So what do you actually do for work?", True),
+        ("Maya, Theo, what's the best book you've read lately?",
+         "So what do you actually do for work?", False),
+        # Names aside: naming the same dater is not taking up the question (unmasked, "maya"
+        # would be its one fact word, and the line's).
+        ("Maya, Theo, beach or bakery?", "Maya? Why, Maya?", False),
+    ],
+)  # fmt: skip
+def test_a_line_takes_up_a_declined_question_only_by_what_it_asked(line, question, taken_up):
+    assert takes_up(line, question, names=["Remy", "Zoe", "Maya", "Theo"]) is taken_up

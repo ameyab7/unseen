@@ -41,7 +41,7 @@ from nova.date_context import DateContext
 from nova.distress import has_warning, is_unmistakable
 from nova.events import Event, EventLog
 from nova.floor import asks_again
-from nova.grounding import dramatized, unsupported
+from nova.grounding import dramatized, takes_up, unsupported
 from nova.guardrails import (
     SENTENCE_END,
     SHOW_NAME,
@@ -84,6 +84,9 @@ LIVE_REACTIONS = frozenset(
 REMEMBERED_LIVE = frozenset({Moment.SILENCE, Moment.ROOM_TALK})
 # Live reactions that see this date's context (decision 0008).
 WITH_THIS_DATE = frozenset({Moment.SILENCE, Moment.REPLY, Moment.STEER})
+# Lines Nova starts itself, never answering a dater: none may take up a question a dater
+# declined, even from their card (decision 0013). A reply answers the dater's own words.
+NEVER_BACK = frozenset({Moment.SILENCE, Moment.STEER})
 # Questions an optional live prefix may lead into (decision 0012). Not a lightning question:
 # its one sentence leaves a prefix no room.
 BRIDGED = frozenset({Moment.FIRST_QUESTION, Moment.FROM_THE_ROOM, Moment.LAST_WORD})
@@ -704,7 +707,7 @@ class LineWriter:
             max_sentences=rules.max_sentences,
             echo_from=[s for s in said if s],
             card_words=card_words(" ".join(p.text for p in card.prompts) for card in cards),
-            questions=rules.questions and not say.return_floor,
+            questions=rules.questions and not (say.return_floor or say.step_back),
             open_with_names=rules.open_with_names,
         )
         # The dater who's away is never named, even to open a sentence, where a capitalised
@@ -723,6 +726,10 @@ class LineWriter:
             found = tuple(v for v in Violation if v in {*found, Violation.INVENTS_SHOW_FACT})
         if show_state.wrong_segments(text, show_state.segment_for(say.moment, self._segment)):
             found = tuple(v for v in Violation if v in {*found, Violation.WRONG_SEGMENT})
+        if say.moment in NEVER_BACK and self._context is not None:
+            names = [card.first_name for card in (self._pair.left, self._pair.right)]
+            if any(takes_up(text, q, names=names) for q in self._context.declined()):
+                found = tuple(v for v in Violation if v in {*found, Violation.DECLINED})
         return found
 
     def _evidence(self, say: Say, cards: Sequence[BlindCard]) -> dict[str, list[str]]:
@@ -759,6 +766,8 @@ class LineWriter:
         """An approved fallback line, never built from what a dater or listener said (one
         exception is proposed, behind a switch that's off: an approved audience question,
         framed)."""
+        if say.moment is Moment.REPLY and say.step_back:
+            return ""  # they asked Nova to leave them to it: saying nothing does (0013)
         if say.moment is Moment.REPLY:
             again = self._said_again(say)
             if again is not None:
@@ -921,6 +930,7 @@ class LineWriter:
                     this_date=self._this_date(say),
                     segment=self._segment,
                     return_floor=say.return_floor,
+                    step_back=say.step_back,
                 )
         raise ValueError(f"No prompt for {say.moment}")
 

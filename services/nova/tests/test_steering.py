@@ -10,7 +10,14 @@ from nova.cues import Conduct, Moment, Say
 from nova.distress import Verdict
 from nova.fixtures import REHEARSAL_PAIR
 from nova.show_runner import STEER_SETTLE
-from nova.steering import MAX_STEERS, MIN_APART, SAFETY_QUIET, Steer, Steering
+from nova.steering import (
+    MAX_STEERS,
+    MIN_APART,
+    SAFETY_QUIET,
+    Steer,
+    Steering,
+    asks_nova_to_stay_out,
+)
 
 LEFT, RIGHT = Seat.LEFT, Seat.RIGHT
 
@@ -179,6 +186,101 @@ def test_a_dater_who_just_passed_is_never_the_one_asked():
         (30, LEFT, "Sorry, I'll pass on that one."),
     )
     assert s.due(35) == (Steer.LIGHTEN, None)
+
+
+def test_a_dater_who_passed_turns_earlier_is_never_the_one_asked():
+    """Remy, 2026-11-02: he passed on his worst first date, apologised three more times, and
+    the easy win asked him, by name, about that very date. A pass anywhere in the last two
+    minutes counts, not only the latest turn."""
+    s = talk(
+        Steering(),
+        (10, LEFT, "Sorry, that's so cringe, I rehearsed this in the mirror."),
+        (20, RIGHT, "What's the worst first date you've ever been on?"),
+        (30, LEFT, "Ngl I'd rather not say, it's too embarrassing."),
+        (40, RIGHT, "Okay, mysterious. Pineapple on pizza, yes or no?"),
+        (50, LEFT, "Sorry, I'm yapping again, ignore me."),
+        (60, RIGHT, "Ha, it's fine."),
+        (70, LEFT, "I'm definitely a hater, sorry."),
+    )
+    assert s.due(75) == (Steer.LIGHTEN, None)
+    later = talk(
+        Steering(),
+        (10, LEFT, "I'll pass on that one."),
+        (140, LEFT, "Sorry, I'm terrible at this."),
+        (150, LEFT, "Sorry, that's a basic answer."),
+        (160, LEFT, "I'm rambling, ignore me."),
+    )
+    assert later.due(165) == (Steer.EASY_WIN, LEFT), "two minutes on, the pass has gone"
+
+
+def test_neither_turning_it_round_nor_bringing_in_asks_a_dater_who_passed():
+    asker = talk(
+        Steering(),
+        (5, RIGHT, "I'll pass on that one."),
+        (10, RIGHT, "Do you think we ever really see the places we visit?"),
+        (20, LEFT, "I suppose I mostly see the cafes, to be honest."),
+        (30, RIGHT, "Is silence more honest than the words we use?"),
+        (40, LEFT, "Maybe. I hadn't thought about it like that."),
+        (50, RIGHT, "Do we hide the chaos we feel inside in small patterns?"),
+        (60, LEFT, "I suppose I just like small routines."),
+        (70, RIGHT, "Is comfort just the absence of fear?"),
+    )
+    assert asker.due(75) == (Steer.LIGHTEN, None)
+    story = " ".join(["and then we drove all the way up the coast in the rain"] * 6)
+    quiet = talk(Steering(), (5, RIGHT, "I'll pass."), (10, LEFT, story), (40, RIGHT, "Yeah."))
+    talk(quiet, (60, LEFT, story), (80, RIGHT, "Mm, right."))
+    assert quiet.due(85) == (Steer.LIGHTEN, None)
+
+
+@pytest.mark.parametrize(
+    ("words", "stay_out"),
+    [
+        ("Nova, we've got this, let us talk.", True),
+        ("Honestly Nova, you can relax, we're fine.", True),
+        ("Nova, leave us to it.", True),
+        ("Nova, what should we talk about?", False),
+        ("Nova, help, we've run out of things to say.", False),
+    ],
+)
+def test_a_dater_asking_nova_to_stay_out_is_heard_from_their_words(words, stay_out):
+    assert asks_nova_to_stay_out(words) is stay_out
+
+
+@pytest.mark.parametrize("steering", [True, False])
+def test_a_reply_to_let_us_talk_steps_back_whether_or_not_stepping_in_is_on(steering):
+    show = Show(steering=steering)
+    show.until(100)
+    cues = show.runner.dater_asked_nova(show.now, LEFT, "Nova, we've got this, let us talk.")
+    [reply] = [cue for cue in cues if isinstance(cue, Say) and cue.moment is Moment.REPLY]
+    assert reply.step_back
+    other = show.runner.dater_asked_nova(show.now, LEFT, "Nova, what should we talk about?")
+    assert not any(isinstance(cue, Say) and cue.step_back for cue in other)
+
+
+async def test_a_step_back_reply_asks_nothing_and_otherwise_nova_says_nothing():
+    """ "You're the boss, Milo, so tell me more about this lost footwear." (2026-11-02): the
+    prompt asks for a few words and no question, without this date's context, and a line
+    with a question in it is rejected; then Nova says nothing, so no new line needs a
+    sign-off."""
+    from test_lines import FakeModel, writer
+
+    told = prompts.reply(
+        REHEARSAL_PAIR,
+        LEFT,
+        "Nova, we've got this, let us talk.",
+        this_date={"earlier": [{"by": "Theo", "said": "I lost my shoes at a festival."}]},
+        step_back=True,
+    )
+    assert "ask nothing" in told and "this_date" not in told and "festival" not in told
+    say = Say(Moment.REPLY, about=LEFT, detail="Nova, we've got this, let us talk.", step_back=True)
+    asked = await writer(FakeModel("Over to you both. What was that about the shoes?")).line_for(
+        say
+    )
+    assert asked.text == ""
+    fine = "Of course, I'll step back."
+    assert (await writer(FakeModel(fine)).line_for(say)).text == fine
+    failed = await writer(FakeModel(error=RuntimeError("down"))).line_for(say)
+    assert failed.text == ""
 
 
 def test_another_language_never_fires_the_english_signals():

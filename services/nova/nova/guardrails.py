@@ -44,6 +44,9 @@ class Violation(StrEnum):
     # checked by the line writer, which knows the moment and the segment.
     INVENTS_SHOW_FACT = "invents_show_fact"
     WRONG_SEGMENT = "wrong_segment"
+    # Takes up a question a dater declined, even from their card (nova/grounding.py,
+    # takes_up): checked by the line writer, which has this date's context.
+    DECLINED = "declined"
     # The meaning check flagged it, or couldn't judge it in time (nova/meaning.py).
     MEANING = "meaning"
     DECISION = "decision"

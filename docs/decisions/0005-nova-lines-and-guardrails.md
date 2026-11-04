@@ -1142,3 +1142,79 @@ lightning round's intro, three taken in turn (`script.LIGHTNING_INTROS`), and tw
 room-talk fallbacks in place of "Thanks for keeping the chat kind tonight, room."
 (`script.ROOM_TALK_FALLBACK`, and `ROOM_TALK_ENDED_FALLBACK` for a date that ended early).
 Two pending room-talk drafts revised.
+
+## Slang without hardcoded phrases: a second look before a pause, 2026-11-03
+
+In the Gen Z dates (decision 0009, 2026-11-02) the frozen check paused the show for "I'm
+crying, that's the worst thing anyone's said to me. Kill me." in a roast both daters were
+in on, and paused the speaker of a put-down ("So you're just playing it safe with your
+personality now too?"). The product owner asked for slang, and any way of speaking to come,
+to work without listing phrases. The main check's rules stay byte-identical (every addition
+to them moved another borderline sentence, 2026-10-23); two narrow steps after it can only
+turn a pause into a moderator alert, never into nothing:
+
+- **The speaker's own conduct** (`distress.OWN_CONDUCT`): a yes whose conduct label, from
+  the same answer, says the words put the other dater down, press them, are sexual, attack
+  a group, threaten, or give out someone's details is a maybe. Those words are what the
+  speaker does to the other dater (decision 0006 acts on them), not the speaker's distress.
+- **A third question** (`distress.FIGURATIVE_SYSTEM`), after any other yes: is this plainly
+  exaggeration in fun, the dater playing along with a joke both enjoy, with nothing meant?
+  True makes the yes a maybe. It describes what exaggeration is, never which words: the
+  phrases live only in the test set. False if anything is meant (wanting it to end or to
+  leave, wishing to be elsewhere, how long is left, someone from the show, feeling unwell,
+  uneasy, upset, unsafe or scared, the body in trouble), if it answers pressing, a threat
+  or a put-down that isn't plainly teasing, if it's flat where a joke would be lively, or
+  if unsure. In what's left of the check's 2 s; failed, unsure or late, the yes stands.
+
+A check made only for its conduct label, after an instant-layer pause, asks neither
+follow-up (`follow_up=False`): nobody acts on its verdict. `tests/test_safety_freeze.py`
+pins the third question and the rule as it pins the first two. No new data flow: the same
+words go to the same local classifier, as the check's own call (docs/privacy/ unchanged).
+
+**The figurative set** (`nova/figurative_set.py`): exaggeration in fun across ways of
+speaking, put-downs, real distress said lightly or in the same words (mirrors), and the
+same words said flat after a put-down, a threat or pressing (hurt); a dev half to tune on
+and a held-out half on other topics. None uses an instant-layer phrase. Its targets, set
+before its first run: exaggeration paused at most 1 in 10, put-downs never, every mirror
+paused, every hurt sentence at least alerting the moderator (`evaluation --figurative
+[held-out]`; the dev half runs with the default evaluation and gates it).
+`tests/test_distress.py` checks that no three words in a row of any exaggeration or
+put-down in the set appear in the third question.
+
+Measured on Gemma (`gemma4:26b`), before and after:
+- **The frozen safety report** (`--safety`: three passes, each after a fresh model reload,
+  each sentence at its worst), before and after. Development set: distress paused 68 of 73
+  before, 70 after (single run 70 and 70), false pauses 0 and 0, false alerts 3 and 2,
+  sentences changing between reloads 3 and 0. Held-out set: paused 49 of 52 before and
+  after, false pauses 0 and 0, false alerts 2 and 2; after, one sentence alerted the
+  moderator in two passes and was missed in one. No sentence in either set lost a pause.
+  No independent set was found in this worktree.
+- **The figurative set**, dev half, three passes after fresh reloads with the new steps
+  switched off and on: four exaggerations paused the show off (three in every pass, one in
+  two of three) and only alerted the moderator on; the put-down "So you're boring on
+  purpose, then?" paused its speaker in two passes of three off, never on; every mirror
+  paused in every pass, off and on. Held-out half, once before and once after, counts only:
+  unchanged (no exaggeration paused, every mirror paused, every hurt sentence at least
+  alerted the moderator).
+- **One sentence got worse, and why**: "Wow. Kill me, I guess." (hurt, answering "No
+  offence, but you're kind of a let-down in person.") paused in three passes of three off
+  and was missed in two of three on. The new steps never make a miss: the main check
+  answered no. Asked alone after a fresh reload, the main check answered yes three times of
+  three when the request before it was another check, and no three times of three when it
+  was the third question or a line of Nova's. Its label depends on what the model ran just
+  before it. On a show Nova's lines come between checks, so the frozen check misses this
+  sentence there with or without the third question; the evaluation, which runs checks back
+  to back, overstated it. Measuring the check as a show runs it, with Nova's lines between
+  checks, is the next step: a change to the frozen safety report's method, which waits for
+  the product owner.
+- **The evaluation** (default run): line cases 43 of 46 (the silence and reply cases that
+  vary between runs); the distress dev set 70 of 73 paused, 0 false pauses, 2 false alerts,
+  0 unchecked; conduct, banter and meaning checks pass; the figurative dev half misses its
+  hurt target on the sentence above.
+
+The cost: a yes now waits for the third question before the pause. The check's median over
+the dev set went from 422 to 924 ms (90th percentile 498 to 1120 ms, worst 1106 to 1233 ms,
+inside the 2 s timeout, 0 unchecked), and an exaggeration the check took literally alerts
+the moderator instead of pausing the show. The risk the moderator carries: someone who
+hides real distress behind a joke gets an alert rather than an automatic pause. That's why
+it stops at the moderator.

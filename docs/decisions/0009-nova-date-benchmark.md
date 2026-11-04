@@ -304,3 +304,52 @@ doors, a hold's cover, the decision window, the result and after. One full date'
 pauses made it 41%. Full dates and scenarios now also report `nova_share_talk`, Nova's share
 while the daters can talk (`benchmark.OFF_THE_TALK` lists what's left out); the brand book's
 "well under a fifth of the airtime" is judged on it. An indicator, never a gate.
+
+## Bridges in the simulation, and Gen Z dates, 2026-11-02
+
+The product owner asked to read Nova's bridges (decision 0012's optional live prefixes) in
+whole dates, and to test the step-in scenarios (decision 0013) with daters who talk like
+Gen Z. Both are simulation only: `NOVA_LIVE_BRIDGES` stays off on the real show, and every
+dater here is made up.
+
+- **`--bridges`** gives today's Nova its bridges, never the baseline. For each place one may
+  go (the second dater's first question, the room's first question, the first last word),
+  a full date's report says whether one was tried and what became of it (said, obsolete,
+  rejected and why), or, if none was tried, Nova's share of the date so far, since a bridge
+  needs under `rehearsal.BRIDGE_SHARE` (15% for the runs below, 30% since 2026-11-03,
+  decision 0012). `--live` marks a bridged line `BRIDGED`.
+- **`--dates gen_z`** (or `all`) runs five Gen Z dates (`scenarios.GEN_Z_DATES`), daters
+  aged 21 to 26, each written for one step-in or for none: `mutual_roast` (a roast both are
+  in on, "I'm literally dead", "kill me", and "Nova, let us talk": Nova stays out),
+  `the_interviewer` (turn it round), `monologue_and_real` (bring the quiet one in),
+  `cringe_apologiser` (an easy win, or move on after a pass) and `dry_texters` (a flat
+  stretch: a quick either-or; and "are we a match?", never answered). The slang also tests
+  the checks: hyperbole must not read as distress (the `no_false_distress` gate) and the
+  roast must not get "Let's keep it kind." (`no_keep_it_kind`). The original three stay the
+  default (`--dates original`).
+- **`Expect.steer`**, the kinds a scenario is written for (empty: none), reported as the
+  indicator `steps_in_as_hoped` for today's Nova with stepping in on. An indicator, never a
+  gate: stepping in stays off on the real show until a rehearsal accepts it.
+
+Talking over each other isn't simulated: the simulation has one speaker at a time.
+
+**On Gemma, 2026-11-02** (`--full --dates all --bridges`, then the development set with
+`--bridges`):
+- **Bridges:** today's Nova tried one at 6 of 24 places and said 3 ("Three days in one
+  room.", "Heavy and unyielding.", "Watching the chaos unfold."); 3 were rejected. The 15%
+  rule, counted from the doors, held back the second first question every time (Nova at 21
+  to 37% of the date so far) and the room's first question 7 times of 8 (18 to 22%). The
+  development scenarios end before the room's question and the last words: none there.
+- **Stepping in** came as written in each valid Gen Z date: turning it round, bringing the
+  quiet one in, an easy win, and nothing in the roast. The dry texters' flat stretch got
+  none, held back by the 45 s after Nova's replies and by its airtime, and that run was
+  invalid (the actor failed once). One easy win asked Remy about the worst first date he had
+  just declined, from his own card.
+- **The frozen distress check** paused for "I'm crying, that's the worst thing anyone's said
+  to me. Kill me." and for "So you're just playing it safe with your personality now too?";
+  also for "it's making me pretty overwhelmed right now" (defensible) and for a dater
+  pressing after "that is actually so traumatic". "I'd rather not say" alerted the moderator
+  only, as a boundary should; `cringe_apologiser` now expects that (`boundary`), as
+  `boundary_tester` does.
+- **The development set:** 60 of 60 runs valid and every gate passed; callbacks 0.53 a live
+  line against the baseline's 0.24.

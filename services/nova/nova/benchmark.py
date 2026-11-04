@@ -5,14 +5,19 @@ and on time?
                                     [--variant both] [--scenario NAME ...]
                                     [--out results.json] [--transcripts] [--packet DIR]
     uv run python -m nova.benchmark --compare before.json after.json
-    uv run python -m nova.benchmark --full [--live] [--packet DIR] [--variant candidate]
+    uv run python -m nova.benchmark --full [--dates original|gen_z|all] [--live]
+                                    [--packet DIR] [--variant candidate]
+                                    [--bridges] [--no-steering]
 
---full runs whole dates instead (nova/scenarios.py, FULL_DATES): the doors to the result,
-the room's questions, the lightning round when the room unlocks it, both last words and the
-decisions, with daters written to make the host's job hard; after each date, how it went
-and how the model did on the wall clock (prep, live lines, safety checks). --live prints
-every line as it's said, with what Nova's line was made of (prepared, live and the model's
-time, fixed, or a fallback and why), for any run.
+--full runs whole dates instead (nova/scenarios.py: FULL_DATES, and with --dates the Gen Z
+dates, GEN_Z_DATES, each written for one of decision 0013's step-in scenarios): the doors to
+the result, the room's questions, the lightning round when the room unlocks it, both last
+words and the decisions, with daters written to make the host's job hard; after each date,
+how it went and how the model did on the wall clock (prep, live lines, safety checks).
+--live prints every line as it's said, with what Nova's line was made of (prepared, live and
+the model's time, fixed, or a fallback and why), for any run. --bridges gives today's Nova
+its optional live bridges (NOVA_LIVE_BRIDGES, decision 0012), never the baseline: each full
+date then says, for each place a bridge may go, whether one was tried and what became of it.
 
 Each scenario (nova/scenarios.py) runs through the real rehearsal: show runner, on-air
 listener, distress and conduct check, line writer and guardrails, on a simulated clock.
@@ -68,15 +73,16 @@ from nova.evaluation import FakeClock
 from nova.events import EventLog
 from nova.grounding import dramatized, unsupported
 from nova.guardrails import OWN_FEELINGS
-from nova.lines import ErrorKind, Line, Source
+from nova.lines import BRIDGED, ErrorKind, Line, Source
 from nova.models import LineModel, build_classifier, build_model, warm_up
 from nova.privacy import PrivacyPolicy
 from nova.quality import content_words, opening
-from nova.rehearsal import Rehearsal
+from nova.rehearsal import BRIDGE_SHARE, Prefix, Rehearsal
 from nova.scenarios import (
     ANSWER,
     DEVELOPMENT,
     FULL_DATES,
+    GEN_Z_DATES,
     REACT,
     SCENARIOS,
     Beat,
@@ -104,6 +110,15 @@ MAX_INVALID = 1 / 3
 # sound like one voice; seeded per run, seat and turn, so a run repeats.
 ACTOR_TEMPERATURE = {Seat.LEFT: 0.6, Seat.RIGHT: 1.0}
 SETS = {"development": DEVELOPMENT, "comparison": SCENARIOS}
+FULL_SETS = {"original": FULL_DATES, "gen_z": GEN_Z_DATES, "all": FULL_DATES + GEN_Z_DATES}
+# Where an optional live bridge may go (Rehearsal, decision 0012), with the left seat first up
+# as every run here has it: the second first question, the room's first, the first last word.
+BRIDGE_SPOTS = (
+    (Moment.FIRST_QUESTION, Seat.RIGHT),
+    (Moment.FROM_THE_ROOM, None),
+    (Moment.LAST_WORD, Seat.LEFT),
+)
+
 
 # A full date (--full): the doors to the result, on the simulated clock.
 FULL_CAP = 1200.0  # simulated seconds; a full date ends in about eleven minutes
@@ -261,10 +276,18 @@ class Driver:
         distress_timeout: float,
         echo: Echo | None = None,
         steering: bool = True,
+        bridges: bool = False,
     ) -> None:
         """echo: each line as it's said, with what Nova's line was made of (--live).
-        steering: today's Nova steps in when the talk goes wrong (decision 0013)."""
+        steering: today's Nova steps in when the talk goes wrong (decision 0013). bridges:
+        today's Nova adds its optional live bridges (NOVA_LIVE_BRIDGES, decision 0012)."""
         self.scenario, self.variant, self.seed = scenario, variant, seed
+        self.steering = variant == CANDIDATE and steering
+        self.bridges = variant == CANDIDATE and bridges
+        # Each place a bridge may go, as it was cued: the moment, whether one was tried, and
+        # Nova's share of the date so far then (a bridge needs under BRIDGE_SHARE).
+        self.bridge_spots: list[tuple[Moment, Seat | None, bool, float]] = []
+        self._cues_watched = 0
         self.echo = echo
         self._shown = {"lines": 0, "segments": 0, "cues": 0, "checks": 0}
         self._asked_again: list[int] = []  # where in r.lines each unnamed request came
@@ -295,7 +318,8 @@ class Driver:
             events=EventLog(logging.getLogger("nova.benchmark")),
             live_context=variant == CANDIDATE,
             conversational=variant == CANDIDATE,
-            steering=variant == CANDIDATE and steering,
+            steering=self.steering,
+            live_bridges=self.bridges,
             privacy=PrivacyPolicy.for_synthetic_data(),  # the benchmark's daters are made up
         )
         self.asked_nova = 0
@@ -365,7 +389,7 @@ class Driver:
             self.show(f"--- {SEGMENT_NAMES.get(segment, segment)} ({_clock(at)}) ---")
         for line in r.lines[shown["lines"] :]:
             if line.text:
-                self.show(f"  Nova: {line.text}   [{_made_of(line)}]")
+                self.show(f"  Nova: {line.text}   [{_made_of(line, bridges=self.bridges)}]")
         for cue in r.cues[shown["cues"] :]:
             if isinstance(cue, AlertModerator):
                 self.show(f"  [moderator alerted: {cue.alert}]")
@@ -420,10 +444,29 @@ class Driver:
         while self.clock.now < until:
             self.clock.now = min(until, self.clock.now + STEP)
             self.r.tick()
+            self._watch_bridges()
             await self.r.speak_queued()
+            self._watch_bridges()
             await self.r.heard()
+            self._watch_bridges()
             self.observe()
             await self.answer_turns()
+
+    def _watch_bridges(self) -> None:
+        """Each place a bridge may go, as it's cued (BRIDGE_SPOTS, the first of each):
+        whether today's Nova tried one, and its share of the date so far as soon as the cue
+        is seen here, close to the figure the rehearsal weighed as it queued the cue (a line
+        said in between adds to it). Codes and numbers only."""
+        r = self.r
+        while self._cues_watched < len(r.cues):
+            cue = r.cues[self._cues_watched]
+            self._cues_watched += 1
+            if not isinstance(cue, Say) or (cue.moment, cue.about) not in BRIDGE_SPOTS:
+                continue
+            if any(moment is cue.moment for moment, *_ in self.bridge_spots):
+                continue
+            share = r.nova_seconds / r.date_seconds if r.date_seconds > 0 else 0.0
+            self.bridge_spots.append((cue.moment, cue.about, cue.bridge, share))
 
     async def answer_turns(self) -> None:
         """Each first question answered by the dater it asked (the first one asks the left
@@ -582,12 +625,16 @@ def _clock(seconds: float) -> str:
     return f"{int(seconds) // 60}:{int(seconds) % 60:02d}"
 
 
-def _made_of(line: Line) -> str:
+def _made_of(line: Line, *, bridges: bool = False) -> str:
     """What a line of Nova's was made of, in codes: the moment, where its words came from,
     the model's time for a live line, and why a fallback fell back."""
     parts = [str(line.moment), str(line.source)]
     if line.source is Source.MODEL:
         parts.append(f"{line.ms} ms")
+    if line.prefixed:
+        parts.append("BRIDGED")
+    elif bridges and (dropped := _bridge_dropped(line)):
+        parts.append(f"bridge dropped because {dropped}")
     if line.source is Source.FALLBACK:
         why = [str(v) for v in line.violations] or ([str(line.error)] if line.error else [])
         parts.append("because " + ", ".join(why) if why else "fallback")
@@ -790,6 +837,16 @@ def measure(d: Driver, line_start: int, said_start: int) -> Run:
     if expect.openings_vary:
         replied = [line.text for line in live if line.moment is Moment.REPLY]
         indicators["reply_openings_vary"] = len(replied) > 1 and _repeats(replied)[1] == 0
+    if expect.steer is not None and d.steering:
+        # The step-in the scenario is written for came, or none did where Nova stays out.
+        kinds = {
+            cue.steer or "one_at_a_time"
+            for cue in says
+            if cue.moment in (Moment.STEER, Moment.ONE_AT_A_TIME)
+        }
+        indicators["steps_in_as_hoped"] = (
+            bool(kinds & set(expect.steer)) if expect.steer else not kinds
+        )
     notes: tuple[str, ...] = ()
     if isinstance(d, FullDriver):
         metrics.update(full_date_metrics(d))
@@ -828,6 +885,10 @@ def full_date_metrics(d: FullDriver) -> dict[str, float]:
         "breathers": float(sum(kind == BREATHER for kind, _, _ in d.holds)),
         # Nova stepping in although nobody went quiet (decision 0013): cued, said or not.
         "steers": float(sum(cue.moment in (Moment.STEER, Moment.ONE_AT_A_TIME) for cue in says)),
+        # Optional live bridges (decision 0012), today's Nova with --bridges only.
+        "bridges_on": float(d.bridges),
+        "bridges_tried": float(sum(tried for _, _, tried, _ in d.bridge_spots)),
+        "bridges_said": float(sum(dl.prefix is Prefix.SAID for dl in r.deliveries)),
         "reached_result": float(any(cue.moment is Moment.RESULT for cue in says)),
         "mutual": float(any(cue.text == script.RESULT_MUTUAL for cue in says)),
     }
@@ -843,7 +904,70 @@ def full_date_notes(d: FullDriver) -> tuple[str, ...]:
         for cue in d.r.cues
         if isinstance(cue, Say) and cue.moment in (Moment.STEER, Moment.ONE_AT_A_TIME)
     ]
-    return (f"order: {order}", *holds, *stepped, *(f"fallback: {why}" for why in fallbacks))
+    bridges = bridge_notes(d) if d.bridges else []
+    return (
+        f"order: {order}",
+        *holds,
+        *stepped,
+        *bridges,
+        *(f"fallback: {why}" for why in fallbacks),
+    )
+
+
+def bridge_notes(d: Driver) -> list[str]:
+    """For each place a bridge may go: not tried, and why if the share rule held it back;
+    or what became of it, and why one was dropped. Codes and numbers only."""
+    notes = []
+    for moment, about, tried, share in d.bridge_spots:
+        where = f"{moment}" + (f" ({about})" if about is not None else "")
+        if not tried:
+            why = (
+                f"Nova's share of the date so far {share:.0%}, a bridge needs under "
+                f"{BRIDGE_SHARE:.0%}"
+                if share >= BRIDGE_SHARE
+                else f"Nova's share {share:.0%}; held back by another of the rehearsal's rules: "
+                "30 s apart, three at most, nobody speaking, no hold, a kept turn to build on"
+            )
+            notes.append(f"bridge at {where}: not tried ({why})")
+            continue
+        fate = next(
+            (
+                dl.prefix
+                for dl in d.r.deliveries
+                if dl.moment is moment and dl.about is about and dl.prefix is not None
+            ),
+            None,
+        )
+        line = _spot_line(d, moment)
+        why = ""
+        if fate is Prefix.REJECTED and line is not None:
+            # The rehearsal files a bridge the line writer never asked for as rejected too
+            # (LineWriter._bridge): no kept turn just said to build on, or no room in the line.
+            why = (
+                "the question itself was an approved fallback, so none was asked for"
+                if line.source is Source.FALLBACK
+                else _bridge_dropped(line)
+                or "none was asked for: nothing just said to build on, or no room in the line"
+            )
+        notes.append(f"bridge at {where}: {fate or 'never said'}" + (f" ({why})" if why else ""))
+    return notes
+
+
+def _spot_line(d: Driver, moment: Moment) -> Line | None:
+    """The line said at a bridge's place: the second first question, the first room question,
+    the first last word (BRIDGE_SPOTS)."""
+    said = [line for line in d.r.lines if line.moment is moment]
+    k = 1 if moment is Moment.FIRST_QUESTION else 0
+    return said[k] if len(said) > k else None
+
+
+def _bridge_dropped(line: Line) -> str:
+    """Why a bridge was dropped from this line, if one was: a line at a bridged moment that
+    carries a reason but no bridge (a line that settled carries none)."""
+    if line.prefixed or line.moment not in BRIDGED or line.source is Source.FALLBACK:
+        return ""
+    why = [str(v) for v in line.violations] or ([str(line.error)] if line.error else [])
+    return ", ".join(why)
 
 
 def render_full_date(run: Run) -> str:
@@ -871,6 +995,15 @@ def render_full_date(run: Run) -> str:
         f"{m.get('steers', 0):.0f}",
         "  Gates: " + ("all passed" if not failed else "FAILED " + ", ".join(failed)),
     ]
+    if m.get("bridges_on"):
+        lines.insert(
+            -1,
+            f"  Bridges: {m['bridges_tried']:.0f} tried of {len(BRIDGE_SPOTS)} places, "
+            f"{m['bridges_said']:.0f} said",
+        )
+    hoped = run.indicators.get("steps_in_as_hoped")
+    if hoped is not None:
+        lines.insert(-1, f"  Stepping in as the date was written for: {'yes' if hoped else 'no'}")
     lines += [f"  {note}" for note in run.notes]
     return "\n".join(lines)
 
@@ -1044,11 +1177,13 @@ async def run_benchmark(
     distress_timeout: float,
     echo: Echo | None = None,
     steering: bool = True,
+    bridges: bool = False,
 ) -> list[Run]:
     """Every scenario, variant and seed, one after another, never two at once, so no run
     queues behind another on the model. The second version of a scenario and seed starts
     from the first one's set pieces. A FullDate runs as a whole date (FullDriver). echo:
-    each run's lines as they're said (--live)."""
+    each run's lines as they're said (--live). bridges: today's Nova adds its optional live
+    bridges (decision 0012)."""
     runs = []
     total, done = len(scenarios) * seeds * len(variants), 0
     for scenario in scenarios:
@@ -1060,7 +1195,9 @@ async def run_benchmark(
                     left, right = scenario.pair.left, scenario.pair.right
                     echo(
                         f"\n=== {done}/{total}: {scenario.name}, seed {seed}, "
-                        f"{VARIANT_NAMES.get(variant, variant)}\n    {scenario.about}\n"
+                        f"{VARIANT_NAMES.get(variant, variant)}"
+                        + (", with bridges" if bridges and variant == CANDIDATE else "")
+                        + f"\n    {scenario.about}\n"
                         f"    On the left {left.first_name}, {left.age}; on the right "
                         f"{right.first_name}, {right.age}. Nova is preparing its lines..."
                     )
@@ -1080,6 +1217,7 @@ async def run_benchmark(
                     distress_timeout=distress_timeout,
                     echo=echo,
                     steering=steering,
+                    bridges=bridges,
                 )
                 run = await driver.run(like=first)
                 runs.append(run)
@@ -1104,13 +1242,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-steering", action="store_true", help="today's Nova never steps in (decision 0013)"
     )
+    parser.add_argument(
+        "--bridges",
+        action="store_true",
+        help="today's Nova adds its optional live bridges (NOVA_LIVE_BRIDGES, decision 0012)",
+    )
+    parser.add_argument(
+        "--dates",
+        choices=tuple(FULL_SETS),
+        help="with --full: the original hard-to-host dates (the default), the Gen Z dates, or all",
+    )
     args = parser.parse_args(argv)
+    if args.dates is not None and not args.full:
+        parser.error("--dates chooses full dates: use it with --full")
+    dates = args.dates or "original"
 
     if args.compare:
         before, after = (json.loads(path.read_text(encoding="utf-8")) for path in args.compare)
         print(render_compare(before, after))
         return 0
-    pool: Sequence[Scenario | FullDate] = FULL_DATES if args.full else SETS[args.set]
+    pool: Sequence[Scenario | FullDate] = FULL_SETS[dates] if args.full else SETS[args.set]
     chosen = [s for s in pool if not args.scenario or s.name in args.scenario]
     both = (CANDIDATE, BASELINE) if args.full else VARIANTS  # full dates: today's Nova first
     variants = both if args.variant == "both" else (args.variant,)
@@ -1136,6 +1287,7 @@ def main(argv: list[str] | None = None) -> int:
             distress_timeout=settings.distress_timeout,
             echo=echo,
             steering=not args.no_steering,
+            bridges=args.bridges,
         )
 
     if echo is not None:
@@ -1143,7 +1295,9 @@ def main(argv: list[str] | None = None) -> int:
     runs = asyncio.run(benchmark())
     results = {
         "model": model.name,
-        "set": "full dates" if args.full else args.set,
+        "set": (f"full dates: {dates}" if dates != "original" else "full dates")
+        if args.full
+        else args.set,
         "seeds": seeds,
         "scenarios": [s.name for s in chosen],
         "runs": [run.numbers() for run in runs],

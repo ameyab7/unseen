@@ -96,6 +96,11 @@ HOLD_BACKOFF = (2.0, 4.0, 8.0, 16.0)
 # still loading or a server still starting. Never one that can't (a model not pulled, a bad
 # key, a refusal, a failure it can't tell), which the moderator hears of at once.
 MAY_PASS = frozenset({WarmUpError.TIMEOUT, WarmUpError.UNAVAILABLE})
+# An optional live prefix (NOVA_LIVE_BRIDGES, decision 0012) is tried only while Nova has
+# under this share of the date so far, counted from the doors. The product owner raised it
+# from 15% on 2026-11-03: the intro alone kept Nova at 21 to 37% by the second dater's first
+# question, so bridges almost never came.
+BRIDGE_SHARE = 0.30
 
 
 class Opened(StrEnum):
@@ -1141,7 +1146,7 @@ class Rehearsal:
                 and self._bridge_count < 3
                 and now - self._last_bridge_at >= 30
                 and self.date_seconds > 0
-                and self.nova_seconds / self.date_seconds < 0.15
+                and self.nova_seconds / self.date_seconds < BRIDGE_SHARE
                 and self._context is not None
                 and len(self._context) > 0
                 and (

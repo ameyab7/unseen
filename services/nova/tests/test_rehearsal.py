@@ -14,7 +14,7 @@ from nova.cards import Seat
 from nova.conduct_judge import JUDGE_SYSTEM, REACTION_WAIT
 from nova.config import Settings
 from nova.cues import AlertModerator, ModeratorAlert, Moment, Say
-from nova.distress import LIGHT_SYSTEM
+from nova.distress import FIGURATIVE_SYSTEM, LIGHT_SYSTEM
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
 from nova.lines import LineWriter, Source
 from nova.meaning import MEANING_SYSTEM
@@ -144,6 +144,8 @@ class FakeModel:
             return "ok"  # the warm-up's tiny request
         if system == LIGHT_SYSTEM:
             return '{"light": false}'  # the second question after a maybe: the maybe stands
+        if system == FIGURATIVE_SYSTEM:
+            return '{"figurative": false}'  # the third question after a yes: the yes stands
         if system == JUDGE_SYSTEM:
             return self.judged  # the second conduct check on a remark labelled unkind
         sentence = prompt.split('"sentence": "')[1].split('"')[0]

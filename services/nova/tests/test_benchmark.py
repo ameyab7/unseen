@@ -20,15 +20,19 @@ from nova.benchmark import (
     VARIANTS,
     dialogues,
     gate_failures,
+    main,
     render,
     render_compare,
+    render_full_date,
     run_benchmark,
     summary,
     write_packet,
 )
 from nova.cards import Seat
 from nova.conduct_judge import JUDGE_SYSTEM
-from nova.scenarios import DEVELOPMENT, FULL_DATES, REACT, SCENARIOS, Beat
+from nova.rehearsal import Prefix
+from nova.scenarios import DEVELOPMENT, FULL_DATES, GEN_Z_DATES, REACT, SCENARIOS, Beat
+from nova.steering import Steer
 
 BY_NAME = {s.name: s for s in (*SCENARIOS, *DEVELOPMENT)}
 UNKIND = "That has to be the most boring hobby anyone's ever had."
@@ -124,6 +128,8 @@ async def bench(
     check=None,
     timeout=1.0,
     echo=None,
+    bridges=False,
+    steering=True,
 ):
     return await run_benchmark(
         scenarios,
@@ -138,6 +144,8 @@ async def bench(
         prep_parallel=None,
         distress_timeout=timeout,
         echo=echo,
+        bridges=bridges,
+        steering=steering,
     )
 
 
@@ -560,13 +568,80 @@ async def test_a_pause_mid_thought_is_two_stretches_of_speech_with_quiet_between
 
 def test_full_dates_use_their_own_made_up_daters():
     others = {c.first_name for s in (*SCENARIOS, *DEVELOPMENT) for c in (s.pair.left, s.pair.right)}
-    for date in FULL_DATES:
+    seen: set[str] = set()
+    for date in (*FULL_DATES, *GEN_Z_DATES):
+        names = {date.pair.left.first_name, date.pair.right.first_name}
         assert date.about and date.talk and date.questions
-        assert {date.pair.left.first_name, date.pair.right.first_name}.isdisjoint(others)
+        assert names.isdisjoint(others) and names.isdisjoint(seen), date.name
+        seen |= names
         assert set(date.choices) == set(Seat) and set(date.choices.values()) <= {
             "reveal",
             "unseen",
         }
+
+
+def test_each_gen_z_date_is_written_for_a_step_in_or_for_nova_staying_out():
+    """Decision 0013's scenarios: every kind of step-in the show runner makes from the
+    signals has a date written for it, and one date is written for Nova to stay out."""
+    for date in GEN_Z_DATES:
+        assert date.expect.steer is not None, date.name
+        assert set(date.expect.steer) <= {str(kind) for kind in Steer}, date.name
+        cards = (date.pair.left, date.pair.right)
+        assert all(21 <= card.age <= 29 for card in cards), "Gen Z, and adults"
+    kinds = {kind for date in GEN_Z_DATES for kind in date.expect.steer or ()}
+    assert kinds == {str(kind) for kind in Steer}
+    assert any(date.expect.steer == () for date in GEN_Z_DATES)
+
+
+async def test_gen_z_dates_run_from_the_doors_to_the_result_and_say_how_nova_stepped_in():
+    boundary = '{"label": "maybe", "conduct": "none"}'  # a calm boundary, as the check calls it
+    runs = await bench(
+        GEN_Z_DATES, check=Check({"Ngl I'd rather not say, it's too embarrassing.": boundary})
+    )
+    assert len(runs) == 2 * len(GEN_Z_DATES)
+    assert all(run.valid for run in runs), [(r.scenario, r.invalid) for r in runs if r.invalid]
+    assert gate_failures([run.numbers() for run in runs]) == []
+    for run in runs:
+        date = next(d for d in GEN_Z_DATES if d.name == run.scenario)
+        assert run.metrics["reached_result"] == 1.0, run.scenario
+        assert ("lightning_round" in run.notes[0]) is date.unlock
+        # Only today's Nova steps in, so only its runs say whether it did as the date hoped.
+        assert ("steps_in_as_hoped" in run.indicators) is (run.variant == CANDIDATE)
+    # The fake daters never give the signals, so Nova stays out: right only where it should.
+    hoped = {r.scenario: r.indicators["steps_in_as_hoped"] for r in runs if r.variant == CANDIDATE}
+    assert hoped == {date.name: date.expect.steer == () for date in GEN_Z_DATES}
+    [quiet] = await bench(GEN_Z_DATES[:1], variants=(CANDIDATE,), steering=False)
+    assert "steps_in_as_hoped" not in quiet.indicators, "nothing to judge with steering off"
+
+
+def test_dates_are_chosen_only_for_full_dates(capsys):
+    """--dates without --full would be ignored: it stops before any model is built."""
+    with pytest.raises(SystemExit) as stopped:
+        main(["--dates", "gen_z"])
+    assert stopped.value.code == 2 and "use it with --full" in capsys.readouterr().err
+
+
+async def test_bridges_come_only_with_the_switch_and_only_to_today_s_nova():
+    """NOVA_LIVE_BRIDGES stays off on the real show (decision 0012); --bridges turns them
+    on for the candidate alone, which then says what became of each place one may go."""
+    for run in await bench(FULL_DATES[:1]):
+        assert run.metrics["bridges_on"] == run.metrics["bridges_tried"] == 0.0
+        assert not any(note.startswith("bridge at") for note in run.notes)
+    runs = {run.variant: run for run in await bench(FULL_DATES[:1], bridges=True)}
+    baseline, candidate = runs[BASELINE], runs[CANDIDATE]
+    assert baseline.metrics["bridges_on"] == baseline.metrics["bridges_tried"] == 0.0
+    assert candidate.metrics["bridges_on"] == 1.0 and candidate.metrics["bridges_tried"] >= 1
+    spots = [note for note in candidate.notes if note.startswith("bridge at")]
+    assert [note.split(":")[0] for note in spots] == [
+        "bridge at first_question (right)",
+        "bridge at from_the_room",
+        "bridge at last_word (left)",
+    ]
+    assert all("not tried" in note or any(f": {fate}" in note for fate in Prefix) for note in spots)
+    # Every rejected bridge says why, the ones the line writer never asked for included.
+    assert all(note.endswith(")") for note in spots if f": {Prefix.REJECTED}" in note)
+    shown = render_full_date(candidate)
+    assert "  Bridges: " in shown and "  Bridges: " not in render_full_date(baseline)
 
 
 async def test_two_put_downs_get_one_kind_line_then_the_moderator_never_a_pause():

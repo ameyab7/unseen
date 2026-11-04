@@ -145,6 +145,9 @@ class Say:
     away: Seat | None = None
     bridge: bool = False  # optional live prefix; the prepared question remains intact
     return_floor: bool = False  # a reply preserves this dater's pending question
+    # A reply to a dater who asked Nova to leave them to it ("Nova, let us talk"): a few
+    # words, no question, nothing new; or nothing at all (nova/steering.py).
+    step_back: bool = False
     steer: str | None = None  # a step-in's kind (nova/steering.py, Steer), as a code
     due: float | None = field(default=None, compare=False, repr=False)
 

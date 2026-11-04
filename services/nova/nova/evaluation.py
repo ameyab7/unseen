@@ -2,7 +2,8 @@
 
 Run it whenever the model changes:
 
-    uv run python -m nova.evaluation [--repeat N] [--night | --distress | --conduct | --held-out]
+    uv run python -m nova.evaluation [--repeat N] [--night | --distress | --conduct | --held-out
+                                     | --figurative [held-out]]
 
 It is never part of CI: it calls the real model (free with local Gemma, billed with
 Claude). For each case it reports the model's own line, before any fallback, and every
@@ -28,9 +29,15 @@ with --conduct, through the same listener, check and show runner: per category, 
 (what Nova should have done, it did) and false alerts (ordinary talk taken for that
 category), with Wilson 95% intervals and targets.
 
-The rules are tuned on the dev sets. --held-out runs the held-out distress set and conduct
-half, the measure, once, after a change is settled: it prints counts and intervals, never
-the sentences, so its misses can't steer the next change. All data here is made up.
+The figurative set's dev half (nova/figurative_set.py, decision 0005, 2026-11-03) runs with
+them too, or on its own with --figurative: exaggeration in fun ("I'm dead", "kill me"),
+put-downs, and real distress said lightly or in the same words, through the same listener,
+check and show runner. --figurative held-out runs its held-out half alone, counts only.
+
+The rules are tuned on the dev sets. --held-out runs the held-out sets (distress, and the
+conduct, banter, meaning and figurative held-out halves), the measure, once, after a change
+is settled: it prints counts and intervals, never the sentences, so its misses can't steer
+the next change. All data here is made up.
 """
 
 import argparse
@@ -46,7 +53,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-from nova import banter_set, conduct_set, independent_set, running_order, script
+from nova import banter_set, conduct_set, figurative_set, independent_set, running_order, script
 from nova.cards import BlindCard, Pair, Prompt, Seat
 from nova.conduct_judge import ConductJudge, Judged
 from nova.config import Settings, load_settings
@@ -493,6 +500,19 @@ CASES: tuple[Case, ...] = (
         must_not_mention=("Theo,",),
         max_words=25,
         segment=Segment.FIRST_QUESTION,
+    ),
+    Case(
+        # Decision 0013: "You're the boss, Milo, so tell me more about this lost footwear."
+        "a dater asks Nova to leave them to it",
+        Say(
+            Moment.REPLY,
+            about=Seat.LEFT,
+            detail="Nova, we've got this, let us talk.",
+            step_back=True,
+        ),
+        must_not_mention=("?", "shoe", "festival"),
+        max_words=15,
+        earlier_turns=((Seat.RIGHT, "I lost both my shoes at a festival once, it was chaos."),),
     ),
     Case(
         # Theo asked about work; Maya calmly declined, so only that she spoke is kept, and
@@ -1218,10 +1238,104 @@ def render_distress(
             what = f"refusal, {r.outcome}"
         elif not r.sample.distress:
             what = "false pause" if r.outcome == "paused" else "false alert"
-        layer = str(r.heard.layer) if r.heard.verdict is None else f"meaning: {r.heard.verdict}"
         before = f"  (after: {' '.join(r.sample.earlier)})" if r.sample.earlier else ""
-        other = f"  (answering: {' '.join(r.sample.other)})" if r.sample.other else ""
-        lines.append(f"  {what:<12}[{layer}]  {' / '.join(r.sample.finals)}{before}{other}")
+        lines.append(
+            f"  {what:<12}[{_heard_by(r)}]  {' / '.join(r.sample.finals)}{before}{_answering(r)}"
+        )
+    return "\n".join(lines)
+
+
+def _heard_by(r: DistressResult) -> str:
+    """Which layer acted on a sentence, with the meaning layer's verdict if it did."""
+    return str(r.heard.layer) if r.heard.verdict is None else f"meaning: {r.heard.verdict}"
+
+
+def _answering(r: DistressResult) -> str:
+    """What the other dater said that the sentence answers, for a report line."""
+    return f"  (answering: {' '.join(r.sample.other)})" if r.sample.other else ""
+
+
+# The figurative set (nova/figurative_set.py, decision 0005, 2026-11-03): exaggeration in
+# fun and its mirrors. Set before its first run. Real distress said lightly must still pause,
+# and hurt must at least reach the moderator; exaggeration may alert the moderator, but the
+# date pauses for at most 1 in 10, and never for the one putting the other down.
+FIGURATIVE_DEV = "figurative set, dev half (nova/figurative_set.py)"
+FIGURATIVE_HELD_OUT = "figurative set, held-out half"
+HYPERBOLE_PAUSE_LIMIT = 1 / 10
+FIGURATIVE_HOPED = {
+    figurative_set.HYPERBOLE: "left alone, or the moderator alerted; at most 1 in 10 paused",
+    figurative_set.PUT_DOWN: "never paused",
+    figurative_set.MIRROR: "paused, every one",
+    figurative_set.HURT: "paused or the moderator alerted, every one",
+}
+
+
+def figurative_counts(results: list[DistressResult]) -> dict[str, Counter[str]]:
+    """Each sentence once, at its worst outcome, counted by kind."""
+    sentences, _ = per_sentence(results)
+    counts: dict[str, Counter[str]] = {kind: Counter() for kind in figurative_set.KINDS}
+    for r in sentences:
+        counts[figurative_set.kind(r.sample)][r.outcome] += 1
+    return counts
+
+
+def figurative_misses(results: list[DistressResult]) -> list[str]:
+    """The figurative set's targets that failed; empty if all passed."""
+    c = figurative_counts(results)
+    hyperbole = sum(c[figurative_set.HYPERBOLE].values())
+    misses = []
+    if hyperbole and c[figurative_set.HYPERBOLE]["paused"] / hyperbole > HYPERBOLE_PAUSE_LIMIT:
+        misses.append(figurative_set.HYPERBOLE)
+    if c[figurative_set.PUT_DOWN]["paused"]:
+        misses.append(figurative_set.PUT_DOWN)
+    if c[figurative_set.MIRROR]["alerted"] or c[figurative_set.MIRROR]["missed"]:
+        misses.append(figurative_set.MIRROR)
+    if c[figurative_set.HURT]["missed"]:
+        misses.append(figurative_set.HURT)
+    if any(r.heard.verdict is Verdict.UNCHECKED for r in results):
+        misses.append("unchecked")
+    return misses
+
+
+def render_figurative(
+    results: list[DistressResult], *, model_name: str, set_name: str, show_sentences: bool
+) -> str:
+    """show_sentences: False for the held-out half: counts only."""
+    sentences, _ = per_sentence(results)
+    counts = figurative_counts(results)
+    misses = figurative_misses(results)
+    unchecked = sum(r.heard.verdict is Verdict.UNCHECKED for r in results)
+    lines = [
+        f"Nova distress check, {set_name}: {model_name}, {len(sentences)} sentences",
+        "",
+        f"  {'kind':<11} {'of':>3} {'paused':>7} {'alerted only':>13} {'left alone':>11} "
+        f"{'missed':>7}   hoped for",
+    ]
+    for kind in figurative_set.KINDS:
+        c = counts[kind]
+        lines.append(
+            f"  {kind:<11} {sum(c.values()):>3} {c['paused']:>7} {c['alerted']:>13} "
+            f"{c['quiet']:>11} {c['missed']:>7}   {FIGURATIVE_HOPED[kind]}"
+        )
+    lines += [
+        f"  Unchecked: {unchecked}",
+        "",
+        "Targets: " + ("PASSED" if not misses else f"FAILED ({', '.join(misses)})"),
+    ]
+    off = [
+        r
+        for r in sentences
+        if show_sentences
+        and (
+            (r.sample.distress and r.outcome != "paused")
+            or (not r.sample.distress and r.outcome == "paused")
+        )
+    ]
+    if off:
+        lines += ["", "Not handled as hoped"]
+    for r in off:
+        what = f"{figurative_set.kind(r.sample)}, {r.outcome:<8}"
+        lines.append(f"  {what}[{_heard_by(r)}]  {r.sample.sentence}{_answering(r)}")
     return "\n".join(lines)
 
 
@@ -2168,9 +2282,16 @@ def main(argv: list[str] | None = None) -> int:
         "--meaning", action="store_true", help="run only the meaning check's dev half"
     )
     mode.add_argument(
+        "--figurative",
+        nargs="?",
+        const="dev",
+        choices=("dev", "held-out"),
+        help="run only the figurative set's dev half, or its held-out half (counts only)",
+    )
+    mode.add_argument(
         "--held-out",
         action="store_true",
-        help="run the held-out distress set and conduct half: the measure, run once, counts only",
+        help="run every held-out set and half: the measure, run once, counts only",
     )
     mode.add_argument(
         "--independent",
@@ -2219,19 +2340,28 @@ def main(argv: list[str] | None = None) -> int:
             classifier, settings, passes=args.fresh, independent_path=path, only_independent=only
         )
 
-    held_out = args.held_out
-    cases = not (args.distress or args.conduct or held_out or args.meaning)
-    if held_out:
+    held_out = args.held_out or args.figurative == "held-out"
+    alone = args.distress or args.conduct or args.meaning or args.figurative is not None
+    cases = not (alone or held_out)
+    if args.figurative == "held-out":
+        distress_sets, conduct_halves, banter_halves, meaning_halves = [], [], [], []
+        figurative_halves = [(FIGURATIVE_HELD_OUT, figurative_set.HELD_OUT_HALF)]
+    elif held_out:
         distress_sets = [(HELD_OUT, DISTRESS_SET)]
         conduct_halves = [("held-out half", conduct_set.HELD_OUT_HALF)]
         banter_halves = [("held-out half", banter_set.HELD_OUT_HALF)]
         meaning_halves = [(MEANING_HELD_OUT, MEANING_HELD_OUT_HALF)]
+        figurative_halves = [(FIGURATIVE_HELD_OUT, figurative_set.HELD_OUT_HALF)]
     else:
-        alone = args.distress or args.conduct or args.meaning
         distress_sets = [(DEV, DEV_SET)] if not alone or args.distress else []
         conduct_halves = [("dev half", conduct_set.DEV_HALF)] if not alone or args.conduct else []
         banter_halves = [("dev half", banter_set.DEV_HALF)] if not alone or args.conduct else []
         meaning_halves = [(MEANING_DEV, MEANING_DEV_HALF)] if not alone or args.meaning else []
+        figurative_halves = (
+            [(FIGURATIVE_DEV, figurative_set.DEV_HALF)]
+            if not alone or args.figurative == "dev"
+            else []
+        )
 
     async def evaluate() -> tuple[
         list[CaseResult],
@@ -2239,6 +2369,7 @@ def main(argv: list[str] | None = None) -> int:
         list[tuple[str, list[ConductResult]]],
         list[tuple[str, list[BanterResult]]],
         list[tuple[str, list[MeaningResult]]],
+        list[tuple[str, list[DistressResult]]],
     ]:
         for warming in {model.name: model, classifier.name: classifier}.values():
             await warm_up(warming, deadline=settings.warm_up)  # else every 2 s check times out
@@ -2254,20 +2385,27 @@ def main(argv: list[str] | None = None) -> int:
                 max_wait=settings.utterance_max_wait,
                 repeat=args.repeat,
             )
-        distress = [
-            (
-                name,
-                await run_distress(
-                    classifier,
-                    timeout=settings.distress_timeout,
-                    grace=settings.utterance_grace,
-                    max_wait=settings.utterance_max_wait,
-                    repeat=args.repeat,
-                    samples=samples,
-                ),
-            )
-            for name, samples in distress_sets
-        ]
+
+        async def heard(
+            sets: list[tuple[str, tuple[Sample, ...]]],
+        ) -> list[tuple[str, list[DistressResult]]]:
+            """Each set's samples through the listener and distress check."""
+            return [
+                (
+                    name,
+                    await run_distress(
+                        classifier,
+                        timeout=settings.distress_timeout,
+                        grace=settings.utterance_grace,
+                        max_wait=settings.utterance_max_wait,
+                        repeat=args.repeat,
+                        samples=samples,
+                    ),
+                )
+                for name, samples in sets
+            ]
+
+        distress = await heard(distress_sets)
         conduct = [
             (name, await run_conduct(classifier, timeout=settings.distress_timeout, samples=half))
             for name, half in conduct_halves
@@ -2280,9 +2418,10 @@ def main(argv: list[str] | None = None) -> int:
             (name, await run_meaning(classifier, timeout=settings.meaning_timeout, samples=half))
             for name, half in meaning_halves
         ]
-        return results, distress, conduct, banter, meaning
+        figurative = await heard(figurative_halves)
+        return results, distress, conduct, banter, meaning, figurative
 
-    results, distress, conduct, banter, meaning = asyncio.run(evaluate())
+    results, distress, conduct, banter, meaning, figurative = asyncio.run(evaluate())
     if results:
         print(render(results, model_name=model.name), end="\n\n")
     for name, set_results in distress:
@@ -2305,12 +2444,18 @@ def main(argv: list[str] | None = None) -> int:
             half_lines, model_name=classifier.name, set_name=name, show_lines=not held_out
         )
         print(report, end="\n\n")
+    for name, half_results in figurative:
+        report = render_figurative(
+            half_results, model_name=classifier.name, set_name=name, show_sentences=not held_out
+        )
+        print(report, end="\n\n")
     passed = (
         not any(meaning_misses(half_lines) for _, half_lines in meaning)
         and all(result.passed for result in results)
         and all(distress_summary(set_results).passed for _, set_results in distress)
         and not any(conduct_misses(half_results) for _, half_results in conduct)
         and not any(banter_misses(half_moments) for _, half_moments in banter)
+        and not any(figurative_misses(half_results) for _, half_results in figurative)
     )
     return 0 if passed else 1
 

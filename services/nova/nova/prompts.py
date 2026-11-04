@@ -561,6 +561,17 @@ def room_talk(facts: RoomFacts, *, opening: str, tonight: Sequence[str] = ()) ->
     )
 
 
+# A dater asked Nova to leave them to it (2026-11-02: "Nova, we've got this, let us talk."
+# got "You're the boss, Milo, so tell me more about this lost footwear."). No this_date, so
+# there's nothing to pick up and bring back.
+STEP_BACK = (
+    "the dater in the {seat} seat spoke to you on air and asked you to leave them to it; "
+    "their words are in the data. Say warmly, in a few words, that you'll step back, and stop "
+    "there: ask nothing, bring up no topic, and hand to no one. Never reveal or guess a "
+    "decision, and never repeat a personal detail they mentioned."
+)
+
+
 def reply(
     pair: Pair,
     seat: Seat,
@@ -571,10 +582,18 @@ def reply(
     this_date: Mapping[str, object] | None = None,
     segment: Segment | None = None,
     return_floor: bool = False,
+    step_back: bool = False,
 ) -> str:
     """other_away: the other dater is away (the moderator resumed without them), so they
     aren't in the data, this_date leaves out whatever they said, and Nova hands back to the
-    dater who spoke. segment: where the date is, as data, with the arc's aim for it."""
+    dater who spoke. segment: where the date is, as data, with the arc's aim for it.
+    step_back: they asked Nova to leave them to it (nova/steering.py), so a few words and
+    nothing more."""
+    if step_back:
+        data: dict[str, object] = {"dater": _name(pair.card(seat)), "they_said": words}
+        if not other_away:
+            data["other_dater"] = _name(pair.card(seat.other))
+        return _task(STEP_BACK.format(seat=seat), {**data, **_moment(segment)}, tonight)
     arc = REPLY_BRIEF + REPLY_AIMS.get(segment, "") if segment is not None else ""
     # Handing the floor back asks nothing new, and the guide's examples ask something.
     arc = REPLY_BRIEF if return_floor else REPLY_GUIDE + arc

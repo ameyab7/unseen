@@ -46,13 +46,13 @@ cannot both be guaranteed.
 
 `NOVA_LIVE_BRIDGES` defaults off pending audio and load acceptance. Eligible prepared
 questions may acquire a prefix of at most eight words; the original question follows
-unchanged. At most three are attempted, 30 seconds apart, only below 15% observed host
-airtime. They are optional, never follow a last word, and are not added to every answer.
-Failure or timeout uses the existing question. Prefix and combined line pass guardrails;
-meaning checks are mandatory even with `NOVA_MEANING_LIVE` off. Both models must be
-allowed this date's cleared context. No dater-derived words enter another date's memory.
-New speech cancels an obsolete prefix, preserving the required question. No new fixed
-silence-check-in wording is introduced.
+unchanged. At most three are attempted, 30 seconds apart, only below 30% observed host
+airtime (15% until 2026-11-03, below). They are optional, never follow a last word, and
+are not added to every answer. Failure or timeout uses the existing question. Prefix and
+combined line pass guardrails; meaning checks are mandatory even with `NOVA_MEANING_LIVE`
+off. Both models must be allowed this date's cleared context. No dater-derived words enter
+another date's memory. New speech cancels an obsolete prefix, preserving the required
+question. No new fixed silence-check-in wording is introduced.
 
 The priority gate cannot preempt inference already running. Prefixes stay off until load
 trials establish acceptable safety tail latency/timeouts. Frozen safety prompts and
@@ -493,3 +493,28 @@ next followed 8 s after it. Now (`ShowRunner.line_done`, `_silence_due`):
 Deterministic, no model change; the legacy runner gets it too. Tests:
 `tests/test_conversation.py` (the room question in both modes, the reply, the cooldown),
 each failing before the change.
+
+## Bridges below 30% of the date, 2026-11-03
+
+In the full-date simulation (decision 0009, 2026-11-02, `--bridges`) Nova tried a bridge at
+6 of 24 places. The 15% rule counts Nova's share from the doors, and the intro alone kept
+Nova at 21 to 37% by the second dater's first question and at 18 to 22% by the room's first
+question, so it held back nearly every one. The product owner raised the limit to 30%
+(`rehearsal.BRIDGE_SHARE`, which the benchmark's report reads) and asked to test again.
+`NOVA_LIVE_BRIDGES` still defaults off. Tests: `tests/test_bridges.py` (tried at 25 and 29%,
+not at 30%).
+
+On Gemma, 2026-11-03 (`benchmark --full --dates all --bridges`, eight dates, made-up daters,
+every run valid): today's Nova tried a bridge at 18 of 24 places (6 at 15%) and said 12 (3).
+The room's first question was tried in all 8 dates and said in 5 (2 rejected by the meaning
+check, 1 not asked for since the question itself was a fallback); the first last word tried
+in 8 and said in 6 (1 rejected for a personal detail, 1 not asked for: the turn before was
+too short to keep). The second dater's first question was tried in only 2: in the other 6
+the intro still kept Nova at 31 to 37% of the date so far. The twelve said: "That depends.",
+"A sentient starter sounds intense.", "A very short trip, then.", "A vanishing light.", "A
+true connoisseur.", "A digital phantom, how eerie.", "A little bit dramatic.", "Already
+cooked.", "The elite way to eat.", "No deep meaning at all.", "A brand of minimal effort.",
+"A very thin toothpick." What they cost: a bridged line waits for its prefix and the
+meaning check, so today's Nova's median live line took 1254 ms against the baseline's 975,
+and rejected prefixes took its guardrail failures to 7% of lines (1%). Nova's share of the
+conversation stayed at 16%. Whether they sound good is for the product owner.

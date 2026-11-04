@@ -55,7 +55,7 @@ from nova.distress import Verdict, is_unmistakable
 from nova.floor import FINAL_LEAD, Floor, Move, asks_again, move, possible_completion
 from nova.guardrails import screen_question
 from nova.questions import AudienceQuestion
-from nova.steering import Steering
+from nova.steering import Steering, asks_nova_to_stay_out
 from nova.timing import FULL, Timing
 
 # Segments where the daters are on air and can ask for a moment.
@@ -779,7 +779,9 @@ class ShowRunner:
         for meaning outside the runner, and the verdict comes back through distress_check;
         whoever runs the show holds the reply until then. again: they asked to hear the
         question again (asks_again), so it's still theirs to answer once Nova has said it,
-        even if something they said first ("Sorry,") was taken for an answer."""
+        even if something they said first ("Sorry,") was taken for an answer. A dater who
+        asks Nova to leave them to it ("Nova, let us talk") gets a reply that steps back
+        (Say.step_back, decision 0013), whether or not stepping in is on."""
         cues = self._due(now)
         if is_unmistakable(words) if wants_to_stop is None else wants_to_stop:
             return cues + self._wants_to_stop(now, seat)
@@ -792,6 +794,7 @@ class ShowRunner:
                     detail=words,
                     away=away,
                     return_floor=self.conversational and (again or seat in self.floor.expected),
+                    step_back=asks_nova_to_stay_out(words),
                 )
             )
         return cues

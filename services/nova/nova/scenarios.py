@@ -76,6 +76,10 @@ class Expect:
     # Gate: a dater asked to hear Nova's question again, without naming Nova, and Nova
     # answered them (decision 0012).
     asked_again: bool = False
+    # Indicator, for today's Nova with stepping in on (decision 0013): the kinds of step-in
+    # (nova/steering.py, Steer) the scenario is written for, one of which should come; empty,
+    # Nova should stay out. None: not checked.
+    steer: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -98,6 +102,8 @@ def _card(name: str, age: int, pronouns: str, *prompts: tuple[str, str]) -> Blin
 
 ANSWER = "answer what you were just asked, in your own way"
 REACT = "react to what was just said, briefly, and keep the conversation going"
+# Words that would hint at the daters' decision: never in a line of Nova's (Expect.never).
+DECISION_WORDS = ("chemistry", "spark", "a match", "hitting it off", "getting on")
 
 SCENARIOS: tuple[Scenario, ...] = (
     Scenario(
@@ -748,7 +754,7 @@ DEVELOPMENT: tuple[Scenario, ...] = (
             ),
             Beat(RIGHT, REACT),
         ),
-        Expect(never=("chemistry", "spark", "a match", "hitting it off", "getting on")),
+        Expect(never=DECISION_WORDS),
     ),
 )
 
@@ -968,5 +974,322 @@ FULL_DATES: tuple[FullDate, ...] = (
             "Describe your ideal first date in three words.",
         ),
         unlock=True,
+    ),
+)
+
+
+# --- Gen Z dates (decision 0009, 2026-11-02) ------------------------------------------------
+# Daters in their twenties who talk the way Gen Z does, slang and irony included, each date
+# written for one of the step-in scenarios of decision 0013 (Expect.steer), or to keep Nova
+# out: `nova.benchmark --full --dates gen_z`. Slang is also a test of the checks: hyperbole
+# ("I'm literally dead") is not distress, and a roast both are in on is not unkind.
+
+GEN_Z_DATES: tuple[FullDate, ...] = (
+    FullDate(
+        "mutual_roast",
+        "Two daters roast each other from the start and both love it, with hyperbole like "
+        "'I'm literally dead' and 'kill me'; one tells a story the other keeps asking about, "
+        "and they tell Nova they've got this. Nova stays out.",
+        Pair(
+            _card(
+                "Jade",
+                23,
+                "she/her",
+                ("My toxic trait", "is thinking I'd survive a reality show."),
+                ("Ask me about", "the festival where I lost both shoes."),
+            ),
+            _card(
+                "Milo",
+                24,
+                "he/him",
+                ("I'm weirdly proud of", "a 600-day Duolingo streak in Italian."),
+                ("Green flag", "someone who roasts me back."),
+            ),
+        ),
+        {
+            LEFT: Persona(
+                "Gen Z and chronically online: roasts people she likes, quick comebacks, "
+                "laughs at her own jokes, talks in slang like 'no because', 'I'm dead', 'it's "
+                "giving', 'respectfully', 'the ick', 'delulu', 'be so for real'; sharp but "
+                "never actually mean, and loves being roasted back",
+                (
+                    "Her Spotify Wrapped was ninety percent one sad album.",
+                    "She has strong opinions about oat milk.",
+                ),
+            ),
+            RIGHT: Persona(
+                "Gen Z, dry and playful: roasts back even harder, clearly enjoying the back-"
+                "and-forth, says 'bro', 'ngl', 'lowkey', 'fr', 'I'm crying', 'that's crazy', "
+                "and asks follow-up questions because he's actually curious",
+                (
+                    "He DJs house parties and takes it far too seriously.",
+                    "He can't order a coffee in Italian despite the streak.",
+                ),
+            ),
+        },
+        (
+            Beat(LEFT, "roast Milo's Duolingo streak, playfully, in your slang"),
+            Beat(RIGHT, "roast her right back about her toxic trait, harder, clearly enjoying it"),
+            Beat(LEFT, line="No because I'm literally dead, that's so rude. I love it."),
+            Beat(RIGHT, "ask her, teasing, about the festival where she lost both shoes"),
+            Beat(LEFT, "tell the festival story, chaotic, with a joke at your own expense"),
+            Beat(RIGHT, "ask a curious follow-up about the story, laughing"),
+            Beat(LEFT, "answer it, then roast him again and ask him something back"),
+            Beat(RIGHT, line="I'm crying, that's the worst thing anyone's said to me. Kill me."),
+            Beat(LEFT, line="Wait, sorry, go on, what were you saying?"),
+            Beat(RIGHT, line="Nova, we've got this, let us talk.", to_nova=True),
+            Beat(LEFT, "roast him for telling Nova to leave, still laughing"),
+            Beat(RIGHT, "fire back with a roast about her taste in music"),
+        ),
+        questions=("What's your toxic trait?", "What's a hot take you'd defend forever?"),
+        unlock=True,
+        expect=Expect(keep_it_kind=False, never=DECISION_WORDS, steer=()),
+    ),
+    FullDate(
+        "the_interviewer",
+        "One dater runs the date like a podcast interview, green flag or red flag, toxic "
+        "trait, attachment style, and never answers her own questions; the other answers "
+        "everything and never asks back. Nova turns it round.",
+        Pair(
+            _card(
+                "Anika",
+                25,
+                "she/her",
+                ("I'm the friend who", "turns every hangout into a podcast."),
+                ("My Roman Empire", "is a baking show I've watched four times."),
+            ),
+            _card(
+                "Kai",
+                22,
+                "they/them",
+                ("Currently obsessed with", "thrifting vintage band tees."),
+                ("A perfect Sunday", "is a long walk and a longer nap."),
+            ),
+        ),
+        {
+            LEFT: Persona(
+                "Gen Z with podcast-host energy: treats the date like an interview, fires "
+                "question after question ('green flag or red flag?', 'toxic trait?', "
+                "'attachment style?'), reacts with 'okay wait', 'iconic', 'noted', and never "
+                "answers her own questions",
+                ("She keeps a notes app list of red flags.", "She rates everything out of ten."),
+            ),
+            RIGHT: Persona(
+                "Gen Z, laid-back and a little overwhelmed: answers every question honestly "
+                "and at some length, never thinks to ask one back, says 'honestly', "
+                "'lowkey', 'ngl', 'it's giving'",
+                (
+                    "They once thrifted a jacket with a stranger's love letter in the pocket.",
+                    "They're in a group chat that only sends cat videos.",
+                ),
+            ),
+        },
+        (
+            Beat(
+                LEFT,
+                line="Okay wait, green flag or red flag: someone who replies in under a minute?",
+            ),
+            Beat(RIGHT, "answer honestly, at some length, without asking anything back"),
+            Beat(LEFT, "ask Kai their toxic trait, rapid-fire, never answering it yourself"),
+            Beat(RIGHT, "answer honestly, without asking anything back"),
+            Beat(LEFT, "ask Kai their attachment style, like a podcast host"),
+            Beat(RIGHT, "answer, a little overwhelmed, without asking anything back"),
+            Beat(LEFT, "ask Kai a rapid-fire question about their last situationship"),
+            Beat(RIGHT, "answer honestly, without asking anything back"),
+            Beat(LEFT, "ask Kai another quick question about thrifting, never answering your own"),
+            Beat(RIGHT, "answer, without asking anything back"),
+            Beat(LEFT, "ask one more rapid-fire question, green flag or red flag"),
+            Beat(RIGHT, "answer briefly, without asking anything back"),
+        ),
+        questions=(
+            "What's your go-to karaoke song?",
+            "What's a green flag you notice straight away?",
+        ),
+        choices={LEFT: "reveal", RIGHT: "unseen"},
+        expect=Expect(steer=("turn_around",)),
+    ),
+    FullDate(
+        "monologue_and_real",
+        "One dater tells the whole saga of her situationship and her one-star film reviews; "
+        "the other only says 'real', 'fr' and 'valid'. Nova brings the quiet one in.",
+        Pair(
+            _card(
+                "Layla",
+                26,
+                "she/her",
+                ("Ask me about", "my situationship that only spoke in memes."),
+                ("My most controversial review", "is one star for a film everyone loves."),
+            ),
+            _card(
+                "Ezra",
+                24,
+                "he/him",
+                ("I geek out about", "mechanical keyboards, unfortunately."),
+                ("My comfort food", "is instant ramen with an egg in it."),
+            ),
+        ),
+        {
+            LEFT: Persona(
+                "Gen Z storyteller who overshares: tells long dramatic stories about her "
+                "situationship and her film reviews, says 'and I was like', 'the audacity', "
+                "'it's giving', 'not me doing', goes on and on and rarely asks anything",
+                (
+                    "Her situationship sent her a meme instead of an apology.",
+                    "She writes film reviews nobody asked for.",
+                ),
+            ),
+            RIGHT: Persona(
+                "Gen Z, shy and very dry: answers in one to four words like 'real', 'fr', "
+                "'valid', 'that's crazy', 'lowkey same', and warms up only when someone asks "
+                "him something directly",
+                (
+                    "He has opinions about keyboards he never shares unless asked.",
+                    "He makes a very good ramen.",
+                ),
+            ),
+        },
+        (
+            Beat(
+                LEFT,
+                "start telling the long saga of your situationship who only replied with "
+                "memes, in detail, asking nothing",
+            ),
+            Beat(RIGHT, line="Real."),
+            Beat(LEFT, "keep going with the saga, more dramatic detail, asking nothing"),
+            Beat(RIGHT, line="Fr, that's crazy."),
+            Beat(LEFT, "go off on a tangent about your one-star film review, asking nothing"),
+            Beat(RIGHT, line="Valid."),
+            Beat(LEFT, "get back to the saga and its dramatic ending, asking nothing"),
+            Beat(RIGHT, line="Lowkey same."),
+            Beat(LEFT, "add one more long dramatic detail, asking nothing"),
+            Beat(RIGHT, line="That's wild."),
+        ),
+        first_answers={RIGHT: (Beat(RIGHT, line="Ngl, I don't even know."),)},
+        questions=(
+            "What's the most chaotic photo in your camera roll?",
+            "Describe your perfect first date in three words.",
+        ),
+        unlock=True,
+        expect=Expect(steer=("bring_in",)),
+    ),
+    FullDate(
+        "cringe_apologiser",
+        "A nervous dater keeps calling himself cringe and apologising for yapping, then won't "
+        "tell the worst-first-date story on his own card, and the other presses him for it. "
+        "Nova gives him an easy win, or moves the talk on.",
+        Pair(
+            _card(
+                "Remy",
+                21,
+                "he/him",
+                ("I'm weirdly good at", "remembering everyone's coffee order."),
+                ("Ask me about", "the worst first date of my life."),
+            ),
+            _card(
+                "Zoe",
+                23,
+                "she/her",
+                ("The way to my heart", "is a voice note, not a text."),
+                ("I'll never stop", "defending pineapple on pizza."),
+            ),
+        ),
+        {
+            LEFT: Persona(
+                "Gen Z, sweet and nervous: overthinks, calls himself cringe, apologises for "
+                "yapping, makes self-deprecating jokes, says 'sorry', 'that was so cringe', "
+                "'I'm cooked', 'my brain is not braining', 'ignore me'",
+                ("He rehearsed this date in the mirror.", "He laughs nervously at his own jokes."),
+            ),
+            RIGHT: Persona(
+                "Gen Z, confident and kind, a little nosy: pushes for the story when someone "
+                "dodges, says 'no because', 'wait', 'spill', 'be so for real', and hypes "
+                "people up",
+                (
+                    "She sends ten-minute voice notes.",
+                    "She has a hot take about pizza ready at all times.",
+                ),
+            ),
+        },
+        (
+            Beat(RIGHT, "ask Remy, curious, how he remembers everyone's coffee order"),
+            Beat(LEFT, line="Sorry, that's so cringe, I literally rehearsed this in the mirror."),
+            Beat(RIGHT, "reassure him, laughing, and ask a follow-up"),
+            Beat(LEFT, "answer, then call yourself cringe or apologise for yapping"),
+            Beat(RIGHT, "hype him up, then ask about the worst first date on his card"),
+            Beat(LEFT, line="Ngl I'd rather not say, it's too embarrassing."),
+            Beat(RIGHT, line="No because now I need to know, what happened?"),
+            Beat(LEFT, "dodge it awkwardly, apologise, and say you're cooked"),
+            Beat(RIGHT, "change the subject to your pineapple pizza take"),
+            Beat(LEFT, "react, then apologise for rambling again"),
+        ),
+        questions=(
+            "What's a song you'd never skip?",
+            "What's the best advice you've ever been given?",
+        ),
+        unlock=True,
+        # "I'd rather not say" is a calm boundary: the moderator hears of it, never a pause.
+        expect=Expect(boundary=True, steer=("easy_win", "move_on", "lighten")),
+    ),
+    FullDate(
+        "dry_texters",
+        "Two dry texters in person: Arjun asks Nova whether Nia has rizz, Nia whether they're "
+        "a match; then a long flat stretch of short answers and no questions. Nova lightens it "
+        "with a quick either-or, and never hints at the decision.",
+        Pair(
+            _card(
+                "Nia",
+                22,
+                "she/her",
+                ("My most used emoji", "is the skull, no context."),
+                ("A perfect night", "is noodles and a documentary."),
+            ),
+            _card(
+                "Arjun",
+                25,
+                "he/him",
+                ("I'm weirdly good at", "guessing the ending of any film."),
+                ("My toxic trait", "is replying three days later."),
+            ),
+        ),
+        {
+            LEFT: Persona(
+                "Gen Z with dry-texter energy in person: answers in a few flat words like "
+                "'fair', 'same', 'lowkey', 'true', deadpan, and gets funny only once she warms "
+                "up",
+                ("She's tired from a long week.", "She takes noodles very seriously."),
+            ),
+            RIGHT: Persona(
+                "Gen Z, also dry and low-energy: short answers like 'valid', 'same tbh', "
+                "'kinda', the odd surprisingly funny one-liner, and cheeky questions for the "
+                "host",
+                ("He guesses film endings out loud.", "He's proud of replying late."),
+            ),
+        },
+        (
+            Beat(LEFT, "say something short and deadpan about your card"),
+            Beat(RIGHT, "answer in a few flat words"),
+            Beat(RIGHT, line="Nova, be so for real, does she have rizz or not?", to_nova=True),
+            Beat(LEFT, "react in a few deadpan words"),
+            Beat(LEFT, line="Nova, rate us out of ten. Are we a match?", to_nova=True),
+            Beat(RIGHT, "react in a few flat words, asking nothing"),
+            Beat(LEFT, "say something short about your week, asking nothing"),
+            Beat(RIGHT, "agree in a few flat words, asking nothing"),
+            # The flat stretch: six short turns, no questions, about 50 s, and never a silence
+            # long enough for a silence prompt (decision 0013, LIGHTEN).
+            Beat(LEFT, line="Same, honestly. Kind of tired today, ngl."),
+            Beat(quiet=5.0),
+            Beat(RIGHT, line="Fair. Long week for me too, lowkey."),
+            Beat(quiet=5.0),
+            Beat(LEFT, line="Lowkey I just want noodles right now."),
+            Beat(quiet=5.0),
+            Beat(RIGHT, line="Valid. Noodles are always valid, no cap."),
+            Beat(quiet=5.0),
+            Beat(LEFT, line="True. The spicy ones especially, for real."),
+            Beat(quiet=5.0),
+            Beat(RIGHT, line="Same tbh. Spicy or nothing, honestly."),
+        ),
+        questions=("What's your comfort food after a long week?", "Night in or night out?"),
+        choices={LEFT: "unseen", RIGHT: "reveal"},
+        expect=Expect(never=DECISION_WORDS, steer=("lighten",)),
     ),
 )

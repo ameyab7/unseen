@@ -32,7 +32,9 @@ than a fifth of the last three minutes' airtime):
   flag), for SAFETY_QUIET: that's the moderator's, and Nova never papers over it;
 - after a dater tells Nova to stay out ("Nova, let us talk"), for the rest of the date;
 - at most MAX_STEERS a date, MIN_APART between them, and never the same kind twice running;
-- a dater who just passed is never the one asked: EASY_WIN becomes LIGHTEN for both.
+- a dater who passed on something in the last two minutes is never the one asked: an easy
+  win, turning it round or bringing them in becomes LIGHTEN for both. And no line of
+  Nova's own takes up a question a dater declined, even from their card (nova/lines.py).
 
 The signals are English word patterns: another language never fires them, so Nova stays
 out. Nothing here keeps or logs what anyone said: each turn is four numbers and flags.
@@ -88,6 +90,18 @@ STAY_OUT = re.compile(
 )
 
 
+def asks_nova_to_stay_out(words: str) -> bool:
+    """Words to Nova asking it to leave the daters to it ("Nova, we've got this, let us
+    talk."): its reply steps back, with no question (nova/prompts.py, reply), whether or
+    not stepping in is on."""
+    return STAY_OUT.search(straight_quotes(words)) is not None
+
+
+def passes(words: str) -> bool:
+    """A dater passing on a question ("I'd rather not say")."""
+    return PASSED.search(straight_quotes(words)) is not None
+
+
 @dataclass(frozen=True)
 class _Turn:
     at: float
@@ -113,7 +127,7 @@ class Steering:
         """A dater's finished turn: kept as numbers and flags only."""
         text = straight_quotes(words)
         if to_nova:
-            if STAY_OUT.search(text):
+            if asks_nova_to_stay_out(text):
                 self.off = True
             return  # words to Nova aren't the daters' conversation
         self._turns.append(
@@ -123,7 +137,7 @@ class Steering:
                 len(text.split()),
                 "?" in text,
                 SELF_DOWN.search(text) is not None,
-                PASSED.search(text) is not None,
+                passes(text),
             )
         )
 
@@ -161,6 +175,9 @@ class Steering:
             return None
         since = self._steers[-1][0] if self._steers else -float("inf")
         turns = [t for t in self._turns if at - t.at <= WINDOW and t.at > since]
+        # Whoever passed on something in the window, before a step-in or since: never the
+        # one asked. Remy passed five turns before the easy win that asked him (2026-11-02).
+        passed = {t.seat for t in self._turns if at - t.at <= WINDOW and t.passed}
         last = self._steers[-1][1] if self._steers else None
         for found in (
             self._easy_win(turns),
@@ -169,6 +186,8 @@ class Steering:
             self._move_on(turns, at),
             self._lighten(turns),
         ):
+            if found is not None and found[1] in passed:
+                found = Steer.LIGHTEN, None  # an either-or for both instead
             if found is not None and found[0] is not last:
                 return found
         return None
@@ -180,9 +199,6 @@ class Steering:
         for seat in Seat:
             downs = [t for t in turns if t.seat is seat and t.self_down]
             if len(downs) >= 3:
-                mine = [t for t in turns if t.seat is seat]
-                if mine and mine[-1].passed:  # never ask the one who just passed
-                    return Steer.LIGHTEN, None
                 return Steer.EASY_WIN, seat
         return None
 

@@ -297,3 +297,23 @@ async def test_the_rehearsal_spends_its_prefixes_only_where_they_can_be_said():
     lightning, room = [cue for cue in r.cues if isinstance(cue, Say)][-2:]
     assert not lightning.bridge and room.bridge
     r.close()
+
+
+@pytest.mark.parametrize(("nova", "bridged"), [(25.0, True), (29.0, True), (30.0, False)])
+async def test_a_prefix_is_tried_only_while_nova_has_under_30_percent_of_the_date(nova, bridged):
+    """The product owner's 2026-11-03 change, from 15%: counted from the doors, the intro
+    alone kept Nova over 15% at nearly every place a bridge may go."""
+    from test_rehearsal import Clock
+
+    from nova.rehearsal import BRIDGE_SHARE
+
+    assert BRIDGE_SHARE == 0.30
+    clock = Clock()
+    r, _ = await bridging(clock, Model(), live_bridges=True)
+    r.start()
+    clock.now += 100
+    r.nova_seconds = nova  # of the 100 s the date has run
+    r._queue_cues([Say(Moment.FROM_THE_ROOM, detail="Mountains or sea?")])
+    [room] = [cue for cue in r.cues if isinstance(cue, Say)][-1:]
+    assert room.bridge is bridged
+    r.close()

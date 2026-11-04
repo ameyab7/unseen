@@ -104,7 +104,7 @@ def test_nova_s_voice_style_goes_to_cartesia_only_and_only_when_set():
     assert agent.voice_style("deepgram/aura-2", styled) == {}
 
 
-def test_a_styled_voice_still_times_its_words(monkeypatch):
+async def test_a_styled_voice_still_times_its_words(monkeypatch):
     keys(monkeypatch)
     session = new_session(replace(SETTINGS, voice_emotion="excited", voice_speed=1.1))
     assert session.tts.capabilities.aligned_transcript
