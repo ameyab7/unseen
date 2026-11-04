@@ -8,11 +8,17 @@ from dataclasses import replace
 
 import pytest
 
-from nova import conduct_set, evaluation, script
+from nova import conduct_set, evaluation, figurative_set, script
 from nova.cards import Pair, Seat
 from nova.config import LlmChoice, Settings
 from nova.cues import AlertModerator, Conduct, Moment, Say
-from nova.distress import LIGHT_SYSTEM, DistressCheck, instant_view, is_unmistakable
+from nova.distress import (
+    FIGURATIVE_SYSTEM,
+    LIGHT_SYSTEM,
+    DistressCheck,
+    instant_view,
+    is_unmistakable,
+)
 from nova.distress_dev import DEV_SET
 from nova.distress_set import DISTRESS_SET
 from nova.evaluation import (
@@ -50,6 +56,9 @@ from nova.lines import LIVE_REACTIONS, SET_PIECES, Source
 from nova.quality import EITHER_OR, FINISH_THE_SENTENCE, ONE_WORD, form_problems, names_word
 
 EXPECTED = {
+    "an easy win for a dater putting themselves down",
+    "turning it round on the dater asking every question",
+    "moving on after a dater passed",
     "intro from a blind card",
     "first question from a blind card",
     "first question from a claim on the card",
@@ -84,6 +93,7 @@ EXPECTED = {
     "a difference that shouldn't be played up",
     "short answers",
     "clarification preserves the asked dater's floor",
+    "a dater asks Nova to leave them to it",
     "a boundary that stays a boundary",
     "nothing to connect",
     "common ground only one dater gave",
@@ -146,8 +156,9 @@ def hears_the_cases(prompt: str) -> str:
 
 
 class FakeModel:
-    """Writes lines from reply; answers the distress check from label, and the second
-    question after a maybe (LIGHT_SYSTEM) from light: false unless given."""
+    """Writes lines from reply; answers the distress check from label, the second question
+    after a maybe (LIGHT_SYSTEM) from light, and the third after a yes (FIGURATIVE_SYSTEM)
+    from figurative: false unless given."""
 
     name = "fake/model"
 
@@ -159,12 +170,14 @@ class FakeModel:
         label=hears_the_cases,
         label_delay=0.0,
         light='{"light": false}',
+        figurative='{"figurative": false}',
     ):
         self.reply, self.delay, self.error = reply, delay, error
         self.label_with, self.label_delay = label, label_delay
-        self.light_with = light
+        self.light_with, self.figurative_with = light, figurative
         self.labelled: list[str] = []
         self.asked_light: list[str] = []  # sentences the second question was asked about
+        self.asked_figurative: list[str] = []  # and the third
 
     async def write(self, *, system: str, prompt: str) -> str:
         if self.delay:
@@ -177,6 +190,10 @@ class FakeModel:
         if system == LIGHT_SYSTEM:
             self.asked_light.append(sentence(prompt))
             return self.light_with(prompt) if callable(self.light_with) else self.light_with
+        if system == FIGURATIVE_SYSTEM:
+            self.asked_figurative.append(sentence(prompt))
+            figurative = self.figurative_with
+            return figurative(prompt) if callable(figurative) else figurative
         self.labelled.append(sentence(prompt))
         if self.label_delay:
             await asyncio.sleep(self.label_delay)
@@ -268,13 +285,14 @@ async def test_reports_the_fallback_rate_for_every_moment_the_model_writes():
     rates = fallback_rates(results)
     assert set(rates) == SET_PIECES | LIVE_REACTIONS
     assert all(rate.replaced == 0 for moment, rate in rates.items() if moment is not Moment.REPLY)
-    assert rates[Moment.REPLY].tried == 2 * 14, "14 reply cases reach the check, twice each"
+    assert rates[Moment.REPLY].tried == 2 * 15, "15 reply cases reach the check, twice each"
     assert rates[Moment.REPLY].replaced == 2, "the maybe gets the kind line, twice"
 
     report = render(results, model_name=model.name)
     for column in ("fallbacks", "near-duplicates", "same opening"):
         assert column in report
-    assert "reply" in report and "2 of 26" in report
+    [reply_row] = [row for row in report.splitlines() if row.strip().startswith("reply ")]
+    assert "2 of 30" in reply_row
 
 
 async def test_every_line_that_breaks_a_rule_counts_as_a_fallback_with_its_reasons():
@@ -298,7 +316,7 @@ async def test_questions_declined_and_daters_paused_before_the_model_are_not_cou
     results = await run_cases(FakeModel(well_behaved), live_timeout=1.0, prep_timeout=1.0)
     rates = fallback_rates(results)
     assert rates[Moment.FROM_THE_ROOM].tried == 1, "only the cheeky question reaches the model"
-    assert rates[Moment.REPLY].tried == 14, "the two daters who clearly want to stop never do"
+    assert rates[Moment.REPLY].tried == 15, "the two daters who clearly want to stop never do"
 
 
 # --- Repetition: does Nova keep saying the same thing? ------------------------------------
@@ -1058,21 +1076,27 @@ def test_a_night_warms_the_model_up_before_its_first_line_and_exits_with_its_gat
 
 
 @pytest.mark.parametrize(
-    ("flags", "distress", "conduct"),
+    ("flags", "distress", "conduct", "figurative"),
     [
-        ([], [DEV], ["dev half"]),
-        (["--distress"], [DEV], []),
-        (["--conduct"], [], ["dev half"]),
-        (["--held-out"], [HELD_OUT], ["held-out half"]),
+        ([], [DEV], ["dev half"], ["dev half"]),
+        (["--distress"], [DEV], [], []),
+        (["--conduct"], [], ["dev half"], []),
+        (["--held-out"], [HELD_OUT], ["held-out half"], ["held-out half"]),
+        (["--figurative"], [], [], ["dev half"]),
+        (["--figurative", "held-out"], [], [], ["held-out half"]),
     ],
 )
-def test_the_held_out_sets_run_only_when_asked(monkeypatch, flags, distress, conduct):
+def test_the_held_out_sets_run_only_when_asked(monkeypatch, flags, distress, conduct, figurative):
     """Tune on dev; the held-out sets are the measure, run once (--held-out)."""
-    ran: dict[str, list[str]] = {"distress": [], "conduct": []}
+    ran: dict[str, list[str]] = {"distress": [], "conduct": [], "figurative": []}
     no_network(monkeypatch, FakeModel(well_behaved))
 
     async def run_distress(model, *, samples, **_):
-        ran["distress"].append(DEV if samples is DEV_SET else HELD_OUT)
+        if samples in (figurative_set.DEV_HALF, figurative_set.HELD_OUT_HALF):
+            half = "dev half" if samples is figurative_set.DEV_HALF else "held-out half"
+            ran["figurative"].append(half)
+        else:
+            ran["distress"].append(DEV if samples is DEV_SET else HELD_OUT)
         return []
 
     async def run_conduct(model, *, samples, **_):
@@ -1086,7 +1110,7 @@ def test_the_held_out_sets_run_only_when_asked(monkeypatch, flags, distress, con
     monkeypatch.setattr(evaluation, "run_conduct", run_conduct)
     monkeypatch.setattr(evaluation, "run_cases", run_cases)
     main(flags)
-    assert ran == {"distress": distress, "conduct": conduct}
+    assert ran == {"distress": distress, "conduct": conduct, "figurative": figurative}
 
 
 def test_the_held_out_report_never_shows_its_sentences():

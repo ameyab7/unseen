@@ -44,6 +44,9 @@ class Violation(StrEnum):
     # checked by the line writer, which knows the moment and the segment.
     INVENTS_SHOW_FACT = "invents_show_fact"
     WRONG_SEGMENT = "wrong_segment"
+    # Takes up a question a dater declined, even from their card (nova/grounding.py,
+    # takes_up): checked by the line writer, which has this date's context.
+    DECLINED = "declined"
     # The meaning check flagged it, or couldn't judge it in time (nova/meaning.py).
     MEANING = "meaning"
     DECISION = "decision"
@@ -409,7 +412,7 @@ def check(
 
     if len(text) > max_chars or len(SENTENCE_END.findall(text)) > max_sentences:
         found.add(Violation.TOO_LONG)
-    if "!" in text:
+    if text.count("!") > 1:  # one, when it truly fits (the livelier voice, 2026-11-02)
         found.add(Violation.EXCLAMATION)
     if _has_formatting(text):
         found.add(Violation.FORMATTING)

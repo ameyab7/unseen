@@ -11,9 +11,10 @@ import pytest
 
 from nova import script
 from nova.cards import Seat
+from nova.conduct_judge import JUDGE_SYSTEM, REACTION_WAIT
 from nova.config import Settings
 from nova.cues import AlertModerator, ModeratorAlert, Moment, Say
-from nova.distress import LIGHT_SYSTEM
+from nova.distress import FIGURATIVE_SYSTEM, LIGHT_SYSTEM
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
 from nova.lines import LineWriter, Source
 from nova.meaning import MEANING_SYSTEM
@@ -105,7 +106,8 @@ class TickingClock(Clock):
 
 class FakeModel:
     """Writes every line the same way. For the distress check, answers per sentence from
-    labels ("no" by default, "error" to fail), taking check_takes on the clock."""
+    labels ("no" by default, "error" to fail), taking check_takes on the clock. The second
+    conduct check (decision 0006) gets judged: a put-down, unless a test says otherwise."""
 
     name = "fake/model"
 
@@ -118,8 +120,10 @@ class FakeModel:
         check_takes: float = 0.0,
         gate: asyncio.Event | None = None,
         write_error: Exception | None = None,
+        judged: str = '{"aim": "playful", "mutual": "no", "verdict": "unkind"}',
     ) -> None:
         self.reply = reply
+        self.judged = judged
         self.write_error = write_error
         self.labels = labels or {}
         self.clock, self.check_takes = clock, check_takes
@@ -140,6 +144,10 @@ class FakeModel:
             return "ok"  # the warm-up's tiny request
         if system == LIGHT_SYSTEM:
             return '{"light": false}'  # the second question after a maybe: the maybe stands
+        if system == FIGURATIVE_SYSTEM:
+            return '{"figurative": false}'  # the third question after a yes: the yes stands
+        if system == JUDGE_SYSTEM:
+            return self.judged  # the second conduct check on a remark labelled unkind
         sentence = prompt.split('"sentence": "')[1].split('"')[0]
         self.checked.append(sentence)
         if self.gate is not None:
@@ -150,6 +158,13 @@ class FakeModel:
         if answer == "error":
             raise RuntimeError("the model is down")
         return answer
+
+
+class LocalFakeModel(FakeModel):
+    """On this machine: the privacy policy lets this date's turns reach it, as it does a local
+    Ollama, so the second conduct check (which carries them) is asked, not held back."""
+
+    endpoint = "http://localhost:11434/v1"
 
 
 # How long a dater must keep going mid-line before Nova yields, in these tests: the real
@@ -1678,6 +1693,15 @@ async def test_the_kind_line_comes_at_once_while_a_reply_waits_for_its_check():
     await r.heard()
 
 
+async def no_reaction(r: Rehearsal, clock: Clock) -> None:
+    """The other dater says nothing after a remark labelled unkind: the second conduct check
+    (decision 0006) is asked once REACTION_WAIT has passed, and Nova acts on its answer."""
+    clock.now += REACTION_WAIT
+    r.tick()
+    await r.heard()
+    await r.speak_queued()
+
+
 async def transcripts_now(r: Rehearsal, clock: Clock, text: str) -> None:
     """The dater says text and stops, while Nova may be busy: nobody waits for Nova."""
     clock.now += 1.0
@@ -1704,26 +1728,79 @@ async def test_a_live_line_still_being_written_is_never_said_after_a_stop():
     assert r.speaker.texts[-1] == script.MODERATOR_END
 
 
-async def test_a_second_unkind_remark_said_to_nova_is_never_answered_before_the_pause():
-    """The deterministic case: the check's own conduct label stops the show right after the
-    verdict lets the reply through."""
+async def test_a_second_unkind_remark_said_to_nova_is_never_answered_and_never_pauses():
+    """The check's own conduct label drops the reply as soon as the verdict is in; the
+    second check confirms the put-down, and the moderator hears of it. Nova never pauses
+    the show for conduct by itself (decision 0006, 2026-11-02)."""
     clock = Clock()
     unkind = '{"label": "no", "conduct": "unkind"}'
     first, second = "You're boring, honestly.", "Nova, isn't Theo boring?"
     check_due = asyncio.Event()
     check_due.set()
-    model = FakeModel(labels={first: unkind, second: unkind}, gate=check_due)
+    model = LocalFakeModel(labels={first: unkind, second: unkind}, gate=check_due)
     r = await started(clock, model=model)
     await transcripts(r, clock, (40.0, first))
+    await no_reaction(r, clock)
     assert script.KEEP_IT_KIND in r.speaker.texts
     check_due.clear()
-    speaking = await nova_waiting_on(r, clock, second, at=45.0)  # Nova picks the reply up
+    speaking = await nova_waiting_on(r, clock, second, at=60.0)  # Nova picks the reply up
     check_due.set()
     await r.heard()
     await speaking
     await r.speak_queued()
+    await no_reaction(r, clock)
     assert lines(r, Moment.REPLY) == []
-    assert script.SHOW_PAUSE in r.speaker.texts
+    assert script.SHOW_PAUSE not in r.speaker.texts
+    assert r.speaker.texts.count(script.KEEP_IT_KIND) == 1
+    assert any(
+        isinstance(cue, AlertModerator) and cue.alert is ModeratorAlert.CONDUCT_FLAG
+        for cue in r.cues
+    )
+
+
+async def test_banter_the_second_check_clears_gets_no_kind_line():
+    """Labelled unkind by the safety check, judged banter by the second: Nova stays out."""
+    clock = Clock()
+    words = "Your puns are a hostage situation."
+    unkind = '{"label": "no", "conduct": "unkind"}'
+    banter = '{"aim": "playful", "mutual": "yes", "verdict": "banter"}'
+    r = await started(clock, model=LocalFakeModel(labels={words: unkind}, judged=banter))
+    await transcripts(r, clock, (40.0, words))
+    await no_reaction(r, clock)
+    assert script.KEEP_IT_KIND not in r.speaker.texts
+    assert not any(isinstance(cue, AlertModerator) for cue in r.cues)
+
+
+async def test_the_second_check_never_sends_this_date_where_it_may_not_go():
+    """A classifier that isn't approved-local: the request carries this date's turns, so the
+    privacy policy holds it back (decision 0010), and the moderator is alerted instead."""
+    clock = Clock()
+    words = "Your puns are a hostage situation."
+    unkind = '{"label": "no", "conduct": "unkind"}'
+    model = FakeModel(labels={words: unkind})  # no endpoint: not local
+    r = await started(clock, model=model)
+    await transcripts(r, clock, (40.0, words))
+    await no_reaction(r, clock)
+    assert script.KEEP_IT_KIND not in r.speaker.texts
+    assert r._on_air.judgements[-1].judged is None
+    assert any(
+        isinstance(cue, AlertModerator) and cue.alert is ModeratorAlert.CONDUCT_FLAG
+        for cue in r.cues
+    )
+
+
+async def test_a_second_check_that_cant_answer_alerts_the_moderator_and_nova_says_nothing():
+    clock = Clock()
+    words = "Your puns are a hostage situation."
+    unkind = '{"label": "no", "conduct": "unkind"}'
+    r = await started(clock, model=LocalFakeModel(labels={words: unkind}, judged="not json"))
+    await transcripts(r, clock, (40.0, words))
+    await no_reaction(r, clock)
+    assert script.KEEP_IT_KIND not in r.speaker.texts
+    assert any(
+        isinstance(cue, AlertModerator) and cue.alert is ModeratorAlert.CONDUCT_FLAG
+        for cue in r.cues
+    )
 
 
 async def test_a_line_cut_before_its_first_word_is_not_counted_as_never_played():
@@ -1833,8 +1910,8 @@ async def test_a_first_unkind_remark_said_to_nova_gets_only_lets_keep_it_kind():
     clock = Clock()
     words = "Nova, isn't Theo the most boring man alive?"
     unkind = '{"label": "no", "conduct": "unkind"}'
-    r = await started(clock, model=FakeModel(labels={words: unkind}))
-    await transcripts(r, clock, (40.0, words))
+    r = await started(clock, model=LocalFakeModel(labels={words: unkind}))
+    await transcripts(r, clock, (40.0, words))  # said to Nova: judged at once, no wait
     assert lines(r, Moment.REPLY) == []
     assert r.speaker.texts[-1] == script.KEEP_IT_KIND
 

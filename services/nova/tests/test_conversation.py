@@ -259,6 +259,59 @@ async def test_the_kind_line_is_said_whatever_either_dater_says_after_it():
     r.close()
 
 
+async def test_a_dater_asking_to_hear_the_question_again_is_answered_without_naming_nova():
+    clock = Clock()
+    r = await asked_first(clock)
+    await to_nova(r, clock, LEFT, "Sorry, can you repeat the question?")
+    await r.speak_queued()
+    assert len(replies(r)) == 1
+    floor = r._runner.floor
+    assert floor.expected == {LEFT}, "and the question is still Maya's to answer"
+    r.close()
+
+
+async def test_if_that_reply_fails_the_dater_hears_the_question_again_word_for_word():
+    clock = Clock()
+    model = FakeModel()
+    r = await asked_first(clock, model=model)
+    asked = [line.text for line in r.lines if line.moment is Moment.FIRST_QUESTION]
+    model.write_error = RuntimeError("the model is down")
+    await to_nova(r, clock, LEFT, "What was the question?")
+    await r.speak_queued()
+    assert replies(r) == asked[-1:]
+    r.close()
+
+
+async def test_a_repeat_request_for_the_other_dater_or_before_any_question_gets_no_reply():
+    clock = Clock()
+    r = await asked_first(clock)
+    await to_nova(r, clock, LEFT, "Theo, can you say that again?")
+    await r.speak_queued()
+    assert replies(r) == [], "Maya asked Theo, not Nova"
+    r.close()
+    clock = Clock()
+    r = rehearsal(clock)
+    r.start()
+    await r.speak_queued()
+    clock.now = 10
+    await to_nova(r, clock, LEFT, "Can you repeat that?")
+    await r.speak_queued()
+    assert replies(r) == [], "nobody has been asked anything yet"
+    r.close()
+
+
+def test_a_repeat_request_is_for_nova_only_from_someone_just_asked():
+    show = first_question()  # Maya's first question, heard at 48 s
+    runner = show.runner
+    assert runner.asks_again(49, LEFT, "Sorry, can you repeat that?")
+    assert not runner.asks_again(49, RIGHT, "Sorry, can you repeat that?"), "Theo wasn't asked"
+    assert not runner.asks_again(49, LEFT, "Let me say that again.")
+    assert not runner.asks_again(48 + FULL.floor_wait + 0.5, LEFT, "Can you repeat that?")
+    legacy = Show(paced=True, conversational=False)
+    legacy.until(48)
+    assert not legacy.runner.asks_again(49, LEFT, "Can you repeat that?"), "conversational only"
+
+
 async def test_a_reply_the_other_dater_talks_over_is_dropped_never_said_over_them():
     clock = Clock()
     r = await asked_first(clock)
@@ -431,3 +484,67 @@ def test_an_already_closed_voice_session_cannot_prevent_date_cleanup():
     r.close()
     r.close()
     assert r.closed and r._context.closed and len(r._context) == 0
+
+
+# --- The silence clock and Nova's own lines (2026-11-02) ----------------------------------
+
+
+def _room_question_cued(*, conversational: bool) -> tuple[Show, float, Say]:
+    """A paced date that reaches the room's question with the daters talking up to it, and
+    Nova not yet done saying it: the cue's time and the cue."""
+    from test_show_runner import approved
+
+    show = Show(paced=True, conversational=conversational)
+    show.at(10, "queue_question", approved("What's the best meal you've ever had?"))
+    talk = [(t, "speech_started", LEFT) for t in range(100, 236, 8)]
+    talk += [(t + 6, "speech_stopped", LEFT) for t in range(100, 236, 8)]
+    paced_date(show, 236, sorted(talk))
+    show.until(260)
+    asked = show.says(Moment.FROM_THE_ROOM)
+    assert asked, "the room's question was never cued"
+    return show, *asked[0]
+
+
+def test_no_silence_prompt_while_the_room_is_still_hearing_nova_ask():
+    # 2026-11-02, the full-date simulation: a room question written live (about 1-2 s) and
+    # said (about 6 s) took longer than the 8 s silence clock, so a silence prompt followed
+    # it before either dater could answer. The clock now waits for Nova to finish asking.
+    for conversational in (True, False):
+        show, cued, question = _room_question_cued(conversational=conversational)
+        show.until(cued + 12)  # still writing and saying it: no line_done yet
+        silences = [t for t, _ in show.says(Moment.SILENCE) if t >= cued]
+        assert silences == [], (conversational, silences)
+        show.runner.line_done(show.now, question)
+        heard = show.now
+        show.until(heard + 7)
+        silences = [t for t, _ in show.says(Moment.SILENCE) if t >= cued]
+        assert silences == [], (conversational, silences)
+
+
+def test_the_silence_clock_counts_from_the_end_of_novas_own_line():
+    # A reply finishing 5 s after the dater stopped: the 8 s of quiet count from its end.
+    # Without the conversational floor, which would hold for the unanswered first questions.
+    for paced in (False, True):
+        show = Show(paced=paced)
+        paced_date(show, 89) if paced else show.until(89)
+        for start in range(90, 112, 6):  # free talk, nobody quiet for long
+            show.at(start, "speech_started", LEFT)
+            show.at(start + 4, "speech_stopped", LEFT)
+        show.runner.line_done(117, Say(Moment.REPLY, about=LEFT))
+        show.until(124.5)
+        assert [t for t, _ in show.says(Moment.SILENCE) if t >= 106] == [], paced
+        show.until(126)
+        assert [t for t, _ in show.says(Moment.SILENCE) if t >= 106] == [125.0], paced
+
+
+def test_the_gap_between_silence_prompts_counts_from_when_the_room_heard_one():
+    # The cooldown used to count from the cue: a prompt said 12 s late was followed 8 s on.
+    show = Show()
+    show.until(99)
+    first = show.says(Moment.SILENCE)
+    assert [t for t, _ in first] == [98.0]
+    show.runner.line_done(110, first[0][1])  # said late, after a hold or a slow line
+    show.until(129.5)
+    assert [t for t, _ in show.says(Moment.SILENCE)] == [98.0]
+    show.until(130.5)
+    assert [t for t, _ in show.says(Moment.SILENCE)] == [98.0, 130.0]

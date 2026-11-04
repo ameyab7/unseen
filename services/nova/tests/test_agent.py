@@ -25,6 +25,21 @@ SETTINGS = Settings(
 )
 
 
+@pytest.fixture(autouse=True)
+def kept(monkeypatch):
+    """After each date the agent asks Ollama to keep its models loaded: never here, where
+    the classifier is often a real OllamaModel for localhost (the tests never call Ollama).
+    What it would have asked, each time."""
+    calls: list[tuple[tuple, float]] = []
+
+    async def keep_loaded(models, seconds):
+        calls.append((tuple(models), seconds))
+        return 0, 0
+
+    monkeypatch.setattr(agent, "keep_loaded", keep_loaded)
+    return calls
+
+
 async def test_daters_audio_goes_to_speech_recognition_and_no_other_livekit_service(monkeypatch):
     """Every rehearsal runs in dev mode, where LiveKit's defaults would also stream daters'
     audio to its cloud turn detector and to its adaptive barge-in service. Nova never takes
@@ -79,6 +94,21 @@ async def test_nova_s_voice_times_its_words_so_a_cut_line_goes_on_from_its_sente
     other = new_session(replace(SETTINGS, voice="deepgram/aura-2:odysseus"))
     assert not other.tts.capabilities.aligned_transcript
     assert agent.word_timings("deepgram/aura-2") == {}
+
+
+def test_nova_s_voice_style_goes_to_cartesia_only_and_only_when_set():
+    """NOVA_VOICE_EMOTION and NOVA_VOICE_SPEED (the livelier host, 2026-11-02)."""
+    styled = replace(SETTINGS, voice_emotion="excited", voice_speed=1.1)
+    assert agent.voice_style("cartesia/sonic-3", styled) == {"emotion": "excited", "speed": 1.1}
+    assert agent.voice_style("cartesia/sonic-3", SETTINGS) == {}
+    assert agent.voice_style("deepgram/aura-2", styled) == {}
+
+
+async def test_a_styled_voice_still_times_its_words(monkeypatch):
+    keys(monkeypatch)
+    session = new_session(replace(SETTINGS, voice_emotion="excited", voice_speed=1.1))
+    assert session.tts.capabilities.aligned_transcript
+    assert session.options.use_tts_aligned_transcript is True
 
 
 class Sink(voice_io.AudioOutput):
@@ -705,3 +735,22 @@ async def test_the_agent_tells_the_consoles_when_the_chat_mutes_nova(monkeypatch
     on_chat(session, SimpleNamespace(text="mute"))
     await asyncio.sleep(0)
     assert room.sent[-1][0]["muted"] is True and room.sent[-1][0]["result"] == "state"
+
+
+async def test_the_dates_models_are_kept_loaded_after_it_however_it_ends(
+    monkeypatch, tmp_path, kept
+):
+    """So the next rehearsal finds Gemma warm (decision 0011)."""
+    await rehearse(monkeypatch, tmp_path)
+    [(models, seconds)] = kept
+    assert seconds == SETTINGS.ollama_keep_alive == 3600
+    options = FakeRehearsal.last.options
+    assert models == (options["model"], options["classifier"]), "the ones the date used"
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("the date failed")
+
+    monkeypatch.setattr(agent, "run_date", broken)
+    with pytest.raises(RuntimeError, match="the date failed"):
+        await rehearse(monkeypatch, tmp_path)
+    assert len(kept) == 2, "kept loaded all the same"

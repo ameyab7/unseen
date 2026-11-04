@@ -22,6 +22,7 @@ import pytest
 from nova import independent_set
 from nova.conduct_set import HELD_OUT_HALF
 from nova.distress_set import DISTRESS_SET, Sample
+from nova.figurative_set import HELD_OUT_HALF as FIGURATIVE_HELD_OUT
 from nova.meaning_set import HELD_OUT_HALF as MEANING_HELD_OUT
 
 REDACTED = "[held-out]"
@@ -40,7 +41,7 @@ def _lines(samples: Iterable[Sample]) -> set[str]:
 
 
 def _held_out() -> set[str]:
-    lines = _lines(DISTRESS_SET)
+    lines = _lines(DISTRESS_SET) | _lines(FIGURATIVE_HELD_OUT)
     for conduct in HELD_OUT_HALF:
         lines.update((conduct.sentence, *conduct.other, *conduct.earlier))
     for line in MEANING_HELD_OUT:  # the meaning check's held-out lines (nova/meaning_set.py)

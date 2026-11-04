@@ -285,3 +285,15 @@ def test_the_notice_says_what_is_still_to_confirm():
     for owed in ("how long it keeps", "train AI models", "who is responsible for your data"):
         assert owed in text
     assert "while Nova is\nmuted" in text or "while Nova is muted" in text
+
+
+def test_the_second_conduct_check_gets_this_date_only_where_dialogue_memory_may_go():
+    """Decision 0006, 2026-11-02: both daters' last 90 s for a remark labelled unkind."""
+
+    def judging(s: Settings) -> list[str]:
+        return [f.recipient for f in flows(s) if "second conduct check" in f.purpose]
+
+    assert judging(settings()) == ["Ollama at localhost"]
+    assert judging(settings(**HOSTED_CLASSIFIER)) == [], "held back: the moderator is alerted"
+    opted_in = settings(**HOSTED_CLASSIFIER, NOVA_DIALOGUE_TO_PROVIDER="true")
+    assert judging(opted_in) == ["Anthropic"]

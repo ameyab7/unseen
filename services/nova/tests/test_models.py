@@ -1,11 +1,12 @@
 """The language-model adapters, checked against fake SDK clients: no network, no cost."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
 
-from nova.config import Settings
+from nova.config import ConfigError, Settings
 from nova.models import (
     AnthropicModel,
     ModelRefused,
@@ -13,6 +14,7 @@ from nova.models import (
     WarmUpError,
     build_classifier,
     build_model,
+    keep_loaded,
     warm_up,
 )
 
@@ -214,3 +216,60 @@ async def test_a_warm_up_says_when_the_model_cant_answer(model, error):
     """A dead or misconfigured model used to look warm: 0 ms and no error."""
     warmed = await warm_up(model, deadline=0.05)
     assert warmed.error is error
+
+
+# --- Kept loaded between dates (decision 0011) -------------------------------------------
+
+
+class Posts:
+    """Records what would be POSTed to Ollama's own API, instead of sending it."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.sent: list[tuple[str, dict, float]] = []
+        self.error = error
+
+    async def __call__(self, url: str, body: bytes, timeout: float) -> None:
+        self.sent.append((url, json.loads(body), timeout))
+        if self.error is not None:
+            raise self.error
+
+
+async def test_ollama_is_asked_to_keep_the_model_loaded_with_its_name_and_nothing_else():
+    posts = Posts()
+    model = OllamaModel("gemma4:26b", base_url="http://host.docker.internal:11434/", post=posts)
+    assert await keep_loaded([model], 3600) == (1, 0)
+    [(url, body, timeout)] = posts.sent
+    assert url == "http://host.docker.internal:11434/api/generate", "Ollama's own API"
+    assert body == {"model": "gemma4:26b", "keep_alive": "3600s"}, "no prompt, no text"
+    assert timeout <= 10
+
+
+async def test_each_ollama_model_is_asked_once_and_only_ollama_models():
+    posts = Posts()
+    gemma = OllamaModel("gemma4:26b", post=posts)
+    same = OllamaModel("gemma4:26b", post=posts)  # NOVA_CLASSIFIER_LLM unset: the same one
+    small = OllamaModel("gemma4:e4b", post=posts)
+    guarded = SimpleNamespace(inner=small, name=small.name)  # as nova/privacy.py wraps one
+    claude = AnthropicModel("claude-haiku-5-5", client=SimpleNamespace())
+    assert await keep_loaded([gemma, same, guarded, claude], 600) == (2, 0)
+    assert [body["model"] for _, body, _ in posts.sent] == ["gemma4:26b", "gemma4:e4b"]
+
+
+async def test_keeping_a_model_loaded_is_off_at_zero_and_a_failure_is_only_counted():
+    posts = Posts()
+    assert await keep_loaded([OllamaModel("gemma4:26b", post=posts)], 0) == (0, 0)
+    assert posts.sent == [], "0: never asked, Ollama's own default applies"
+    down = Posts(error=ConnectionRefusedError())
+    assert await keep_loaded([OllamaModel("gemma4:26b", post=down)], 3600) == (0, 1)
+
+
+@pytest.mark.parametrize(("value", "seconds"), [("", 3600.0), ("0", 0.0), ("120", 120.0)])
+def test_the_keep_alive_setting_defaults_to_an_hour_and_zero_turns_it_off(value, seconds):
+    env = {**ENV, "NOVA_LLM": "ollama/gemma4:26b", "NOVA_OLLAMA_KEEP_ALIVE_SECONDS": value}
+    assert Settings.from_env(env).ollama_keep_alive == seconds
+
+
+def test_a_negative_keep_alive_is_a_config_error():
+    env = {**ENV, "NOVA_LLM": "ollama/gemma4:26b", "NOVA_OLLAMA_KEEP_ALIVE_SECONDS": "-1"}
+    with pytest.raises(ConfigError, match="NOVA_OLLAMA_KEEP_ALIVE_SECONDS"):
+        Settings.from_env(env)

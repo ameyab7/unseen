@@ -34,8 +34,15 @@ listen(), which does it until cancelled; anything a dater does also closes what'
 the end of the date, finish() closes whatever is still open and waits for the checks in
 flight; a check that can't finish in time alerts the moderator as unchecked.
 
-What daters say stays in memory: an utterance until it closes, and the Listener 15
-seconds of it, pruned as time passes and cleared when the date is over. If the date has a
+An utterance the check labels unkind isn't acted on at once (decision 0006, 2026-11-02): the
+listener waits up to conduct_judge.REACTION_WAIT for the other dater's next words, then asks
+the second conduct check (nova/conduct_judge.py) whether it's a put-down, banter they're both
+in on, or a dater putting themselves down, with the last JUDGE_CONTEXT seconds of both
+daters' words and Nova's latest line; only a put-down reaches the show runner as unkind.
+
+What daters say stays in memory: an utterance until it closes, the Listener 15 seconds of
+it, and the second conduct check's JUDGE_CONTEXT seconds, pruned as time passes and cleared
+when the date is over. If the date has a
 DateContext (decision 0008), a whole utterance the check cleared (no distress, no conduct,
 no personal detail) joins it once the verdict is in, for Nova's live replies and silence
 prompts; it's cleared when the date is over too. Nothing here logs or stores it.
@@ -46,12 +53,23 @@ import contextlib
 import re
 import time
 from bisect import bisect_left
+from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 from nova.cards import Seat
 from nova.conduct import Slipped, personal_detail
+from nova.conduct_judge import (
+    HURT_WINDOW,
+    JUDGE_CONTEXT,
+    JUDGE_TURNS,
+    REACTION_WAIT,
+    ConductJudge,
+    Judged,
+    Judgement,
+    hurt,
+)
 from nova.config import Settings
 from nova.cues import Conduct, Cue
 from nova.date_context import DateContext
@@ -193,6 +211,28 @@ class _Utterance:
         return " ".join(self.words)
 
 
+@dataclass(frozen=True)
+class _Said:
+    """One utterance a dater closed, for the second conduct check: n counts every one."""
+
+    n: int
+    at: float
+    seat: Seat
+    words: str
+
+
+@dataclass
+class _Unkind:
+    """A remark the check labelled unkind, waiting for the other dater's reaction."""
+
+    seat: Seat
+    words: str
+    n: int  # its place in what was said: the reaction is the other dater's next
+    due: float  # when it's judged without a reaction
+    nova: str | None  # Nova's latest line when it was said
+    judging: bool = False
+
+
 @dataclass
 class _Dater:
     speaking: bool = False
@@ -211,11 +251,26 @@ class OnAirListener:
         grace: float = Settings.utterance_grace,
         max_wait: float = Settings.utterance_max_wait,
         context: DateContext | None = None,
+        judge: ConductJudge | None = None,
     ) -> None:
-        """context: this date's (decision 0008), which hears each turn the check cleared."""
+        """context: this date's (decision 0008), which hears each turn the check cleared.
+        judge: the second conduct check on a remark labelled unkind; without one, the label
+        reaches the show runner as it is."""
         self._runner = runner
         self._listener = Listener(check)
         self._context = context
+        self._judge = judge
+        self._said: deque[_Said] = deque(maxlen=2 * JUDGE_TURNS)
+        self._said_count = 0
+        self._unkind: list[_Unkind] = []
+        self._judging: set[asyncio.Task[None]] = set()
+        self._ending = False  # flush(): the date is over, so nobody's reaction is waited for
+        # Each utterance's first check, as codes, and the ones the second check looked at or
+        # is about to: a hurt reaction gets the remark before it a second look, once.
+        self._screened: dict[int, tuple[Verdict, Conduct | None]] = {}
+        self._looked: set[int] = set()
+        self._hurt_after: dict[int, str] = {}  # a hurt reaction to a remark not yet checked
+        self.judgements: list[Judgement] = []  # the second check's: codes and time only
         self._deliver = deliver
         self._clock = clock
         self.grace, self.max_wait = grace, max_wait
@@ -266,7 +321,10 @@ class OnAirListener:
             utterance = dater.utterance = _Utterance(started=now, last_final=now)
         utterance.words.append(text)
         utterance.last_final = now
-        self._runner.turn_words(now, seat, utterance.text, to_nova=addresses_nova(*utterance.words))
+        to_nova = addresses_nova(*utterance.words) or self._runner.asks_again(
+            now, seat, utterance.text
+        )
+        self._runner.turn_words(now, seat, utterance.text, to_nova=to_nova)
         self._listener.remember(now, seat, text)
         if self._listener.unmistakable(now, seat, utterance.words) is None:
             self._unmatched(now, seat, utterance)
@@ -298,6 +356,7 @@ class OnAirListener:
             # Only while they speak, as in _close_due: once they stop, the close alerts.
             if dater.speaking and utterance.loose is not None and not utterance.alerted:
                 due.append(utterance.loose + MATCH_CAP)
+        due += [unkind.due for unkind in self._unkind if not unkind.judging]
         return min(due, default=None)
 
     async def listen(self, *, every: float = 0.1) -> None:
@@ -312,6 +371,7 @@ class OnAirListener:
         """What a dater said before, without hearing it: for the evaluation, which sets up
         what came before the words it tests."""
         self._listener.remember(at, seat, text)
+        self._note(at, seat, text)
 
     async def heard(self) -> None:
         """Waits for every distress check in flight, and what the show does with it. It never
@@ -320,15 +380,17 @@ class OnAirListener:
         failed, so a bug shows."""
         while True:
             done = [task for task in self._checks if task.done()]
+            done += [task for task in self._judging if task.done()]
             for task in done:
-                del self._checks[task]
+                self._checks.pop(task, None)
+                self._judging.discard(task)
             for task in done:
                 error = None if task.cancelled() else task.exception()
                 if error is not None:
                     raise error
-            if not self._checks:
+            if not self._checks and not self._judging:
                 return
-            await asyncio.wait(set(self._checks))
+            await asyncio.wait({*self._checks, *self._judging})
 
     def flush(self) -> None:
         """Closes every utterance still open, at once: the date is over, so nobody waits for
@@ -337,6 +399,9 @@ class OnAirListener:
         for seat, dater in self._daters.items():
             if dater.utterance is not None:
                 self._close(now, seat, dater, dater.utterance)
+        self._ending = True
+        for unkind in list(self._unkind):  # nobody reacts now: each is judged as it stands
+            self._judge_now(unkind, None)
 
     async def finish(self, timeout: float) -> None:
         """The date is over: whatever a dater was still saying is acted on, the checks in
@@ -360,6 +425,18 @@ class OnAirListener:
                 hold.set_result(reply_after(Verdict.UNCHECKED))
                 self._send(self._runner.distress_check(self._clock(), seat, Verdict.UNCHECKED))
         self._checks.clear()
+        for unkind in self._unkind:  # never judged in time: a person hears of it anyway
+            self._send(
+                self._runner.dater_conduct(self._clock(), unkind.seat, Conduct.UNKIND, quiet=True)
+            )
+        for task in self._judging:
+            task.cancel()
+        self._judging.clear()
+        self._unkind.clear()
+        self._said.clear()
+        self._screened.clear()
+        self._looked.clear()
+        self._hurt_after.clear()
         self._listener.clear()
         if self._context is not None:
             self._context.clear()
@@ -373,6 +450,11 @@ class OnAirListener:
         return min(max(ended, utterance.last_final) + self.grace, ended + self.max_wait)
 
     def _close_due(self, now: float) -> None:
+        for unkind in list(self._unkind):
+            if not unkind.judging and now >= unkind.due:
+                self._judge_now(unkind, None)  # the other dater didn't react in time
+        while self._said and now - self._said[0].at > JUDGE_CONTEXT:
+            self._said.popleft()
         for seat, dater in self._daters.items():
             utterance = dater.utterance
             if utterance is None:
@@ -406,6 +488,7 @@ class OnAirListener:
         hearing = self._listener.utterance(now, seat, utterance.words, since=utterance.started)
         instant = hearing.unmistakable is not None
         self.closed.append(Closed(seat, instant=instant, waited=None if capped else now - ended))
+        said = self._note(now, seat, words)
         slipped = self._conduct_instant(now, seat, words)
         if hearing.unmistakable is not None:
             self._wants_to_stop(now, seat, hearing.unmistakable, utterance, ended)
@@ -415,7 +498,9 @@ class OnAirListener:
         if self._listener.unmistakable(now, seat, utterance.words, loose=True) is not None:
             self._possible_request(now, seat, utterance)
         hold: asyncio.Future[ReplyAction] | None = None
-        to_nova = addresses_nova(*utterance.words)
+        # A request to hear Nova's question again is for Nova, its name or not (decision 0012).
+        again = runner.asks_again(now, seat, words)
+        to_nova = addresses_nova(*utterance.words) or again
         if hearing.check is not None:
             hold = asyncio.get_running_loop().create_future()
             self._act_later(
@@ -427,9 +512,12 @@ class OnAirListener:
                 slipped,
                 alerted=utterance.alerted,
                 turn=None if capped else (words, to_nova),  # a capped one isn't whole
+                said=said,
             )
+        if not capped:  # a whole turn: what stepping in looks at (decision 0013)
+            runner.turn_closed(now, seat, words, to_nova=to_nova)
         if not capped and to_nova:  # one reply, to the whole utterance
-            asked = runner.dater_asked_nova(now, seat, words, wants_to_stop=False)
+            asked = runner.dater_asked_nova(now, seat, words, wants_to_stop=False, again=again)
             self._send(asked, ended, hold, now)
 
     def _recheck(self, now: float, seat: Seat, dater: _Dater, utterance: _Utterance) -> None:
@@ -481,6 +569,124 @@ class OnAirListener:
         if self._context is not None:
             self._context.spoke(seat)  # never the words of a request to stop
 
+    def _note(self, now: float, seat: Seat, words: str) -> _Said:
+        """What a dater said, for the second conduct check; and if it answers a remark of the
+        other dater's waiting for a reaction, that remark is judged now."""
+        self._said_count += 1
+        said = _Said(self._said_count, now, seat, words)
+        self._said.append(said)
+        for unkind in list(self._unkind):
+            if not unkind.judging and unkind.seat is seat.other and unkind.n < said.n:
+                self._judge_now(unkind, words)
+        if hurt(straight_quotes(words)):
+            self._hurt(said)
+        return said
+
+    def _hurt(self, reaction: _Said) -> None:
+        """The other dater sounds hurt: the remark they're answering, if it came in the last
+        HURT_WINDOW seconds and nobody has looked at it, gets the second check, once its first
+        check is in and found nothing (decision 0006, 2026-11-02)."""
+        remark = next(
+            (s for s in reversed(self._said) if s.seat is reaction.seat.other and s.n < reaction.n),
+            None,
+        )
+        if remark is None or remark.n in self._looked or reaction.at - remark.at > HURT_WINDOW:
+            return
+        screened = self._screened.get(remark.n)
+        if screened is None:
+            self._hurt_after[remark.n] = reaction.words  # its check isn't in yet
+        elif screened[0] is Verdict.NO and screened[1] in (None, Conduct.NONE):
+            self._second_look(remark, reaction.words)
+
+    def _second_look(self, remark: _Said, reaction: str) -> None:
+        if self._judge is None:
+            return
+        nova = self._context.nova_last() if self._context is not None else None
+        unkind = _Unkind(remark.seat, remark.words, remark.n, remark.at, nova)
+        self._looked.add(remark.n)
+        self._unkind.append(unkind)
+        self._judge_now(unkind, reaction)
+
+    def _wait_for_reaction(self, seat: Seat, words: str, said: _Said | None) -> None:
+        """A remark labelled unkind: judged once the other dater reacts, or after
+        REACTION_WAIT, whichever comes first (a reaction may already be in)."""
+        n = said.n if said is not None else self._said_count
+        at = said.at if said is not None else self._clock()
+        nova = self._context.nova_last() if self._context is not None else None
+        unkind = _Unkind(seat, words, n, at + REACTION_WAIT, nova)
+        self._looked.add(n)
+        self._unkind.append(unkind)
+        reaction = next(
+            (later for later in self._said if later.n > n and later.seat is seat.other), None
+        )
+        if reaction is not None:
+            self._judge_now(unkind, reaction.words)
+        elif self._ending or self._clock() >= unkind.due:
+            self._judge_now(unkind, None)
+
+    def _judge_now(self, unkind: _Unkind, reaction: str | None) -> None:
+        if unkind.judging or self._judge is None:
+            return
+        unkind.judging = True
+        before = [(s.seat is unkind.seat, s.words) for s in self._said if s.n < unkind.n]
+        task = asyncio.ensure_future(self._judged(unkind, before, reaction))
+        self._judging.add(task)
+        task.add_done_callback(self._judging.discard)
+
+    async def _judged(
+        self, unkind: _Unkind, before: list[tuple[bool, str]], reaction: str | None
+    ) -> None:
+        """Only a put-down reaches the show runner as unkind; unsure or no answer, a quiet
+        alert; banter, or a dater putting themselves down, nothing."""
+        assert self._judge is not None
+        try:
+            judgement = await self._judge.judge(
+                unkind.words, before, nova=unkind.nova, reaction=reaction
+            )
+        finally:
+            if unkind in self._unkind:
+                self._unkind.remove(unkind)
+        self.judgements.append(judgement)
+        match judgement.outcome:
+            case Judged.UNKIND:
+                cues = self._runner.dater_conduct(self._clock(), unkind.seat, Conduct.UNKIND)
+            case Judged.UNSURE:
+                cues = self._runner.dater_conduct(
+                    self._clock(), unkind.seat, Conduct.UNKIND, quiet=True
+                )
+            case _:
+                cues = []
+        self._send(cues)
+
+    async def _judge_to_nova(
+        self, seat: Seat, words: str, said: _Said | None, hold: asyncio.Future[ReplyAction]
+    ) -> None:
+        """Words said to Nova that the first check called unkind: teasing Nova is banter, and
+        Nova plays along (2026-11-02: "Nova, are you just programmed to be this boring?" went
+        unanswered). Judged at once, since Nova is who it's aimed at, and the reply waits:
+        banter or a self put-down, Nova answers; a put-down of the other dater, or no answer,
+        it doesn't, and the second check's outcome goes to the show as for any remark."""
+        assert self._judge is not None
+        n = said.n if said is not None else self._said_count
+        self._looked.add(n)
+        before = [(s.seat is seat, s.words) for s in self._said if s.n < n]
+        nova = self._context.nova_last() if self._context is not None else None
+        outcome = Judged.UNSURE
+        try:
+            judgement = await self._judge.judge(words, before, nova=nova, to_nova=True)
+            self.judgements.append(judgement)
+            outcome = judgement.outcome
+        finally:
+            if not hold.done():
+                playful = outcome in (Judged.BANTER, Judged.SELF)
+                hold.set_result(ReplyAction.SPEAK if playful else ReplyAction.DROP)
+        match outcome:
+            case Judged.UNKIND:
+                self._send(self._runner.dater_conduct(self._clock(), seat, Conduct.UNKIND))
+            case Judged.UNSURE:
+                cues = self._runner.dater_conduct(self._clock(), seat, Conduct.UNKIND, quiet=True)
+                self._send(cues)
+
     def _conduct_instant(self, now: float, seat: Seat, words: str) -> Slipped | None:
         """Conduct's instant layer (decision 0006), on every utterance acted on."""
         slipped = personal_detail(words)
@@ -501,6 +707,7 @@ class OnAirListener:
         alerted: bool = False,
         distress: bool = True,
         turn: tuple[str, bool] | None = None,
+        said: _Said | None = None,
     ) -> None:
         act = self._act_on(
             check,
@@ -512,6 +719,7 @@ class OnAirListener:
             alerted=alerted,
             distress=distress,
             turn=turn,
+            said=said,
         )
         task = asyncio.ensure_future(act)
         self._checks[task] = (seat, hold, check)
@@ -532,6 +740,7 @@ class OnAirListener:
         alerted: bool = False,
         distress: bool = True,
         turn: tuple[str, bool] | None = None,
+        said: _Said | None = None,
     ) -> None:
         """The verdict's cues are handed on first, then the hold resolves; then the conduct
         label from the same call, unless it's a personal detail the instant layer already
@@ -543,9 +752,18 @@ class OnAirListener:
         was said to Nova, for this date's context if the check clears it (decision 0008)."""
         verdict = Verdict.UNCHECKED
         conduct: Conduct | None = None
+        to_me = False  # said to Nova and labelled unkind: the reply waits for the second check
         try:
             checked = await check
             verdict, conduct = checked.verdict, checked.conduct
+            to_me = (
+                turn is not None
+                and turn[1]
+                and verdict is Verdict.NO
+                and conduct is Conduct.UNKIND
+                and self._judge is not None
+                and hold is not None
+            )
             self.checks.append(checked)
             if distress and not (alerted and verdict is Verdict.MAYBE):
                 cues = self._runner.distress_check(self._clock(), seat, verdict)
@@ -560,11 +778,26 @@ class OnAirListener:
                 else:  # only that they spoke: what they declined is never an open loop
                     self._context.spoke(seat)
         finally:
-            if hold is not None and not hold.done():
+            if hold is not None and not hold.done() and not to_me:
                 hold.set_result(reply_after(verdict, conduct))
+        if to_me:
+            assert turn is not None and hold is not None
+            await self._judge_to_nova(seat, turn[0], said, hold)
+            return
+        if said is not None:
+            self._screened[said.n] = (verdict, conduct)
+            reaction = self._hurt_after.pop(said.n, None)
+            clean = verdict is Verdict.NO and conduct in (None, Conduct.NONE)
+            if reaction is not None and clean and said.n not in self._looked:
+                self._second_look(said, reaction)  # a hurt reaction came in before this check
         repeat = conduct is Conduct.PERSONAL_DETAIL and heard_detail
         if conduct not in (None, Conduct.NONE) and not repeat:
             distressed = not distress or verdict in (Verdict.YES, Verdict.MAYBE)
+            if conduct is Conduct.UNKIND and not distressed and self._judge is not None:
+                # Not yet: a second look, once the other dater has reacted (2026-11-02).
+                words = said.words if said is not None else (turn[0] if turn else "")
+                self._wait_for_reaction(seat, words, said)
+                return
             cues = self._runner.dater_conduct(self._clock(), seat, conduct, distressed=distressed)
             self._send(cues)
 

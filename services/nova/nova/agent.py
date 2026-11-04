@@ -56,7 +56,7 @@ from nova.cards import Seat
 from nova.config import Settings, load_settings
 from nova.events import EventLog
 from nova.fixtures import NEXT_PAIR, REHEARSAL_PAIR
-from nova.models import build_classifier, build_model
+from nova.models import build_classifier, build_model, keep_loaded
 from nova.moderator import TOPIC, ModeratorControl, is_moderator
 from nova.privacy import PrivacyPolicy, check_for_real_people
 from nova.rehearsal import Command, Rehearsal, render_report
@@ -118,6 +118,20 @@ def word_timings(model: str) -> dict[str, Any]:
     sentence it was cut in (nova/rehearsal.py, after_a_cut); any other voice gets none, and
     a cut is never placed in the words."""
     return {"add_timestamps": True} if model.split("/")[0] == "cartesia" else {}
+
+
+def voice_style(model: str, settings: Settings) -> dict[str, Any]:
+    """How the voice sounds (NOVA_VOICE_EMOTION, NOVA_VOICE_SPEED), for a voice that takes
+    it through LiveKit Inference: Cartesia's. Any other voice gets none. Codes and numbers
+    only: nothing a dater said."""
+    if model.split("/")[0] != "cartesia":
+        return {}
+    style: dict[str, Any] = {}
+    if settings.voice_emotion:
+        style["emotion"] = settings.voice_emotion
+    if settings.voice_speed:
+        style["speed"] = settings.voice_speed
+    return style
 
 
 def time_played_words(session: Any) -> bool:
@@ -262,8 +276,9 @@ def _sent(sending: asyncio.Future[None]) -> None:
 def new_session(settings: Settings) -> AgentSession:
     model, voice = voice_parts(settings.voice)
     voice_options: dict[str, Any] = {"voice": voice} if voice else {}
-    if timings := word_timings(model):
-        voice_options["extra_kwargs"] = timings
+    timings = word_timings(model)
+    if extra := {**timings, **voice_style(model, settings)}:
+        voice_options["extra_kwargs"] = extra
     return AgentSession(
         stt=inference.STT(settings.stt, language="en"),
         tts=inference.TTS(model, **voice_options),
@@ -428,54 +443,61 @@ async def rehearse(ctx: JobContext) -> None:
     # A rehearsal is a night of one date (nova/show.py): the date's context is its own,
     # and closed when the date ends, however it ends.
     night = Night(make=Rehearsal)
-    with night.date(
-        REHEARSAL_PAIR,
-        model=build_model(settings),
-        classifier=build_classifier(settings),
-        speaker=speaker,
-        voice=settings.voice,
-        stt=settings.stt,
-        timing=replace(
-            FULL if settings.full_rehearsal else REHEARSAL,
-            conversation_overrun=settings.conversation_overrun,
-        ),
-        conversational=settings.conversational_turns,
-        live_bridges=settings.live_bridges,
-        input_streams=2 if settings.left_participant and settings.right_participant else 1,
-        next_pair=NEXT_PAIR,
-        live_timeout=settings.live_timeout,
-        prep_timeout=settings.prep_timeout,
-        prep_budget=settings.prep_budget,
-        prep_parallel=settings.prep_parallel,
-        warm_up=settings.warm_up,
-        distress_timeout=settings.distress_timeout,
-        utterance_grace=settings.utterance_grace,
-        utterance_max_wait=settings.utterance_max_wait,
-        privacy=PrivacyPolicy.from_settings(settings),  # real daters: the privacy notice
-        meaning_check=settings.meaning_check,
-        meaning_live=settings.meaning_live,
-        meaning_timeout=settings.meaning_timeout,
-        ready_retry=settings.ready_retry,
-    ) as rehearsal:
-        if settings.left_participant and settings.right_participant:
-            other = AgentSession(
-                stt=inference.STT(settings.stt, language="en"),
-                turn_handling=TURN_HANDLING,
-                aec_warmup_duration=AEC_WARMUP,
-            )
-            closed = await run_date(
-                ctx,
-                session,
-                speaker,
-                rehearsal,
-                seats={
-                    Seat.LEFT: settings.left_participant,
-                    Seat.RIGHT: settings.right_participant,
-                },
-                other_session=other,
-            )
-        else:
-            closed = await run_date(ctx, session, speaker, rehearsal)
+    model, classifier = build_model(settings), build_classifier(settings)
+    try:
+        with night.date(
+            REHEARSAL_PAIR,
+            model=model,
+            classifier=classifier,
+            speaker=speaker,
+            voice=settings.voice,
+            stt=settings.stt,
+            timing=replace(
+                FULL if settings.full_rehearsal else REHEARSAL,
+                conversation_overrun=settings.conversation_overrun,
+            ),
+            conversational=settings.conversational_turns,
+            live_bridges=settings.live_bridges,
+            steering=settings.steering,
+            input_streams=2 if settings.left_participant and settings.right_participant else 1,
+            next_pair=NEXT_PAIR,
+            live_timeout=settings.live_timeout,
+            prep_timeout=settings.prep_timeout,
+            prep_budget=settings.prep_budget,
+            prep_parallel=settings.prep_parallel,
+            warm_up=settings.warm_up,
+            distress_timeout=settings.distress_timeout,
+            utterance_grace=settings.utterance_grace,
+            utterance_max_wait=settings.utterance_max_wait,
+            privacy=PrivacyPolicy.from_settings(settings),  # real daters: the privacy notice
+            meaning_check=settings.meaning_check,
+            meaning_live=settings.meaning_live,
+            meaning_timeout=settings.meaning_timeout,
+            ready_retry=settings.ready_retry,
+        ) as rehearsal:
+            if settings.left_participant and settings.right_participant:
+                other = AgentSession(
+                    stt=inference.STT(settings.stt, language="en"),
+                    turn_handling=TURN_HANDLING,
+                    aec_warmup_duration=AEC_WARMUP,
+                )
+                closed = await run_date(
+                    ctx,
+                    session,
+                    speaker,
+                    rehearsal,
+                    seats={
+                        Seat.LEFT: settings.left_participant,
+                        Seat.RIGHT: settings.right_participant,
+                    },
+                    other_session=other,
+                )
+            else:
+                closed = await run_date(ctx, session, speaker, rehearsal)
+    finally:
+        # Gemma stays loaded for the next rehearsal, however this one ended (decision 0011).
+        kept, failed = await keep_loaded((model, classifier), settings.ollama_keep_alive)
+        logger.info("models kept loaded: %d, failed: %d", kept, failed)
 
     report = render_report(rehearsal)
     if closed is not None:

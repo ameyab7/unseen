@@ -73,7 +73,10 @@ in the 15 seconds before it, for the whole date, including while Nova is muted. 
 Nova's lines, it receives the lines, and your first name, age and card answers. [ONLY IF
 NOVA_MEANING_LIVE IS TURNED ON: For lines during the date, it also receives what you say to
 Nova and questions the audience sends you. [ONLY IF NOVA_DIALOGUE_TO_PROVIDER IS ALSO ON:
-It also receives what you and your date said earlier on the date.]]]
+It also receives what you and your date said earlier on the date.]] [ONLY IF
+NOVA_DIALOGUE_TO_PROVIDER IS TURNED ON: When something you say might be unkind, it also
+receives what you and your date said in the minute and a half before it, and what your date
+said next, to tell teasing you're both enjoying from a put-down.]]
 
 **Nova's voice.** Nova's lines go as text to LiveKit, which sends them to Cartesia to be
 spoken. A line can include your first name, something from your card, or something you

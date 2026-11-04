@@ -16,6 +16,7 @@ import re
 from collections.abc import Iterable, Mapping
 
 from nova.quality import COMMON_WORDS
+from nova.text import mask_names
 
 _BOTH = (
     r"(?:you both|both of you|you(?:'re| are|'ve| have|'d| would) both|you two|the two of you"
@@ -148,3 +149,23 @@ def dramatized(line: str, evidence: Mapping[str, Iterable[str]]) -> list[str]:
     used them first (their card, their turns): a narrow word check, as for common ground."""
     said = " ".join(text for texts in evidence.values() for text in texts).lower()
     return [m.group(0) for m in DRAMATIZED.finditer(line) if m.group(0).lower() not in said]
+
+
+# Words a question is said with, not what it's about ("wait, please spill, what...").
+FILLER = re.compile(
+    r"\b(?:actually|honestly|literally|seriously|basically|really|wait|please|spill|okay|tell"
+    r"|come on|anyway)\b",
+    re.IGNORECASE,
+)
+
+
+def takes_up(line: str, question: str, *, names: Iterable[str] = ()) -> bool:
+    """`line` comes back to what a declined `question` asked (decision 0013): it shares two
+    of the question's fact words, or its only one ("where do you work?": work), names
+    aside. A narrow word check, erring on the safe side: the 2026-11-02 easy win "Remy, can
+    you tell us about the absolute worst first date you've ever had?" took up "what is the
+    absolute worst first date you have ever been on?" from his own card."""
+    names = list(names)
+    asked = facts(FILLER.sub(" ", mask_names(question, names, " ")))
+    shared = asked & facts(mask_names(line, names, " "))
+    return bool(shared) and len(shared) >= min(2, len(asked))

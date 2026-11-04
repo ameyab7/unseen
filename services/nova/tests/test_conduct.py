@@ -120,13 +120,31 @@ def test_a_first_unkind_remark_gets_lets_keep_it_kind():
     assert runner.dater_conduct(FREE_TALK + 5, RIGHT, Conduct.UNKIND) == [KIND], "per dater"
 
 
-def test_a_second_unkind_remark_by_the_same_dater_pauses_the_whole_date():
+def test_a_second_unkind_remark_alerts_the_moderator_and_never_pauses_the_date():
+    """Decision 0006, 2026-11-02: a pause is for safety, and the moderator's to call."""
     runner = on_air_runner()
     runner.dater_conduct(FREE_TALK, LEFT, Conduct.UNKIND)
     cues = runner.dater_conduct(FREE_TALK + 10, LEFT, Conduct.UNKIND)
+    assert AlertModerator(ModeratorAlert.CONDUCT_FLAG, LEFT, Conduct.UNKIND) in cues
+    assert KIND not in cues and StopSpeaking() not in cues and not runner.held
+    third = runner.dater_conduct(FREE_TALK + 20, LEFT, Conduct.UNKIND)
+    assert AlertModerator(ModeratorAlert.CONDUCT_FLAG, LEFT, Conduct.UNKIND) in third
+    assert KIND not in third and not runner.held
+
+
+def test_a_remark_the_second_check_couldnt_confirm_alerts_quietly():
+    runner = on_air_runner()
+    cues = runner.dater_conduct(FREE_TALK, LEFT, Conduct.UNKIND, quiet=True)
+    assert cues == [AlertModerator(ModeratorAlert.CONDUCT_FLAG, LEFT, Conduct.UNKIND)]
+    assert runner.dater_conduct(FREE_TALK + 5, LEFT, Conduct.UNKIND) == [KIND], "no strike"
+
+
+def test_the_moderator_pauses_the_whole_date_over_conduct():
+    runner = on_air_runner()
+    runner.dater_conduct(FREE_TALK, LEFT, Conduct.UNKIND)
+    cues = runner.moderator_pause(FREE_TALK + 10, LEFT)
     facts = RoomFacts(Segment.FREE_TALK, False, 0, Situation.SHOW_PAUSED)
-    assert cues[-4:] == [
-        AlertModerator(ModeratorAlert.CONDUCT_FLAG, LEFT, Conduct.UNKIND),
+    assert cues[-3:] == [
         StopSpeaking(),
         Say(Moment.SHOW_PAUSE, text=script.SHOW_PAUSE),
         Say(Moment.ROOM_TALK, room=facts, number=1, of=3),
@@ -140,7 +158,7 @@ def test_a_second_unkind_remark_by_the_same_dater_pauses_the_whole_date():
 def paused_for_conduct() -> ShowRunner:
     runner = on_air_runner()
     runner.dater_conduct(FREE_TALK, LEFT, Conduct.UNKIND)
-    runner.dater_conduct(FREE_TALK + 10, LEFT, Conduct.UNKIND)
+    runner.moderator_pause(FREE_TALK + 10, LEFT)
     return runner
 
 
@@ -519,8 +537,6 @@ async def test_a_detail_in_a_request_acted_on_while_the_dater_keeps_talking_is_s
 def test_a_date_held_for_conduct_reminds_the_moderator_if_it_runs_long():
     """Only the moderator can lift it, so the console hears again at the 30 s mark, as for a
     dater who isn't back."""
-    runner = on_air_runner()
-    runner.dater_conduct(FREE_TALK, LEFT, Conduct.UNKIND)
-    runner.dater_conduct(FREE_TALK + 10, LEFT, Conduct.UNKIND)
+    runner = paused_for_conduct()
     later = runner.tick(FREE_TALK + 10 + FULL.moment_alert_after)
     assert AlertModerator(ModeratorAlert.SHOW_HELD, LEFT) in later

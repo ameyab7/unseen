@@ -1313,7 +1313,7 @@ def test_a_moment_asked_for_during_a_conduct_pause_starts_when_the_moderator_res
     show = Show()
     show.until(100)
     show.at(100, "dater_conduct", RIGHT, Conduct.UNKIND)
-    show.at(102, "dater_conduct", RIGHT, Conduct.UNKIND)
+    show.at(102, "moderator_pause", RIGHT)
     show.at(104, "need_a_moment", LEFT)
     assert NEED_MOMENT in show.at(110, "moderator_resume")
     assert show.at(115, "back", LEFT)[-1] == WELCOME_BACK
@@ -1365,7 +1365,7 @@ def test_and_were_back_waits_for_a_hold_that_is_still_running():
 def test_and_were_back_after_a_conduct_pause_comes_when_the_moderator_resumes():
     show = resumed_without_maya()
     show.at(200, "dater_conduct", RIGHT, Conduct.UNKIND)
-    show.at(202, "dater_conduct", RIGHT, Conduct.UNKIND)
+    show.at(202, "moderator_pause", RIGHT)
     assert show.at(205, "back", LEFT) == []
     assert show.at(210, "moderator_resume")[-1] == WELCOME_BACK
 
@@ -1717,3 +1717,24 @@ def test_paced_the_cap_counts_from_when_nova_finished_asking():
     show.reported.add(first)
     paced_date(show, 300, [(263, "speech_started", LEFT), (270, "speech_stopped", LEFT)])
     assert audience_question_times(show) == [240.0, 276.0], "6 s after Maya, Theo's chance"
+
+
+def test_the_lightning_round_opens_with_its_approved_intro_before_the_first_question():
+    """Approved on 2026-11-02 (docs/sign-off/2026-11-livelier-nova.md): the daters and the room
+    hear that the round has started."""
+    show = Show()
+    show.at(200, "unlock_lightning_round")
+    show.until(340)
+    says = [
+        say
+        for _, say in show.says()
+        if say.moment in (Moment.LIGHTNING_INTRO, Moment.LIGHTNING_QUESTION)
+    ]
+    assert says[0] == Say(Moment.LIGHTNING_INTRO, text=script.lightning_intro("Maya", "Theo"))
+    assert says[1].moment is Moment.LIGHTNING_QUESTION
+    assert script.lightning_intro("Maya", "Theo") in script.LIGHTNING_INTROS
+    picks = {
+        script.lightning_intro(a, b)
+        for a, b in (("Maya", "Theo"), ("Sam", "Priya"), ("Esme", "Rory"), ("Wyn", "Pia"))
+    }
+    assert len(picks) > 1, "a night's dates take them in turn"

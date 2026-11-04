@@ -63,11 +63,11 @@ ONE_DATER_FROM_THE_ROOM = ("Room, keep the questions coming. {name}, back to you
 ONE_DATER_REPLY = ("Good question. I'll hand that one back to you, {name}.",)
 
 # docs/sign-off/2026-10-room-talk.md: more talk to the room for a hold (decision 0004).
-ROOM_TALK = (
-    "Room, thanks for staying with us. The chat has been lovely tonight.",
+ROOM_TALK = (  # 1 and 4 revised 2026-11-02: Nova can't know what the chat is like
+    "Room, thanks for staying with us tonight. Questions for our daters are always welcome.",
     "While we wait, room, what would you ask next? Tell us in the chat.",
     "Stay with us, room. Good conversations are worth a short wait.",
-    "Room, a quick thank-you for keeping the chat kind and curious.",
+    "Room, a quick thank-you for being here with us.",
     "We will be right back with you, room. Thanks for your patience.",
     "Room, your questions keep this show going. Thank you for every one of them.",
 )
@@ -77,16 +77,6 @@ CONDUCT_DETAIL = (
     "Let's keep workplaces off air. You're more interesting than your job anyway.",
     "Let's keep numbers and handles off air. Those are for later, not for the room.",
     "Let's keep the personal details off air. The story's better without them.",
-)
-
-
-# docs/sign-off/2026-10-reply-fallback.md: a neutral reply fallback. Today's ("I'm the AI
-# host, so I'll stay out of that one.") sounds as if the dater asked something off limits
-# when the model only timed out.
-REPLY_FALLBACK = (
-    "Good question. I'll hand that one back to you two.",
-    "I'll let you two take that one. Over to you.",
-    "That one's yours to answer, not mine. Back to you both.",
 )
 
 

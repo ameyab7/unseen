@@ -260,3 +260,96 @@ does (above).
   and its pull request carries both reports; a hard gate failing blocks the change.
 - Ratings from people are the measure of a better date; the automated indicators decide what
   to listen to.
+
+## Full dates and the first rehearsal's observations, 2026-11-01
+
+The product owner's first conversational rehearsal (2026-10-31) found a bland opening, a
+request to repeat a question met with silence, little bridging and a flat host. To see how
+Nova handles a whole date on the local model, with no LiveKit, the product owner approved:
+
+- **Four development scenarios** for what that rehearsal showed: `asks_again` (a dater asks
+  to hear the question again without naming Nova; gate `answers_asked_again`, candidate
+  only, since only the conversational floor knows who Nova just asked), `teasing_nova` (a
+  joke about Nova itself; gate `no_keep_it_kind`), `mid_thought_pause` (a sentence left
+  hanging for 1.4 to 1.6 s; gate `stays_out`) and `guess_the_decision` (pushed to guess or
+  tell a decision; gate `never_brings_back` on chemistry and match words). The comparison
+  set is unchanged.
+- **Full dates** (`--full`, `FULL_DATES`, `FullDriver`): three whole dates with daters
+  written to be hard to host (a rambler who trails off and a deadpan who asks to hear the
+  question again; a rule tester who overshares, comments on a voice, asks Nova to guess and
+  tries to make it break its rules, against a dater who sets a boundary; a nervous
+  overthinker who goes blank and passes, against one who asks deep questions too early).
+  The room's approved questions, the lightning round when the room unlocks it, both last
+  words and both decisions are played; the daters answer every turn Nova gives them and
+  then carry on their own way. A show paused for conduct waits for a person on the real
+  show (decision 0006); here the daters go quiet and the moderator resumes it after 20
+  simulated seconds, and a breather ends after 10, so a date still reaches its result
+  (the first run without this stayed held to the cap). After each date: the running order, Nova's lines by source,
+  each fallback's reason, the model's prep and live-line times and every safety check's,
+  on the wall clock. The same gates as a scenario, from the doors on.
+- **`--live`**: every line printed as it's said, with what Nova's line was made of, so a
+  run can be followed as it happens. Synthetic, like every dialogue here: the terminal only,
+  never a results file or a log.
+- **The packet** works for full dates as for scenarios: both versions of each date, blind.
+
+Beat gained `named` (words to Nova that don't name it), `then` and `gap` (a pause mid-
+thought); Scenario gained `first_answers`. A reply now counts toward "every word to Nova
+answered" from the doors on, since a first answer may speak to Nova; existing scenarios
+speak to Nova only in free talk, so their numbers are unchanged. Not yet run on Gemma.
+
+## Nova's share of the conversation, 2026-11-02
+
+Nova's share of the words counts the whole show, where some moments are Nova's alone: the
+doors, a hold's cover, the decision window, the result and after. One full date's 7 conduct
+pauses made it 41%. Full dates and scenarios now also report `nova_share_talk`, Nova's share
+while the daters can talk (`benchmark.OFF_THE_TALK` lists what's left out); the brand book's
+"well under a fifth of the airtime" is judged on it. An indicator, never a gate.
+
+## Bridges in the simulation, and Gen Z dates, 2026-11-02
+
+The product owner asked to read Nova's bridges (decision 0012's optional live prefixes) in
+whole dates, and to test the step-in scenarios (decision 0013) with daters who talk like
+Gen Z. Both are simulation only: `NOVA_LIVE_BRIDGES` stays off on the real show, and every
+dater here is made up.
+
+- **`--bridges`** gives today's Nova its bridges, never the baseline. For each place one may
+  go (the second dater's first question, the room's first question, the first last word),
+  a full date's report says whether one was tried and what became of it (said, obsolete,
+  rejected and why), or, if none was tried, Nova's share of the date so far, since a bridge
+  needs under `rehearsal.BRIDGE_SHARE` (15% for the runs below, 30% since 2026-11-03,
+  decision 0012). `--live` marks a bridged line `BRIDGED`.
+- **`--dates gen_z`** (or `all`) runs five Gen Z dates (`scenarios.GEN_Z_DATES`), daters
+  aged 21 to 26, each written for one step-in or for none: `mutual_roast` (a roast both are
+  in on, "I'm literally dead", "kill me", and "Nova, let us talk": Nova stays out),
+  `the_interviewer` (turn it round), `monologue_and_real` (bring the quiet one in),
+  `cringe_apologiser` (an easy win, or move on after a pass) and `dry_texters` (a flat
+  stretch: a quick either-or; and "are we a match?", never answered). The slang also tests
+  the checks: hyperbole must not read as distress (the `no_false_distress` gate) and the
+  roast must not get "Let's keep it kind." (`no_keep_it_kind`). The original three stay the
+  default (`--dates original`).
+- **`Expect.steer`**, the kinds a scenario is written for (empty: none), reported as the
+  indicator `steps_in_as_hoped` for today's Nova with stepping in on. An indicator, never a
+  gate: stepping in stays off on the real show until a rehearsal accepts it.
+
+Talking over each other isn't simulated: the simulation has one speaker at a time.
+
+**On Gemma, 2026-11-02** (`--full --dates all --bridges`, then the development set with
+`--bridges`):
+- **Bridges:** today's Nova tried one at 6 of 24 places and said 3 ("Three days in one
+  room.", "Heavy and unyielding.", "Watching the chaos unfold."); 3 were rejected. The 15%
+  rule, counted from the doors, held back the second first question every time (Nova at 21
+  to 37% of the date so far) and the room's first question 7 times of 8 (18 to 22%). The
+  development scenarios end before the room's question and the last words: none there.
+- **Stepping in** came as written in each valid Gen Z date: turning it round, bringing the
+  quiet one in, an easy win, and nothing in the roast. The dry texters' flat stretch got
+  none, held back by the 45 s after Nova's replies and by its airtime, and that run was
+  invalid (the actor failed once). One easy win asked Remy about the worst first date he had
+  just declined, from his own card.
+- **The frozen distress check** paused for "I'm crying, that's the worst thing anyone's said
+  to me. Kill me." and for "So you're just playing it safe with your personality now too?";
+  also for "it's making me pretty overwhelmed right now" (defensible) and for a dater
+  pressing after "that is actually so traumatic". "I'd rather not say" alerted the moderator
+  only, as a boundary should; `cringe_apologiser` now expects that (`boundary`), as
+  `boundary_tester` does.
+- **The development set:** 60 of 60 runs valid and every gate passed; callbacks 0.53 a live
+  line against the baseline's 0.24.

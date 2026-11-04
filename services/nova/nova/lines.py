@@ -40,7 +40,8 @@ from nova.cues import Moment, RoomFacts, Say, Segment, Situation
 from nova.date_context import DateContext
 from nova.distress import has_warning, is_unmistakable
 from nova.events import Event, EventLog
-from nova.grounding import dramatized, unsupported
+from nova.floor import asks_again
+from nova.grounding import dramatized, takes_up, unsupported
 from nova.guardrails import (
     SENTENCE_END,
     SHOW_NAME,
@@ -60,7 +61,7 @@ from nova.models import (
     Warmed,
     warm_up,
 )
-from nova.priority import SafetyFirst
+from nova.priority import SafetyFirst, Slots
 from nova.privacy import Data, PrivacyPolicy
 from nova.text import plain
 from nova.tonight import SHOWN, SHOWN_LIVE, Remembered, Tonight, mask
@@ -75,16 +76,34 @@ SET_PIECES = frozenset(
         Moment.NEXT_UP,
     }
 )
-LIVE_REACTIONS = frozenset({Moment.SILENCE, Moment.FROM_THE_ROOM, Moment.ROOM_TALK, Moment.REPLY})
+LIVE_REACTIONS = frozenset(
+    {Moment.SILENCE, Moment.FROM_THE_ROOM, Moment.ROOM_TALK, Moment.REPLY, Moment.STEER}
+)
 # Live reactions kept in tonight's memory. Not audience questions or replies: their lines
 # carry what a listener or dater said, and the memory reaches every later date's prompts.
 REMEMBERED_LIVE = frozenset({Moment.SILENCE, Moment.ROOM_TALK})
 # Live reactions that see this date's context (decision 0008).
-WITH_THIS_DATE = frozenset({Moment.SILENCE, Moment.REPLY})
+WITH_THIS_DATE = frozenset({Moment.SILENCE, Moment.REPLY, Moment.STEER})
+# Lines Nova starts itself, never answering a dater: none may take up a question a dater
+# declined, even from their card (decision 0013). A reply answers the dater's own words.
+NEVER_BACK = frozenset({Moment.SILENCE, Moment.STEER})
 # Questions an optional live prefix may lead into (decision 0012). Not a lightning question:
 # its one sentence leaves a prefix no room.
 BRIDGED = frozenset({Moment.FIRST_QUESTION, Moment.FROM_THE_ROOM, Moment.LAST_WORD})
 PREFIX_ROOM = 40  # characters a question must leave for a prefix, or none is written
+# Lines that put something to the daters: a dater who asks to hear it again ("Sorry, can
+# you repeat that?") hears the latest of them word for word if the model's reply is late
+# or rejected (decision 0012). Already said and already checked, so it's no new wording.
+ASKED_AGAIN = frozenset(
+    {
+        Moment.FIRST_QUESTION,
+        Moment.FROM_THE_ROOM,
+        Moment.LIGHTNING_QUESTION,
+        Moment.LAST_WORD,
+        Moment.SILENCE,
+        Moment.STEER,
+    }
+)
 CANDIDATES = 3  # model lines written for each set piece; the best one is kept
 # What Nova says while the show is held, or as a date ends early: any other line means the
 # hold is over, and the next hold may use the room-talk fallback again.
@@ -213,7 +232,9 @@ def fallback_lines(pair: Pair, next_pair: Pair | None) -> list[tuple[Moment, str
         *((Moment.SILENCE, s) for s in script.silence_fallbacks(pair)),
         (Moment.FROM_THE_ROOM, script.from_the_room_fallback(pair)),
         (Moment.ROOM_TALK, script.ROOM_TALK_FALLBACK),
-        (Moment.REPLY, script.REPLY_FALLBACK),
+        (Moment.ROOM_TALK, script.ROOM_TALK_ENDED_FALLBACK),
+        *((Moment.REPLY, r) for r in script.REPLY_FALLBACKS),
+        *((Moment.LIGHTNING_INTRO, i) for i in script.LIGHTNING_INTROS),
         (Moment.REPLY, script.TAKE_YOUR_TIME),
     ]
     if next_pair is not None:
@@ -258,7 +279,10 @@ class LineWriter:
             meaning.guard(self._privacy)
         self._segment: Segment | None = None  # where the date is (entered), for the arc
         self._model = self._privacy.guard(model)
-        self._prep_slots = asyncio.Semaphore(prep_parallel) if prep_parallel else None
+        self._prep_slots = Slots(prep_parallel) if prep_parallel else None
+        # Each set piece's place in the running order: with limited slots, the pieces
+        # needed first are written first (Slots).
+        self._prep_order: dict[_Key, int] = {}
         self._pair = pair
         self._next_pair = next_pair
         self._live_timeout = live_timeout
@@ -266,6 +290,7 @@ class LineWriter:
         self._prep_budget = prep_budget
         self._events = events or EventLog()
         self._rng = rng or random.Random()  # picks shapes and openings, so lines vary
+        self._reply_fallbacks = 0  # reply fallbacks said this date: they're taken in turn
         # This date's lightning questions: one of each format, in a random order.
         self._lightning_forms = self._rng.sample(
             prompts.LIGHTNING_FORMS, len(prompts.LIGHTNING_FORMS)
@@ -279,6 +304,9 @@ class LineWriter:
         self.budget_exhausted = False  # the prep budget ran out before every piece was ready
         self.selections: list[Selection] = []  # how each set piece was chosen (evaluation)
         self._fallback_in_hold = False  # the room-talk fallback was said in this hold
+        # The latest line the room heard that put something to the daters (ASKED_AGAIN):
+        # the fallback when one asks to hear it again.
+        self._asked: str | None = None
 
     # --- Before the date ------------------------------------------------------------------
 
@@ -312,7 +340,9 @@ class LineWriter:
         pieces that fell back, once the model is ready after all (Rehearsal.hold_until_ready);
         the model's own lines stay as they are. budget: instead of the prep budget."""
         started = time.monotonic()
-        cues = [say for say in self._set_piece_cues() if not again or self._fell_back(say)]
+        pieces = self._set_piece_cues()
+        self._prep_order = {_key(say): place for place, say in enumerate(pieces)}
+        cues = [say for say in pieces if not again or self._fell_back(say)]
         if again:  # each fallback stays until a line replaces it, so none goes missing
             self.budget_exhausted = False
         chains: dict[Moment, list[Say]] = {}
@@ -375,6 +405,8 @@ class LineWriter:
             self._tonight.remember(line.moment, line.text, names=self._names)
         if self._context is not None and line.text and line.source in WRITTEN:
             self._context.said(line.text)
+        if line.text and line.moment in ASKED_AGAIN:
+            self._asked = line.text
 
     async def attempt_for(self, say: Say) -> Attempt:
         """One model attempt for a cue, with no fallback: for the evaluation script. An
@@ -540,8 +572,7 @@ class LineWriter:
         chosen = quality.best(scored)
         judged: list[tuple[int, Judged]] = []
         while chosen is not None and self._meaning is not None:
-            slot = self._prep_slots or contextlib.nullcontext()
-            async with slot:  # a request like a candidate's: a check during prep waits for one
+            async with self._prep_slot(say):  # a request like a candidate's: a check waits
                 verdict = await self.judge(say, attempts[chosen].text or "")
             judged.append((chosen, verdict))
             if verdict.passed:
@@ -615,9 +646,15 @@ class LineWriter:
     async def _prepare_attempt(self, say: Say) -> Attempt:
         """One candidate, taking a slot if NOVA_PREP_PARALLEL limits them, so a distress
         check during prep never queues behind a dozen requests on the same model."""
-        slot = self._prep_slots or contextlib.nullcontext()
-        async with slot:
+        async with self._prep_slot(say):
             return await self._attempt(say, self._prompt_for(say), self._prep_timeout)
+
+    def _prep_slot(self, say: Say) -> contextlib.AbstractAsyncContextManager[None]:
+        """A slot for one of this set piece's requests, if NOVA_PREP_PARALLEL limits them:
+        the earlier the piece comes in the running order, the sooner it gets one."""
+        if self._prep_slots is None:
+            return contextlib.nullcontext()
+        return self._prep_slots.slot(self._prep_order.get(_key(say), len(self._prep_order)))
 
     async def _attempt(self, say: Say, prompt: str, timeout: float) -> Attempt:
         started = time.monotonic()
@@ -670,7 +707,7 @@ class LineWriter:
             max_sentences=rules.max_sentences,
             echo_from=[s for s in said if s],
             card_words=card_words(" ".join(p.text for p in card.prompts) for card in cards),
-            questions=rules.questions and not say.return_floor,
+            questions=rules.questions and not (say.return_floor or say.step_back),
             open_with_names=rules.open_with_names,
         )
         # The dater who's away is never named, even to open a sentence, where a capitalised
@@ -689,6 +726,10 @@ class LineWriter:
             found = tuple(v for v in Violation if v in {*found, Violation.INVENTS_SHOW_FACT})
         if show_state.wrong_segments(text, show_state.segment_for(say.moment, self._segment)):
             found = tuple(v for v in Violation if v in {*found, Violation.WRONG_SEGMENT})
+        if say.moment in NEVER_BACK and self._context is not None:
+            names = [card.first_name for card in (self._pair.left, self._pair.right)]
+            if any(takes_up(text, q, names=names) for q in self._context.declined()):
+                found = tuple(v for v in Violation if v in {*found, Violation.DECLINED})
         return found
 
     def _evidence(self, say: Say, cards: Sequence[BlindCard]) -> dict[str, list[str]]:
@@ -725,6 +766,12 @@ class LineWriter:
         """An approved fallback line, never built from what a dater or listener said (one
         exception is proposed, behind a switch that's off: an approved audience question,
         framed)."""
+        if say.moment is Moment.REPLY and say.step_back:
+            return ""  # they asked Nova to leave them to it: saying nothing does (0013)
+        if say.moment is Moment.REPLY:
+            again = self._said_again(say)
+            if again is not None:
+                return again
         if say.moment is Moment.REPLY and say.return_floor:
             return script.TAKE_YOUR_TIME
         pair = self._pair
@@ -768,21 +815,37 @@ class LineWriter:
                     # sign-off: docs/sign-off/2026-10-one-dater.md).
                     return ""
                 return script.from_the_room_fallback(pair)
+            case Moment.STEER:
+                return ""  # stepping in is optional: staying out is always safe (0013)
             case Moment.ROOM_TALK:
                 ended = say.room is not None and say.room.situation is Situation.ENDED_EARLY
                 if say.number is not None or ended:  # a hold's cover, or the close after one
                     if self._fallback_in_hold:
                         return ""  # never the same fallback twice in one hold
                     self._fallback_in_hold = True
-                return script.ROOM_TALK_FALLBACK
+                return script.ROOM_TALK_ENDED_FALLBACK if ended else script.ROOM_TALK_FALLBACK
             case Moment.REPLY:
                 words = say.detail or ""
                 if is_unmistakable(words) or has_warning(words):
                     return script.TAKE_YOUR_TIME  # never "I'll stay out of that one"
                 if say.away is not None:
                     return ""  # the fallback hands back to both daters
-                return script.REPLY_FALLBACK
+                turn, self._reply_fallbacks = self._reply_fallbacks, self._reply_fallbacks + 1
+                return script.REPLY_FALLBACKS[turn % len(script.REPLY_FALLBACKS)]
         raise ValueError(f"No fallback for {say.moment}")
+
+    def _said_again(self, say: Say) -> str | None:
+        """For a dater who asked to hear Nova's question again (floor.asks_again): the
+        latest line that put something to them, word for word, as the room heard it. Never
+        over what might be distress, which gets the kind line, and never while one dater is
+        away, since the line may name them."""
+        words = say.detail or ""
+        if self._asked is None or say.about is None or say.away is not None:
+            return None
+        if is_unmistakable(words) or has_warning(words):
+            return None
+        other = self._pair.card(say.about.other).first_name
+        return self._asked if asks_again(words, other_name=other) else None
 
     def _card_line(self, say: Say, pair: Pair, build: Callable[[Pair], str]) -> bool:
         """Proposed, off until signed off (script.CARD_FALLBACKS_ON): a fallback quoting
@@ -812,7 +875,8 @@ class LineWriter:
         pair, tonight = self._pair, self._tonight.said(say.moment, limit=limit)
         match say.moment:
             case Moment.DOORS_INTRO:
-                return prompts.doors_intro(pair, tonight=tonight)
+                shape = self._rng.choice(prompts.DOORS_SHAPES)
+                return prompts.doors_intro(pair, tonight=tonight, shape=shape)
             case Moment.FIRST_QUESTION:
                 return prompts.first_question(pair, _seat(say), tonight=tonight)
             case Moment.LIGHTNING_QUESTION:
@@ -832,10 +896,25 @@ class LineWriter:
                     return prompts.silence_to_one(
                         pair, say.about, tonight=tonight, this_date=this_date, segment=segment
                     )
-                return prompts.silence(pair, tonight=tonight, this_date=this_date, segment=segment)
+                shape = self._rng.choice(prompts.SILENCE_SHAPES)
+                return prompts.silence(
+                    pair, tonight=tonight, this_date=this_date, segment=segment, shape=shape
+                )
+            case Moment.STEER:
+                return prompts.steer(
+                    pair,
+                    say.steer or "lighten",
+                    say.about,
+                    tonight=tonight,
+                    this_date=self._this_date(say),
+                    segment=self._segment,
+                )
             case Moment.FROM_THE_ROOM:
                 to = say.away.other if say.away is not None else None
-                return prompts.from_the_room(pair, say.detail or "", to=to, tonight=tonight)
+                frame = self._rng.choice(prompts.ROOM_QUESTION_FRAMES)
+                return prompts.from_the_room(
+                    pair, say.detail or "", to=to, tonight=tonight, frame=frame
+                )
             case Moment.ROOM_TALK:
                 opening = self._rng.choice(prompts.ROOM_TALK_OPENINGS)
                 return prompts.room_talk(_room(say), opening=opening, tonight=tonight)
@@ -851,6 +930,7 @@ class LineWriter:
                     this_date=self._this_date(say),
                     segment=self._segment,
                     return_floor=say.return_floor,
+                    step_back=say.step_back,
                 )
         raise ValueError(f"No prompt for {say.moment}")
 

@@ -91,6 +91,11 @@ class Settings:
     # serving one request at a time (OLLAMA_NUM_PARALLEL), more never prepared faster: set
     # it to match OLLAMA_NUM_PARALLEL.
     prep_parallel: int = 1
+    # How long Ollama keeps Nova's models in memory after a date ends (decision 0011): an
+    # hour, so a second rehearsal or the next date finds Gemma warm instead of loading it
+    # again (29 s on 2026-10-31). 0: never asked, and Ollama's own default applies. While it's
+    # loaded, Gemma holds most of the graphics card: `ollama stop <model>` frees it.
+    ollama_keep_alive: float = 3600.0
     # How long the distress check (decision 0005, the meaning layer) may take before the
     # moderator is alerted instead. A "yes" pauses the dater only once it arrives, so this
     # also bounds how late the kind line can come.
@@ -105,6 +110,11 @@ class Settings:
     utterance_max_wait: float = 1.5
     # Nova's voice as "provider/model:voice", and the speech recognition that hears daters.
     voice: str = DEFAULT_VOICE
+    # How Nova's voice sounds, for a voice that takes it (Cartesia, through LiveKit
+    # Inference): an emotion word ("excited", "enthusiastic") and a speed (0.6 to 1.5, 1 is
+    # normal). Empty: the voice's own (the product owner, 2026-11-01: a livelier host).
+    voice_emotion: str = ""
+    voice_speed: float = 0.0
     stt: str = DEFAULT_STT
     # This date's recent turns (decision 0008) go to a model that isn't approved local only
     # when this is true: off until the privacy notice covers that provider and data flow
@@ -130,6 +140,9 @@ class Settings:
     conversational_turns: bool = True
     full_rehearsal: bool = True
     live_bridges: bool = False
+    # Nova steps in when a conversation is going wrong, not only when it stops (decision
+    # 0013): off until a rehearsal with two people accepts it.
+    steering: bool = False
     conversation_overrun: float = 60.0
     left_participant: str = ""
     right_participant: str = ""
@@ -146,6 +159,7 @@ class Settings:
         "NOVA_CONVERSATIONAL_TURNS",
         "NOVA_FULL_REHEARSAL",
         "NOVA_LIVE_BRIDGES",
+        "NOVA_STEERING",
         "NOVA_CONVERSATION_OVERRUN_SECONDS",
         "NOVA_LEFT_PARTICIPANT",
         "NOVA_RIGHT_PARTICIPANT",
@@ -157,10 +171,13 @@ class Settings:
         "NOVA_WARM_UP_SECONDS",
         "NOVA_READY_RETRY_SECONDS",
         "NOVA_PREP_PARALLEL",
+        "NOVA_OLLAMA_KEEP_ALIVE_SECONDS",
         "NOVA_DISTRESS_TIMEOUT_SECONDS",
         "NOVA_UTTERANCE_GRACE_SECONDS",
         "NOVA_UTTERANCE_MAX_WAIT_SECONDS",
         "NOVA_VOICE",
+        "NOVA_VOICE_EMOTION",
+        "NOVA_VOICE_SPEED",
         "NOVA_STT",
         "NOVA_DIALOGUE_TO_PROVIDER",
         "NOVA_MEANING_CHECK",
@@ -226,10 +243,15 @@ class Settings:
             warm_up=_seconds(env, "NOVA_WARM_UP_SECONDS", cls.warm_up),
             ready_retry=_seconds(env, "NOVA_READY_RETRY_SECONDS", cls.ready_retry),
             prep_parallel=_count(env, "NOVA_PREP_PARALLEL", cls.prep_parallel),
+            ollama_keep_alive=_seconds(
+                env, "NOVA_OLLAMA_KEEP_ALIVE_SECONDS", cls.ollama_keep_alive, zero=True
+            ),
             distress_timeout=_seconds(env, "NOVA_DISTRESS_TIMEOUT_SECONDS", cls.distress_timeout),
             utterance_grace=grace,
             utterance_max_wait=max_wait,
             voice=_voice(env.get("NOVA_VOICE", "").strip() or cls.voice),
+            voice_emotion=_emotion(env.get("NOVA_VOICE_EMOTION", "")),
+            voice_speed=_speed(env.get("NOVA_VOICE_SPEED", "")),
             stt=_stt(env.get("NOVA_STT", "").strip() or cls.stt),
             dialogue_to_provider=_flag(env, "NOVA_DIALOGUE_TO_PROVIDER"),
             meaning_check=_flag(env, "NOVA_MEANING_CHECK", default=cls.meaning_check),
@@ -242,6 +264,7 @@ class Settings:
             ),
             full_rehearsal=_flag(env, "NOVA_FULL_REHEARSAL", default=cls.full_rehearsal),
             live_bridges=_flag(env, "NOVA_LIVE_BRIDGES", default=cls.live_bridges),
+            steering=_flag(env, "NOVA_STEERING", default=cls.steering),
             conversation_overrun=_seconds(
                 env, "NOVA_CONVERSATION_OVERRUN_SECONDS", cls.conversation_overrun
             ),
@@ -293,7 +316,29 @@ def _count(env: Mapping[str, str], name: str, default: int) -> int:
     return int(raw)
 
 
-def _seconds(env: Mapping[str, str], name: str, default: float) -> float:
+def _emotion(raw: str) -> str:
+    """One lowercase word or empty: never free text in a request to the voice."""
+    value = raw.strip().lower()
+    if value and not re.fullmatch(r"[a-z]{2,24}", value):
+        raise ConfigError("NOVA_VOICE_EMOTION must be one word, such as excited")
+    return value
+
+
+def _speed(raw: str) -> float:
+    """0 (the voice's own), or 0.6 to 1.5."""
+    if not raw.strip():
+        return 0.0
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not math.isfinite(value) or not 0.6 <= value <= 1.5:
+        raise ConfigError("NOVA_VOICE_SPEED must be a number from 0.6 to 1.5")
+    return value
+
+
+def _seconds(env: Mapping[str, str], name: str, default: float, *, zero: bool = False) -> float:
+    """zero: 0 is allowed too (a setting that 0 turns off)."""
     raw = env.get(name, "").strip()
     if not raw:
         return default
@@ -301,8 +346,9 @@ def _seconds(env: Mapping[str, str], name: str, default: float) -> float:
         value = float(raw)
     except ValueError:
         value = math.nan
-    if not math.isfinite(value) or value <= 0:
-        raise ConfigError(f"{name} must be a positive number of seconds")
+    if not math.isfinite(value) or value < 0 or (value == 0 and not zero):
+        kind = "zero or a positive" if zero else "a positive"
+        raise ConfigError(f"{name} must be {kind} number of seconds")
     return value
 
 

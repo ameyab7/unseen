@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from nova import conduct_set, evaluation, independent_set, safety_report
-from nova.distress import LIGHT_SYSTEM
+from nova.distress import FIGURATIVE_SYSTEM, LIGHT_SYSTEM
 from nova.distress_set import DISTRESS_SET, Sample
 from nova.evaluation import main
 from nova.safety_report import (
@@ -33,7 +33,8 @@ SAMPLES = (
 
 class Classifier:
     """Answers each sentence from `labels` (a label per pass, or one for all), counting the
-    calls per sentence; the second question is always false. Records the order asked."""
+    calls per sentence; the second and third questions are always false. Records the order
+    asked."""
 
     name = "fake/classifier"
 
@@ -43,6 +44,8 @@ class Classifier:
     async def label(self, *, system: str, prompt: str, schema: object = None) -> str:
         if system == LIGHT_SYSTEM:
             return '{"light": false}'
+        if system == FIGURATIVE_SYSTEM:
+            return '{"figurative": false}'
         said = prompt.split('"sentence": "')[1].split('"')[0]
         self.asked.append(said)
         k = self.calls[said] = self.calls.get(said, -1) + 1

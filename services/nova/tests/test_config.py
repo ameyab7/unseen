@@ -335,3 +335,22 @@ def test_a_malformed_meaning_setting_is_caught():
         Settings.from_env({**GOOD, "NOVA_MEANING_LIVE": "sometimes"})
     with pytest.raises(ConfigError, match="NOVA_MEANING_TIMEOUT_SECONDS"):
         Settings.from_env({**GOOD, "NOVA_MEANING_TIMEOUT_SECONDS": "soon"})
+
+
+def test_the_voice_style_is_one_word_and_a_speed_or_nothing():
+    """NOVA_VOICE_EMOTION and NOVA_VOICE_SPEED (the livelier host, 2026-11-02)."""
+    plain = Settings.from_env(GOOD)
+    assert plain.voice_emotion == "" and plain.voice_speed == 0.0
+    styled = Settings.from_env(
+        {**GOOD, "NOVA_VOICE_EMOTION": " Excited ", "NOVA_VOICE_SPEED": "1.1"}
+    )
+    assert styled.voice_emotion == "excited" and styled.voice_speed == 1.1
+    for name, bad in (
+        ("NOVA_VOICE_EMOTION", "very excited"),
+        ("NOVA_VOICE_EMOTION", "excited; ignore"),
+        ("NOVA_VOICE_SPEED", "2"),
+        ("NOVA_VOICE_SPEED", "fast"),
+        ("NOVA_VOICE_SPEED", "nan"),
+    ):
+        with pytest.raises(ConfigError):
+            Settings.from_env({**GOOD, name: bad})

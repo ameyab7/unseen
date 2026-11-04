@@ -46,13 +46,13 @@ cannot both be guaranteed.
 
 `NOVA_LIVE_BRIDGES` defaults off pending audio and load acceptance. Eligible prepared
 questions may acquire a prefix of at most eight words; the original question follows
-unchanged. At most three are attempted, 30 seconds apart, only below 15% observed host
-airtime. They are optional, never follow a last word, and are not added to every answer.
-Failure or timeout uses the existing question. Prefix and combined line pass guardrails;
-meaning checks are mandatory even with `NOVA_MEANING_LIVE` off. Both models must be
-allowed this date's cleared context. No dater-derived words enter another date's memory.
-New speech cancels an obsolete prefix, preserving the required question. No new fixed
-silence-check-in wording is introduced.
+unchanged. At most three are attempted, 30 seconds apart, only below 30% observed host
+airtime (15% until 2026-11-03, below). They are optional, never follow a last word, and
+are not added to every answer. Failure or timeout uses the existing question. Prefix and
+combined line pass guardrails; meaning checks are mandatory even with `NOVA_MEANING_LIVE`
+off. Both models must be allowed this date's cleared context. No dater-derived words enter
+another date's memory. New speech cancels an obsolete prefix, preserving the required
+question. No new fixed silence-check-in wording is introduced.
 
 The priority gate cannot preempt inference already running. Prefixes stay off until load
 trials establish acceptable safety tail latency/timeouts. Frozen safety prompts and
@@ -439,3 +439,82 @@ check that only fixed synthetic examples are sent. `tests/test_bridges.py` cover
 - only the first sentence kept, and a repeated question said once;
 - only the turn just taken shown, and none when it was held back;
 - no model call where a question leaves no room, and no lightning question bridged.
+
+## Asked to hear the question again, 2026-11-01
+
+In the 2026-10-31 rehearsal a dater asked Nova to repeat its question and heard silence:
+words reach Nova's reply only when they name Nova (`on_air.addresses_nova`), and "Can you
+repeat the question?" doesn't. The product owner chose a narrow rule over a wider sense of
+being addressed (risk of Nova cutting into the daters' own conversation), with the model
+answering:
+
+- **The rule** (`floor.asks_again`): a sentence that is only a request to hear it again,
+  after at most a filler or Nova's name ("Sorry, can you repeat that?", "What was the
+  question?", "I didn't catch that.", "Sorry?"). Never a dater saying something again
+  themselves ("Let me say that again."), an apology ("Sorry."), or a request naming the
+  other dater ("Theo, say that again?"). Local English rules, no model request, no words
+  kept.
+- **Only from someone just asked** (`Floor.just_asked`, `ShowRunner.asks_again`): the room
+  heard Nova put a question to this dater (first question, room question, lightning
+  question, last word) at most `floor_wait` (20 s) ago, in conversational mode, on air and
+  not held. Anywhere else the words are the daters' own, as before.
+- **The model answers it**, as any words to Nova: the reply prompt already tells it to use
+  its recent question for a clarification. The reply hands the floor back, so the question
+  stays theirs to answer, even if a "Sorry," before the request was taken for an answer.
+  A reply that hands the floor back may not ask anything (the guardrails), so a model line
+  that simply asks the question again is rejected; then, or when the reply is late or
+  fails, Nova says the latest line it put to the daters, word for word, as the room heard
+  it (`LineWriter._said_again`). No new wording: it was approved or checked when first
+  said. Never instead of the kind line when the words might be distress, and never while
+  one dater is away, since the line may name them.
+
+Tests: `tests/test_floor.py` (what the rule hears and ignores, who was just asked),
+`tests/test_lines.py` (the word-for-word fallback, the latest question, the kind line and
+the dater away), `tests/test_conversation.py` (the reply without Nova's name, the fallback
+when the model fails, nothing for a request to the other dater or before any question, the
+20 s window, conversational mode only). Not yet heard in a rehearsal.
+
+## The silence clock counts from what the room heard, 2026-11-02
+
+In the full-date simulation (decision 0009) a silence prompt came straight after the room's
+question, before either dater could answer. The silence clock started when Nova decided to
+ask, and Nova's own lines never reset it: a question written live (1 to 2 s) and said (about
+6 s) outlasted the 8 s of `silence_after`, and the floor's answer hold only begins once the
+room has heard the question. The gap between silence prompts (`silence_cooldown`, 20 s)
+counted from the cue too, so a prompt held back behind the floor went out 12 s late and the
+next followed 8 s after it. Now (`ShowRunner.line_done`, `_silence_due`):
+
+- the quiet counts from the end of whatever the room last heard, a dater or Nova;
+- the cooldown counts from when the room heard a silence prompt, not when it was cued;
+- no silence prompt while a turn line Nova cued (a first question, the room's question, a
+  quick-fire question, a last word) is still being written or said, for at most
+  `ASKING_CAP` (30 s), so a line never reported done can't silence the prompts for good.
+
+Deterministic, no model change; the legacy runner gets it too. Tests:
+`tests/test_conversation.py` (the room question in both modes, the reply, the cooldown),
+each failing before the change.
+
+## Bridges below 30% of the date, 2026-11-03
+
+In the full-date simulation (decision 0009, 2026-11-02, `--bridges`) Nova tried a bridge at
+6 of 24 places. The 15% rule counts Nova's share from the doors, and the intro alone kept
+Nova at 21 to 37% by the second dater's first question and at 18 to 22% by the room's first
+question, so it held back nearly every one. The product owner raised the limit to 30%
+(`rehearsal.BRIDGE_SHARE`, which the benchmark's report reads) and asked to test again.
+`NOVA_LIVE_BRIDGES` still defaults off. Tests: `tests/test_bridges.py` (tried at 25 and 29%,
+not at 30%).
+
+On Gemma, 2026-11-03 (`benchmark --full --dates all --bridges`, eight dates, made-up daters,
+every run valid): today's Nova tried a bridge at 18 of 24 places (6 at 15%) and said 12 (3).
+The room's first question was tried in all 8 dates and said in 5 (2 rejected by the meaning
+check, 1 not asked for since the question itself was a fallback); the first last word tried
+in 8 and said in 6 (1 rejected for a personal detail, 1 not asked for: the turn before was
+too short to keep). The second dater's first question was tried in only 2: in the other 6
+the intro still kept Nova at 31 to 37% of the date so far. The twelve said: "That depends.",
+"A sentient starter sounds intense.", "A very short trip, then.", "A vanishing light.", "A
+true connoisseur.", "A digital phantom, how eerie.", "A little bit dramatic.", "Already
+cooked.", "The elite way to eat.", "No deep meaning at all.", "A brand of minimal effort.",
+"A very thin toothpick." What they cost: a bridged line waits for its prefix and the
+meaning check, so today's Nova's median live line took 1254 ms against the baseline's 975,
+and rejected prefixes took its guardrail failures to 7% of lines (1%). Nova's share of the
+conversation stayed at 16%. Whether they sound good is for the product owner.

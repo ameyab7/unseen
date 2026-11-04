@@ -26,6 +26,7 @@ from typing import Protocol
 
 from nova import script
 from nova.cards import Pair, Seat
+from nova.conduct_judge import ConductJudge
 from nova.config import Settings
 from nova.cues import (
     AlertModerator,
@@ -95,6 +96,11 @@ HOLD_BACKOFF = (2.0, 4.0, 8.0, 16.0)
 # still loading or a server still starting. Never one that can't (a model not pulled, a bad
 # key, a refusal, a failure it can't tell), which the moderator hears of at once.
 MAY_PASS = frozenset({WarmUpError.TIMEOUT, WarmUpError.UNAVAILABLE})
+# An optional live prefix (NOVA_LIVE_BRIDGES, decision 0012) is tried only while Nova has
+# under this share of the date so far, counted from the doors. The product owner raised it
+# from 15% on 2026-11-03: the intro alone kept Nova at 21 to 37% by the second dater's first
+# question, so bridges almost never came.
+BRIDGE_SHARE = 0.30
 
 
 class Opened(StrEnum):
@@ -121,6 +127,7 @@ class Command(StrEnum):
     UNSEEN = "unseen"
     KEEP = "keep"  # moderator: keep waiting for a dater who isn't back
     RESUME = "resume"  # moderator: carry on without them
+    PAUSE = "pause"  # moderator: pause the whole date over the speaking dater's conduct
     END = "end"  # moderator: end the date
     LEAVE = "leave"  # the speaking dater leaves
     REPORT = "report"  # the speaking dater presses Report
@@ -285,6 +292,7 @@ class Rehearsal:
         clock: Callable[[], float] = time.monotonic,
         timing: Timing = REHEARSAL,
         conversational: bool = False,
+        steering: bool = False,
         live_bridges: bool = False,
         input_streams: int = 1,
         next_pair: Pair | None = None,
@@ -361,6 +369,7 @@ class Rehearsal:
             first_up=first_up,
             paced=True,  # every line is reported as it finishes (_speak, _stop)
             conversational=conversational,
+            steering=steering,  # stepping in although nobody went quiet (decision 0013)
             observe=self._observe,
         )
         self.timing = timing  # the running order's, for the report
@@ -404,6 +413,8 @@ class Rehearsal:
             grace=utterance_grace,
             max_wait=utterance_max_wait,
             context=context,
+            # The second conduct check, on the classifier like the first (decision 0006).
+            judge=ConductJudge(checks, events=self._events, gate=self._gate),
         )
         self._queue: asyncio.Queue[_Pending] = asyncio.Queue()
         self._queued = 0  # lines queued so far: which waiting lines came after a cut
@@ -810,6 +821,8 @@ class Rehearsal:
                 self._queue_cues(runner.moderator_keep_waiting(now))
             case Command.RESUME:
                 self._queue_cues(runner.moderator_resume(now))
+            case Command.PAUSE:
+                self._queue_cues(runner.moderator_pause(now, seat))
             case Command.END:
                 self._queue_cues(runner.moderator_end(now))
                 self._decided.set()  # before the date: it ends, never opens
@@ -1133,7 +1146,7 @@ class Rehearsal:
                 and self._bridge_count < 3
                 and now - self._last_bridge_at >= 30
                 and self.date_seconds > 0
-                and self.nova_seconds / self.date_seconds < 0.15
+                and self.nova_seconds / self.date_seconds < BRIDGE_SHARE
                 and self._context is not None
                 and len(self._context) > 0
                 and (
@@ -1175,7 +1188,9 @@ class Rehearsal:
             closed = closed_at if kind is Kind.REPLY else None
             held = hold if cue.moment is Moment.REPLY else None
             item = _Pending(cue, kind, now, ends, line, held, closed)
-            if self._runner.conversational and (cue.moment is Moment.SILENCE or cue.bridge):
+            # Optional lines new speech voids: a silence prompt, a prefix, a step-in.
+            optional = cue.moment in (Moment.SILENCE, Moment.STEER, Moment.ONE_AT_A_TIME)
+            if self._runner.conversational and (optional or cue.bridge):
                 item.revision = self._runner.floor.revision
                 self._optional.append(item)
             elif self._runner.conversational and kind is Kind.REPLY and cue.moment is Moment.REPLY:

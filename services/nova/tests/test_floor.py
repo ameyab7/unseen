@@ -3,7 +3,7 @@
 import pytest
 
 from nova.cards import Seat
-from nova.floor import Floor, Move, move, possible_completion
+from nova.floor import Floor, Move, asks_again, move, possible_completion
 
 LEFT, RIGHT = Seat.LEFT, Seat.RIGHT
 
@@ -165,3 +165,67 @@ def test_the_dater_who_asked_moving_on_ends_their_clarification():
     assert floor.clarifying is None
     floor.replied(16, LEFT)  # a reply nobody needs any more never re-arms the floor
     assert floor.since == 14 and floor.expected == set()
+
+
+# --- Asked again (decision 0012) ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Can you repeat the question?",
+        "Sorry, can you repeat that?",
+        "Could you say that again, please?",
+        "What was the question?",
+        "Sorry, what was the question again?",
+        "Come again?",
+        "Sorry?",
+        "Pardon?",
+        "I didn’t catch that.",  # speech-to-text's curly apostrophe
+        "Um, sorry, could you say that again, Nova?",
+        "Repeat the question please.",
+        "Nova, repeat that.",
+        "Can you repeat?",
+        "Ha. Sorry, I didn't hear the question.",
+    ],
+)
+def test_a_request_to_hear_the_question_again_is_recognized(text):
+    assert asks_again(text, other_name="Theo")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Let me say that again.",  # saying something again themselves
+        "I'll repeat that.",
+        "Sorry.",  # an apology, not a question
+        "Theo, can you say that again?",  # asked of the other dater
+        "Say that again, Theo.",
+        "What?",
+        "I would repeat that trip any day.",
+        "The question is a good one.",
+        "Sorry, I was miles away, a cabin by the lake.",
+        "Can you believe it?",
+    ],
+)
+def test_saying_something_again_or_asking_the_other_dater_is_not_a_request_to_nova(text):
+    assert not asks_again(text, other_name="Theo")
+
+
+def test_only_someone_nova_just_asked_can_ask_to_hear_it_again():
+    floor = Floor()
+    floor.begin({LEFT})
+    assert not floor.just_asked(5, LEFT), "the room hasn't heard the question yet"
+    floor.asked(10, heard_from=8, heard_until=10)
+    assert floor.just_asked(11, LEFT)
+    assert not floor.just_asked(11, RIGHT), "Theo wasn't asked"
+    floor.heard(11, LEFT, Move.UNKNOWN, spoke=(10.5, 11))  # "Sorry," taken for an answer
+    assert floor.expected == set() and floor.just_asked(12, LEFT), "still the one asked"
+    assert floor.just_asked(30, LEFT) and not floor.just_asked(30.1, LEFT), "for floor.wait"
+    floor.clear()
+    assert not floor.just_asked(12, LEFT)
+    floor.begin({LEFT, RIGHT})
+    floor.asked(40)
+    assert floor.just_asked(41, LEFT) and floor.just_asked(41, RIGHT), "a question to both"
+    floor.withdrawn()
+    assert not floor.just_asked(41, LEFT), "never said, so never asked"

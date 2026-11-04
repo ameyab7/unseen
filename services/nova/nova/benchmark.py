@@ -5,6 +5,19 @@ and on time?
                                     [--variant both] [--scenario NAME ...]
                                     [--out results.json] [--transcripts] [--packet DIR]
     uv run python -m nova.benchmark --compare before.json after.json
+    uv run python -m nova.benchmark --full [--dates original|gen_z|all] [--live]
+                                    [--packet DIR] [--variant candidate]
+                                    [--bridges] [--no-steering]
+
+--full runs whole dates instead (nova/scenarios.py: FULL_DATES, and with --dates the Gen Z
+dates, GEN_Z_DATES, each written for one of decision 0013's step-in scenarios): the doors to
+the result, the room's questions, the lightning round when the room unlocks it, both last
+words and the decisions, with daters written to make the host's job hard; after each date,
+how it went and how the model did on the wall clock (prep, live lines, safety checks).
+--live prints every line as it's said, with what Nova's line was made of (prepared, live and
+the model's time, fixed, or a fallback and why), for any run. --bridges gives today's Nova
+its optional live bridges (NOVA_LIVE_BRIDGES, decision 0012), never the baseline: each full
+date then says, for each place a bridge may go, whether one was tried and what became of it.
 
 Each scenario (nova/scenarios.py) runs through the real rehearsal: show runner, on-air
 listener, distress and conduct check, line writer and guardrails, on a simulated clock.
@@ -46,25 +59,36 @@ import re
 import statistics
 import time
 import zlib
-from collections.abc import Sequence
+from collections import deque
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from nova import ratings, script
 from nova.cards import Seat
 from nova.config import load_settings
-from nova.cues import AlertModerator, ModeratorAlert, Moment, Say
+from nova.cues import AlertModerator, ModeratorAlert, Moment, Say, Segment
 from nova.distress import Verdict
 from nova.evaluation import FakeClock
 from nova.events import EventLog
 from nova.grounding import dramatized, unsupported
 from nova.guardrails import OWN_FEELINGS
-from nova.lines import ErrorKind, Line, Source
+from nova.lines import BRIDGED, ErrorKind, Line, Source
 from nova.models import LineModel, build_classifier, build_model, warm_up
 from nova.privacy import PrivacyPolicy
 from nova.quality import content_words, opening
-from nova.rehearsal import Rehearsal
-from nova.scenarios import DEVELOPMENT, SCENARIOS, Scenario
+from nova.rehearsal import BRIDGE_SHARE, Prefix, Rehearsal
+from nova.scenarios import (
+    ANSWER,
+    DEVELOPMENT,
+    FULL_DATES,
+    GEN_Z_DATES,
+    REACT,
+    SCENARIOS,
+    Beat,
+    FullDate,
+    Scenario,
+)
 from nova.timing import FULL
 from nova.tonight import similarity
 
@@ -76,8 +100,9 @@ NOVA_WORDS_A_SECOND = 2.5  # 150 words a minute
 ACTOR_TIMEOUT = 20.0
 NEAR_DUPLICATE = 0.7
 # Nova's lines that come during the conversation: these are what the indicators read.
-LIVE = frozenset({Moment.SILENCE, Moment.REPLY, Moment.FROM_THE_ROOM})
-UNASKED = frozenset({Moment.SILENCE, Moment.FROM_THE_ROOM})  # interventions nobody asked for
+LIVE = frozenset({Moment.SILENCE, Moment.REPLY, Moment.FROM_THE_ROOM, Moment.STEER})
+# Interventions nobody asked for: a step-in is one too (decision 0013).
+UNASKED = frozenset({Moment.SILENCE, Moment.FROM_THE_ROOM, Moment.STEER, Moment.ONE_AT_A_TIME})
 DISTRESS_ALERTS = frozenset({ModeratorAlert.DATER_DISTRESSED, ModeratorAlert.POSSIBLE_DISTRESS})
 # More invalid runs than this, and the machine was too busy for a comparison at all.
 MAX_INVALID = 1 / 3
@@ -85,6 +110,44 @@ MAX_INVALID = 1 / 3
 # sound like one voice; seeded per run, seat and turn, so a run repeats.
 ACTOR_TEMPERATURE = {Seat.LEFT: 0.6, Seat.RIGHT: 1.0}
 SETS = {"development": DEVELOPMENT, "comparison": SCENARIOS}
+FULL_SETS = {"original": FULL_DATES, "gen_z": GEN_Z_DATES, "all": FULL_DATES + GEN_Z_DATES}
+# Where an optional live bridge may go (Rehearsal, decision 0012), with the left seat first up
+# as every run here has it: the second first question, the room's first, the first last word.
+BRIDGE_SPOTS = (
+    (Moment.FIRST_QUESTION, Seat.RIGHT),
+    (Moment.FROM_THE_ROOM, None),
+    (Moment.LAST_WORD, Seat.LEFT),
+)
+
+
+# A full date (--full): the doors to the result, on the simulated clock.
+FULL_CAP = 1200.0  # simulated seconds; a full date ends in about eleven minutes
+TALK = frozenset({Segment.FREE_TALK, Segment.FROM_THE_ROOM})  # the daters talk on their own
+REPLY_WAIT = 4.0  # how long a dater waits for Nova to answer words to it, simulated
+BACK_AFTER = 10.0  # a dater paused for a breather comes back after this long
+RESUME_AFTER = 20.0  # the moderator resumes a show paused for conduct after this long
+SHOW_PAUSED, BREATHER = "show_pause", "breather"  # the holds a full date can be in
+DECIDE_AFTER = 6.0  # the daters decide this long after the window opens
+CARRY_ON = (
+    REACT,
+    "ask the other dater something about what they just said",
+    "tell a short story of your own that connects to what was just said",
+    "push back lightly on what was just said, in character",
+)
+QUICK = "answer Nova's quick-fire question in a few words, in character"
+LAST_WORD = "say your last word to the other dater, what you'd want them to know before deciding"
+SEGMENT_NAMES = {
+    Segment.DOORS: "The doors",
+    Segment.FIRST_QUESTION: "First questions",
+    Segment.FREE_TALK: "Free talk",
+    Segment.FROM_THE_ROOM: "From the room",
+    Segment.LIGHTNING_ROUND: "Lightning round",
+    Segment.LAST_WORD: "Last words",
+    Segment.TIME: "The decision window",
+    Segment.RESULT: "The result",
+    Segment.NEXT_UP: "Next up",
+}
+type Echo = Callable[[str], None]
 
 ACTOR_SYSTEM = """\
 You play one dater on Unseen, a live audio-only dating show, in a test of the show's AI \
@@ -173,6 +236,8 @@ class Run:
     gates: dict[str, bool] = field(default_factory=dict)
     indicators: dict[str, bool] = field(default_factory=dict)
     said: list[tuple[str, str]] = field(default_factory=list)
+    # Codes only, for a full date's report: why each fallback fell back, the running order.
+    notes: tuple[str, ...] = ()
 
     @property
     def valid(self) -> bool:
@@ -188,6 +253,7 @@ class Run:
             "metrics": self.metrics,
             "gates": self.gates,
             "indicators": self.indicators,
+            "notes": list(self.notes),
         }
 
 
@@ -196,7 +262,7 @@ class Driver:
 
     def __init__(
         self,
-        scenario: Scenario,
+        scenario: Scenario | FullDate,
         *,
         variant: str,
         seed: int,
@@ -208,8 +274,23 @@ class Driver:
         prep_budget: float,
         prep_parallel: int | None,
         distress_timeout: float,
+        echo: Echo | None = None,
+        steering: bool = True,
+        bridges: bool = False,
     ) -> None:
+        """echo: each line as it's said, with what Nova's line was made of (--live).
+        steering: today's Nova steps in when the talk goes wrong (decision 0013). bridges:
+        today's Nova adds its optional live bridges (NOVA_LIVE_BRIDGES, decision 0012)."""
         self.scenario, self.variant, self.seed = scenario, variant, seed
+        self.steering = variant == CANDIDATE and steering
+        self.bridges = variant == CANDIDATE and bridges
+        # Each place a bridge may go, as it was cued: the moment, whether one was tried, and
+        # Nova's share of the date so far then (a bridge needs under BRIDGE_SHARE).
+        self.bridge_spots: list[tuple[Moment, Seat | None, bool, float]] = []
+        self._cues_watched = 0
+        self.echo = echo
+        self._shown = {"lines": 0, "segments": 0, "cues": 0, "checks": 0}
+        self._asked_again: list[int] = []  # where in r.lines each unnamed request came
         self.rng = random.Random(f"{scenario.name}/{seed}")
         self.clock = FakeClock(0.0)
         self.said: list[tuple[str, str]] = []
@@ -237,12 +318,16 @@ class Driver:
             events=EventLog(logging.getLogger("nova.benchmark")),
             live_context=variant == CANDIDATE,
             conversational=variant == CANDIDATE,
+            steering=self.steering,
+            live_bridges=self.bridges,
             privacy=PrivacyPolicy.for_synthetic_data(),  # the benchmark's daters are made up
         )
         self.asked_nova = 0
         self.prep_s = 0.0
+        self.real_s = 0.0  # how long the run took on the wall clock, the model's time and all
         self._first_questions = 0
         self._turns = dict.fromkeys(Seat, 0)
+        self._last_speaker = Seat.RIGHT
 
     async def run(self, *, like: Driver | None = None) -> Run:
         """like: the other version's run of the same scenario and seed, whose set pieces
@@ -256,19 +341,65 @@ class Driver:
         for beat in self.scenario.beats:
             if beat.optional and self.rng.random() < 0.5:
                 continue
-            if beat.who is None:
-                await self.advance(self.clock.now + beat.quiet)  # Nova may fill it
-                continue
-            text = beat.line or await self.words(beat.who, beat.intent)
-            if beat.to_nova:
-                self.asked_nova += 1
-                if not text.lower().startswith(("nova", "hey nova")):
-                    text = f"Nova, {text[:1].lower()}{text[1:]}"
-            await self.dater(beat.who, text)
-            await self.advance(self.clock.now + self.rng.uniform(0.6, 1.6))
+            await self.play(beat)
+            if beat.who is not None:
+                await self.advance(self.clock.now + self.rng.uniform(0.6, 1.6))
         await self.advance(self.clock.now + 3.0)
         await self.r.heard()
         return measure(self, line_start, said_start)
+
+    async def play(self, beat: Beat, *, wait_reply: bool = False) -> None:
+        """One beat: quiet (Nova may fill it), or a dater's words. To Nova, they open with its
+        name unless the beat says not (named). wait_reply: words to Nova wait up to
+        REPLY_WAIT for its answer before anything else happens, as a person would."""
+        if beat.who is None:
+            self.show(f"  ({beat.quiet:.0f} s of quiet)")
+            await self.advance(self.clock.now + beat.quiet)
+            return
+        text = beat.line or await self.words(beat.who, beat.intent)
+        if beat.to_nova:
+            # Words that don't name Nova reach it only through the conversational floor
+            # (decision 0012), which the baseline doesn't keep: words to Nova only there.
+            self.asked_nova += beat.named or self.variant == CANDIDATE
+            if not beat.named:
+                self._asked_again.append(len(self.r.lines))
+            elif not text.lower().startswith(("nova", "hey nova")):
+                text = f"Nova, {text[:1].lower()}{text[1:]}"
+        replies = self._replies()
+        await self.dater(beat.who, text, then=beat.then, gap=beat.gap)
+        if beat.to_nova and wait_reply:
+            deadline = self.clock.now + REPLY_WAIT
+            while self._replies() == replies and self.clock.now < deadline:
+                await self.advance(self.clock.now + STEP)
+
+    def _replies(self) -> int:
+        return sum(line.moment is Moment.REPLY for line in self.r.lines)
+
+    def show(self, text: str) -> None:
+        if self.echo is not None:
+            self.echo(text)
+
+    def observe(self) -> None:
+        """For --live: the running order, Nova's lines with what each was made of, the
+        moderator's alerts and any safety check that wasn't a plain no, as they happen."""
+        if self.echo is None:
+            return
+        r, shown = self.r, self._shown
+        for segment, at in r.segments[shown["segments"] :]:
+            self.show(f"--- {SEGMENT_NAMES.get(segment, segment)} ({_clock(at)}) ---")
+        for line in r.lines[shown["lines"] :]:
+            if line.text:
+                self.show(f"  Nova: {line.text}   [{_made_of(line, bridges=self.bridges)}]")
+        for cue in r.cues[shown["cues"] :]:
+            if isinstance(cue, AlertModerator):
+                self.show(f"  [moderator alerted: {cue.alert}]")
+        for check in r.checks[shown["checks"] :]:
+            if check.verdict is not Verdict.NO or check.ms > 1500:
+                error = f", {check.error}" if check.error else ""
+                self.show(f"  [safety check: {check.verdict}, {check.ms} ms{error}]")
+        shown.update(
+            segments=len(r.segments), lines=len(r.lines), cues=len(r.cues), checks=len(r.checks)
+        )
 
     async def words(self, seat: Seat, intent: str) -> str:
         """What the actor says for this dater now, sampled its own seat's way."""
@@ -285,9 +416,18 @@ class Driver:
             seed=seed,
         )
 
-    async def dater(self, seat: Seat, text: str) -> None:
+    async def dater(self, seat: Seat, text: str, *, then: str | None = None, gap=0.0) -> None:
         """A dater says this, as LiveKit would hear it: the voice detector, the final
-        transcript, the voice detector again; then Nova acts on it."""
+        transcript, the voice detector again; then Nova acts on it. then: the rest of the
+        thought, after `gap` seconds of quiet mid-sentence, as a second stretch of speech."""
+        self._speak(seat, text)
+        if then is not None:
+            self.show(f"  ({gap:.1f} s pause, mid-thought)")
+            await self.advance(self.clock.now + gap)
+            self._speak(seat, then)
+        await self.advance(self.clock.now + 1.0)
+
+    def _speak(self, seat: Seat, text: str) -> None:
         r = self.r
         r.seat = seat
         r.speech_started(seat)
@@ -295,22 +435,210 @@ class Driver:
         r.transcript(text, seat)
         r.speech_ended(seat)
         self.said.append((self.names[seat], text))
-        await self.advance(self.clock.now + 1.0)
+        self.show(f"  {self.names[seat]}: {text}")
+        self._last_speaker = seat
 
     async def advance(self, until: float) -> None:
-        """Time passes: the show's beats, Nova's lines, and each first question answered by
-        the dater it asked (the first one asks the left seat, the second the right)."""
+        """Time passes: the show's beats, Nova's lines, and each turn Nova gives a dater
+        answered (answer_turns)."""
         while self.clock.now < until:
             self.clock.now = min(until, self.clock.now + STEP)
             self.r.tick()
+            self._watch_bridges()
             await self.r.speak_queued()
+            self._watch_bridges()
             await self.r.heard()
-            asked = sum(line.moment is Moment.FIRST_QUESTION for line in self.r.lines)
-            while self._first_questions < asked:
-                seat = Seat.LEFT if self._first_questions == 0 else Seat.RIGHT
-                self._first_questions += 1
+            self._watch_bridges()
+            self.observe()
+            await self.answer_turns()
+
+    def _watch_bridges(self) -> None:
+        """Each place a bridge may go, as it's cued (BRIDGE_SPOTS, the first of each):
+        whether today's Nova tried one, and its share of the date so far as soon as the cue
+        is seen here, close to the figure the rehearsal weighed as it queued the cue (a line
+        said in between adds to it). Codes and numbers only."""
+        r = self.r
+        while self._cues_watched < len(r.cues):
+            cue = r.cues[self._cues_watched]
+            self._cues_watched += 1
+            if not isinstance(cue, Say) or (cue.moment, cue.about) not in BRIDGE_SPOTS:
+                continue
+            if any(moment is cue.moment for moment, *_ in self.bridge_spots):
+                continue
+            share = r.nova_seconds / r.date_seconds if r.date_seconds > 0 else 0.0
+            self.bridge_spots.append((cue.moment, cue.about, cue.bridge, share))
+
+    async def answer_turns(self) -> None:
+        """Each first question answered by the dater it asked (the first one asks the left
+        seat, the second the right), plainly or as the scenario's first_answers say."""
+        asked = sum(line.moment is Moment.FIRST_QUESTION for line in self.r.lines)
+        while self._first_questions < asked:
+            seat = Seat.LEFT if self._first_questions == 0 else Seat.RIGHT
+            self._first_questions += 1
+            beats = self.scenario.first_answers.get(seat)
+            if not beats:
                 text = await self.words(seat, "answer the question Nova just asked you")
                 await self.dater(seat, text)
+                continue
+            for beat in beats:
+                await self.play(beat, wait_reply=True)
+
+
+class FullDriver(Driver):
+    """A whole date (--full): the doors to the result. The daters answer every turn Nova
+    gives them (a first question, the room's question, a lightning question, a last word, a
+    silence prompt), play the date's free talk in order and then carry on their own way,
+    come back from a breather, and decide in the window."""
+
+    def __init__(self, date: FullDate, **options) -> None:
+        super().__init__(date, **options)
+        self.date = date
+        self.owed: deque[tuple[Beat, ...]] = deque()  # turns Nova gave, not answered yet
+        self.talk = deque(date.talk)
+        self._turns_seen = 0  # Nova's lines looked at for a turn to answer
+        self._last_words = 0
+        # The hold the date is in, whose, and since when: a dater's breather (they're back
+        # after BACK_AFTER) or the show paused for conduct, which a person ends on the real
+        # show (decision 0006): here the moderator resumes it after RESUME_AFTER. The daters
+        # stay quiet meanwhile. holds: each one as it went, kind and times only.
+        self._held: tuple[str, Seat, float] | None = None
+        self.holds: list[tuple[str, float, float]] = []
+        self._window_at: float | None = None
+        self._decided = False
+
+    @property
+    def segment(self) -> Segment:
+        return self.r.segments[-1][0] if self.r.segments else Segment.DOORS
+
+    async def run(self, *, like: Driver | None = None) -> Run:
+        started = time.monotonic()
+        await self.r.prepare(like=like.r if like is not None else None)
+        self.prep_s = like.prep_s if like is not None else time.monotonic() - started
+        for question in self.date.questions:  # approved by the moderator before the date
+            self.r.command(f"ask {question}")
+        if self.date.unlock:
+            self.r.command("unlock")
+        self.r.start()
+        while not self.r.finished and self.clock.now < FULL_CAP:
+            await self.step()
+        await self.r.heard()
+        self.observe()
+        self.real_s = time.monotonic() - started
+        return measure(self, 0, 0)
+
+    async def step(self) -> None:
+        """What happens next: a breather ends, a turn Nova gave is answered, the daters
+        decide, or they talk on; otherwise time passes."""
+        now = self.clock.now
+        if self._held is not None:
+            kind, seat, since = self._held
+            if now - since >= (RESUME_AFTER if kind == SHOW_PAUSED else BACK_AFTER):
+                self._held = None
+                self.holds.append((kind, since, now))
+                if kind == SHOW_PAUSED:
+                    self.show("  [the moderator resumes the date]")
+                    self.r.command("resume")
+                else:
+                    self.show(f"  [{self.names[seat]} is back]")
+                    self.r.command("back", seat)
+            await self.advance(now + STEP)
+            return
+        if self.owed:
+            for beat in self.owed.popleft():
+                await self.play(beat, wait_reply=True)
+            return
+        if self.segment is Segment.TIME and not self._decided:
+            self._window_at = now if self._window_at is None else self._window_at
+            if now - self._window_at >= DECIDE_AFTER:
+                self._decided = True
+                for seat in Seat:  # the choice itself is never shown
+                    self.r.command(self.date.choices[seat], seat)
+                    self.show(f"  [{self.names[seat]} has decided, privately]")
+            await self.advance(now + STEP)
+            return
+        if self.segment in TALK:
+            beat = self.talk.popleft() if self.talk else self._carry_on()
+            if beat.optional and self.rng.random() < 0.5:
+                return
+            await self.play(beat, wait_reply=True)
+            if beat.who is not None:
+                await self.advance(self.clock.now + self.rng.uniform(0.6, 1.6))
+            return
+        await self.advance(now + STEP)
+
+    def _carry_on(self) -> Beat:
+        """Once the date's own free talk has run out: the other dater, their own way."""
+        return Beat(self._last_speaker.other, self.rng.choice(CARRY_ON))
+
+    async def answer_turns(self) -> None:
+        """Every line Nova gives a dater to answer becomes a turn they owe; a breather
+        starts the wait before they come back. Answered in step(), one turn at a time."""
+        lines = self.r.lines
+        while self._turns_seen < len(lines):
+            line = lines[self._turns_seen]
+            self._turns_seen += 1
+            if line.moment is Moment.SHOW_PAUSE:
+                # A turn Nova gave before the pause (a last word) is answered once it's over.
+                self._held = (SHOW_PAUSED, self._last_speaker, self.clock.now)
+            elif line.moment is Moment.NEED_A_MOMENT or line.text == script.DISTRESS_PAUSE:
+                self._held = (BREATHER, self._last_speaker, self.clock.now)
+            if line.text and (beats := self._answers_to(line)):
+                self.owed.append(beats)
+
+    def _answers_to(self, line: Line) -> tuple[Beat, ...]:
+        moment = line.moment
+        if moment is Moment.FIRST_QUESTION:
+            seat = Seat.LEFT if self._first_questions == 0 else Seat.RIGHT
+            self._first_questions += 1
+            return self.date.first_answers.get(seat) or (Beat(seat, ANSWER),)
+        if moment is Moment.FROM_THE_ROOM:
+            first = self._named_first(line.text) or Seat.LEFT
+            return (
+                Beat(first, "answer the room's question Nova just read out, your own way"),
+                Beat(first.other, "answer the same question yourself, reacting to theirs"),
+            )
+        if moment is Moment.LIGHTNING_QUESTION:
+            return Beat(Seat.LEFT, QUICK), Beat(Seat.RIGHT, QUICK)
+        if moment is Moment.LAST_WORD:
+            seat = Seat.LEFT if self._last_words == 0 else Seat.RIGHT
+            self._last_words += 1
+            return (Beat(seat, LAST_WORD),)
+        if moment is Moment.SILENCE:
+            seat = self._named_first(line.text) or self._last_speaker.other
+            return (Beat(seat, "answer what Nova just asked"),)
+        if moment in (Moment.STEER, Moment.ONE_AT_A_TIME):
+            seat = self._named_first(line.text) or self._last_speaker.other
+            return (Beat(seat, "answer what Nova just asked, or take the floor it gave you"),)
+        return ()
+
+    def _named_first(self, text: str) -> Seat | None:
+        """The dater named first in a line, if either is."""
+        found = [
+            (match.start(), seat)
+            for seat in Seat
+            if (match := re.search(rf"\b{re.escape(self.names[seat])}\b", text))
+        ]
+        return min(found)[1] if found else None
+
+
+def _clock(seconds: float) -> str:
+    return f"{int(seconds) // 60}:{int(seconds) % 60:02d}"
+
+
+def _made_of(line: Line, *, bridges: bool = False) -> str:
+    """What a line of Nova's was made of, in codes: the moment, where its words came from,
+    the model's time for a live line, and why a fallback fell back."""
+    parts = [str(line.moment), str(line.source)]
+    if line.source is Source.MODEL:
+        parts.append(f"{line.ms} ms")
+    if line.prefixed:
+        parts.append("BRIDGED")
+    elif bridges and (dropped := _bridge_dropped(line)):
+        parts.append(f"bridge dropped because {dropped}")
+    if line.source is Source.FALLBACK:
+        why = [str(v) for v in line.violations] or ([str(line.error)] if line.error else [])
+        parts.append("because " + ", ".join(why) if why else "fallback")
+    return " | ".join(parts)
 
 
 def _words(text: str) -> list[str]:
@@ -333,6 +661,27 @@ def _repeats(texts: Sequence[str]) -> tuple[int, int]:
         near += any(similarity(text, other) >= NEAR_DUPLICATE for other in earlier)
         same += any(opening(other) == opening(text) for other in earlier)
     return near, same
+
+
+# What Nova says while the daters can't talk: the doors, a hold's cover, the decision window,
+# the result and after. Left out of Nova's share of the conversation (nova_share_talk): there
+# only Nova speaks, so a long hold made one date's whole-show share 41% (2026-11-02).
+OFF_THE_TALK = frozenset(
+    {
+        Moment.DOORS_INTRO,
+        Moment.TIME,
+        Moment.ROOM_TALK,
+        Moment.RESULT,
+        Moment.OUTRO,
+        Moment.INVITATION,
+        Moment.NEXT_UP,
+        Moment.NEED_A_MOMENT,
+        Moment.BEAR_WITH_US,
+        Moment.DATER_LEFT,
+        Moment.MODERATOR_END,
+        Moment.SHOW_PAUSE,
+    }
+)
 
 
 def measure(d: Driver, line_start: int, said_start: int) -> Run:
@@ -398,9 +747,20 @@ def measure(d: Driver, line_start: int, said_start: int) -> Run:
 
     words_nova = sum(len(_words(text)) for who, text in said if who == "Nova")
     words_all = sum(len(_words(text)) for _, text in said) or 1
+    # The same, while the daters can talk: each of Nova's entries is r.lines in order.
+    talk_nova = talk_all = 0
+    nova_lines = sum(who == "Nova" for who, _ in d.said[:said_start])
+    for who, text in said:
+        if who == "Nova":
+            k, nova_lines = nova_lines, nova_lines + 1
+            if k < len(lines) and lines[k].moment in OFF_THE_TALK:
+                continue
+            talk_nova += len(_words(text))
+        talk_all += len(_words(text))
     live_ms = sorted(line.ms for line in live if line.source is Source.MODEL)
     near, same = _repeats([line.text for line in written if line.source is not Source.FALLBACK])
-    replies = sum(line.moment is Moment.REPLY for line in later)
+    # Every reply, from the doors on: a first answer may speak to Nova too (first_answers).
+    replies = sum(line.moment is Moment.REPLY for line in lines)
     says = [cue for cue in r.cues if isinstance(cue, Say)]
     alerts = [cue.alert for cue in r.cues if isinstance(cue, AlertModerator)]
     paused = any(cue.text == script.DISTRESS_PAUSE for cue in says)
@@ -419,6 +779,7 @@ def measure(d: Driver, line_start: int, said_start: int) -> Run:
         "near_duplicates": near / max(1, len(written)),
         "same_opening": same / max(1, len(written)),
         "nova_share": words_nova / words_all,
+        "nova_share_talk": talk_nova / max(1, talk_all),
         "interventions": float(unasked),
         "talk_overs": float(r.talked_over),
         "unanswered": float(max(0, d.asked_nova - replies)),
@@ -453,6 +814,12 @@ def measure(d: Driver, line_start: int, said_start: int) -> Run:
         gates["stays_out"] = unasked <= expect.max_interventions
     if expect.never:
         gates["never_brings_back"] = not any(_mentions(line.text, expect.never) for line in live)
+    # Conversational only: the baseline's runner keeps no floor, so it never knows who it
+    # just asked (decision 0012).
+    if expect.asked_again and d.variant == CANDIDATE:
+        gates["answers_asked_again"] = bool(d._asked_again) and all(
+            any(line.moment is Moment.REPLY for line in lines[at:]) for at in d._asked_again
+        )
     indicators: dict[str, bool] = {}
     if expect.callback:
         indicators["calls_back"] = callbacks > 0
@@ -470,7 +837,175 @@ def measure(d: Driver, line_start: int, said_start: int) -> Run:
     if expect.openings_vary:
         replied = [line.text for line in live if line.moment is Moment.REPLY]
         indicators["reply_openings_vary"] = len(replied) > 1 and _repeats(replied)[1] == 0
-    return Run(scenario.name, d.variant, d.seed, tuple(invalid), metrics, gates, indicators, d.said)
+    if expect.steer is not None and d.steering:
+        # The step-in the scenario is written for came, or none did where Nova stays out.
+        kinds = {
+            cue.steer or "one_at_a_time"
+            for cue in says
+            if cue.moment in (Moment.STEER, Moment.ONE_AT_A_TIME)
+        }
+        indicators["steps_in_as_hoped"] = (
+            bool(kinds & set(expect.steer)) if expect.steer else not kinds
+        )
+    notes: tuple[str, ...] = ()
+    if isinstance(d, FullDriver):
+        metrics.update(full_date_metrics(d))
+        notes = full_date_notes(d)
+    return Run(
+        scenario.name, d.variant, d.seed, tuple(invalid), metrics, gates, indicators, d.said, notes
+    )
+
+
+def _percentile(values: Sequence[float], share: float) -> float:
+    ordered = sorted(values)
+    return float(ordered[min(len(ordered) - 1, math.ceil(share * len(ordered)) - 1)])
+
+
+def full_date_metrics(d: FullDriver) -> dict[str, float]:
+    """How the model did over a whole date, on the wall clock, and how the date went."""
+    r = d.r
+    checks = [check.ms for check in r.checks]
+    says = [cue for cue in r.cues if isinstance(cue, Say)]
+    return {
+        "real_s": round(d.real_s, 1),
+        "date_s": round(r.date_seconds, 1),
+        "lines": float(len(r.lines)),
+        "prepared_lines": float(sum(line.source is Source.PREPARED for line in r.lines)),
+        "model_lines": float(sum(line.source is Source.MODEL for line in r.lines)),
+        "fixed_lines": float(sum(line.source is Source.FIXED for line in r.lines)),
+        "fallback_lines": float(sum(line.source is Source.FALLBACK for line in r.lines)),
+        "checks": float(len(checks)),
+        "check_ms_median": statistics.median(checks) if checks else 0.0,
+        "check_ms_p95": _percentile(checks, 0.95) if checks else 0.0,
+        "check_ms_worst": float(max(checks, default=0)),
+        "unchecked": float(sum(check.verdict is Verdict.UNCHECKED for check in r.checks)),
+        "alerts": float(sum(isinstance(cue, AlertModerator) for cue in r.cues)),
+        "kind_lines": float(sum(cue.moment is Moment.KEEP_IT_KIND for cue in says)),
+        "show_pauses": float(sum(cue.moment is Moment.SHOW_PAUSE for cue in says)),
+        "breathers": float(sum(kind == BREATHER for kind, _, _ in d.holds)),
+        # Nova stepping in although nobody went quiet (decision 0013): cued, said or not.
+        "steers": float(sum(cue.moment in (Moment.STEER, Moment.ONE_AT_A_TIME) for cue in says)),
+        # Optional live bridges (decision 0012), today's Nova with --bridges only.
+        "bridges_on": float(d.bridges),
+        "bridges_tried": float(sum(tried for _, _, tried, _ in d.bridge_spots)),
+        "bridges_said": float(sum(dl.prefix is Prefix.SAID for dl in r.deliveries)),
+        "reached_result": float(any(cue.moment is Moment.RESULT for cue in says)),
+        "mutual": float(any(cue.text == script.RESULT_MUTUAL for cue in says)),
+    }
+
+
+def full_date_notes(d: FullDriver) -> tuple[str, ...]:
+    """Codes only: the running order as it went, and why each fallback fell back."""
+    order = " ".join(f"{segment}@{_clock(at)}" for segment, at in d.r.segments)
+    fallbacks = [_made_of(line) for line in d.r.lines if line.source is Source.FALLBACK]
+    holds = [f"hold: {kind} {_clock(since)}-{_clock(until)}" for kind, since, until in d.holds]
+    stepped = [
+        f"stepped in: {cue.steer or 'one_at_a_time'}"
+        for cue in d.r.cues
+        if isinstance(cue, Say) and cue.moment in (Moment.STEER, Moment.ONE_AT_A_TIME)
+    ]
+    bridges = bridge_notes(d) if d.bridges else []
+    return (
+        f"order: {order}",
+        *holds,
+        *stepped,
+        *bridges,
+        *(f"fallback: {why}" for why in fallbacks),
+    )
+
+
+def bridge_notes(d: Driver) -> list[str]:
+    """For each place a bridge may go: not tried, and why if the share rule held it back;
+    or what became of it, and why one was dropped. Codes and numbers only."""
+    notes = []
+    for moment, about, tried, share in d.bridge_spots:
+        where = f"{moment}" + (f" ({about})" if about is not None else "")
+        if not tried:
+            why = (
+                f"Nova's share of the date so far {share:.0%}, a bridge needs under "
+                f"{BRIDGE_SHARE:.0%}"
+                if share >= BRIDGE_SHARE
+                else f"Nova's share {share:.0%}; held back by another of the rehearsal's rules: "
+                "30 s apart, three at most, nobody speaking, no hold, a kept turn to build on"
+            )
+            notes.append(f"bridge at {where}: not tried ({why})")
+            continue
+        fate = next(
+            (
+                dl.prefix
+                for dl in d.r.deliveries
+                if dl.moment is moment and dl.about is about and dl.prefix is not None
+            ),
+            None,
+        )
+        line = _spot_line(d, moment)
+        why = ""
+        if fate is Prefix.REJECTED and line is not None:
+            # The rehearsal files a bridge the line writer never asked for as rejected too
+            # (LineWriter._bridge): no kept turn just said to build on, or no room in the line.
+            why = (
+                "the question itself was an approved fallback, so none was asked for"
+                if line.source is Source.FALLBACK
+                else _bridge_dropped(line)
+                or "none was asked for: nothing just said to build on, or no room in the line"
+            )
+        notes.append(f"bridge at {where}: {fate or 'never said'}" + (f" ({why})" if why else ""))
+    return notes
+
+
+def _spot_line(d: Driver, moment: Moment) -> Line | None:
+    """The line said at a bridge's place: the second first question, the first room question,
+    the first last word (BRIDGE_SPOTS)."""
+    said = [line for line in d.r.lines if line.moment is moment]
+    k = 1 if moment is Moment.FIRST_QUESTION else 0
+    return said[k] if len(said) > k else None
+
+
+def _bridge_dropped(line: Line) -> str:
+    """Why a bridge was dropped from this line, if one was: a line at a bridged moment that
+    carries a reason but no bridge (a line that settled carries none)."""
+    if line.prefixed or line.moment not in BRIDGED or line.source is Source.FALLBACK:
+        return ""
+    why = [str(v) for v in line.violations] or ([str(line.error)] if line.error else [])
+    return ", ".join(why)
+
+
+def render_full_date(run: Run) -> str:
+    """One full date's report: how it went, and how the model did on the wall clock."""
+    m = run.metrics
+    failed = [name for name, ok in run.gates.items() if not ok]
+    lines = [
+        f"=== {run.scenario} ({run.variant}, seed {run.seed}): "
+        f"{_clock(m['date_s'])} of show in {m['real_s']:.0f} s of real time"
+        + ("" if run.valid else f" (INVALID: {'; '.join(run.invalid)})"),
+        f"  Result: {'mutual' if m['mutual'] else 'not mutual'}"
+        if m["reached_result"]
+        else "  Result: never reached",
+        f"  Nova's lines: {m['lines']:.0f} (written before the date {m['prepared_lines']:.0f}, "
+        f"live {m['model_lines']:.0f}, approved fixed {m['fixed_lines']:.0f}, "
+        f"fallbacks {m['fallback_lines']:.0f}); Nova's share of the words {m['nova_share']:.0%}, "
+        f"of the conversation {m['nova_share_talk']:.0%}",
+        f"  Model: prep {m['prep_s']:.1f} s; live lines median {m['live_ms_median']:.0f} ms, "
+        f"worst {m['live_ms_worst']:.0f} ms",
+        f"  Safety checks: {m['checks']:.0f}, median {m['check_ms_median']:.0f} ms, p95 "
+        f"{m['check_ms_p95']:.0f} ms, worst {m['check_ms_worst']:.0f} ms, unchecked "
+        f"{m['unchecked']:.0f}; moderator alerts {m['alerts']:.0f}",
+        f"  Conduct: 'Let's keep it kind.' {m['kind_lines']:.0f}, show paused "
+        f"{m['show_pauses']:.0f}, breathers {m['breathers']:.0f}; Nova stepped in "
+        f"{m.get('steers', 0):.0f}",
+        "  Gates: " + ("all passed" if not failed else "FAILED " + ", ".join(failed)),
+    ]
+    if m.get("bridges_on"):
+        lines.insert(
+            -1,
+            f"  Bridges: {m['bridges_tried']:.0f} tried of {len(BRIDGE_SPOTS)} places, "
+            f"{m['bridges_said']:.0f} said",
+        )
+    hoped = run.indicators.get("steps_in_as_hoped")
+    if hoped is not None:
+        lines.insert(-1, f"  Stepping in as the date was written for: {'yes' if hoped else 'no'}")
+    lines += [f"  {note}" for note in run.notes]
+    return "\n".join(lines)
 
 
 # --- Many runs, and what they add up to ----------------------------------------------------
@@ -481,6 +1016,7 @@ REPORTED = (
     ("live_lines", "Nova's live lines a scenario", "{:.1f}"),
     ("interventions", "interventions nobody asked for", "{:.1f}"),
     ("nova_share", "Nova's share of the words", "{:.0%}"),
+    ("nova_share_talk", "Nova's share of the conversation", "{:.0%}"),
     ("fallback_rate", "fallbacks", "{:.0%}"),
     ("guardrail_rate", "guardrail failures", "{:.0%}"),
     ("ungrounded", "unsupported common ground (lines)", "{:.1f}"),
@@ -620,8 +1156,14 @@ def write_packet(runs: Sequence[Run], out: Path) -> None:
     ratings.main(["packet", "--dialogues", str(source), "--out", str(out)])
 
 
+VARIANT_NAMES = {
+    CANDIDATE: "today's Nova: this date's context and the conversational floor",
+    BASELINE: "the baseline: no context of this date, no conversational floor",
+}
+
+
 async def run_benchmark(
-    scenarios: Sequence[Scenario],
+    scenarios: Sequence[Scenario | FullDate],
     *,
     variants: Sequence[str],
     seeds: int,
@@ -633,18 +1175,36 @@ async def run_benchmark(
     prep_budget: float,
     prep_parallel: int | None,
     distress_timeout: float,
+    echo: Echo | None = None,
+    steering: bool = True,
+    bridges: bool = False,
 ) -> list[Run]:
     """Every scenario, variant and seed, one after another, never two at once, so no run
     queues behind another on the model. The second version of a scenario and seed starts
-    from the first one's set pieces."""
+    from the first one's set pieces. A FullDate runs as a whole date (FullDriver). echo:
+    each run's lines as they're said (--live). bridges: today's Nova adds its optional live
+    bridges (decision 0012)."""
     runs = []
+    total, done = len(scenarios) * seeds * len(variants), 0
     for scenario in scenarios:
         for seed in range(1, seeds + 1):
             first: Driver | None = None
             for variant in variants:
+                done += 1
+                if echo is not None:
+                    left, right = scenario.pair.left, scenario.pair.right
+                    echo(
+                        f"\n=== {done}/{total}: {scenario.name}, seed {seed}, "
+                        f"{VARIANT_NAMES.get(variant, variant)}"
+                        + (", with bridges" if bridges and variant == CANDIDATE else "")
+                        + f"\n    {scenario.about}\n"
+                        f"    On the left {left.first_name}, {left.age}; on the right "
+                        f"{right.first_name}, {right.age}. Nova is preparing its lines..."
+                    )
                 actor = Actor(actor_model)
-                driver = Driver(
-                    scenario,
+                make = FullDriver if isinstance(scenario, FullDate) else Driver
+                driver = make(
+                    scenario,  # type: ignore[arg-type]
                     variant=variant,
                     seed=seed,
                     model=model,
@@ -655,30 +1215,58 @@ async def run_benchmark(
                     prep_budget=prep_budget,
                     prep_parallel=prep_parallel,
                     distress_timeout=distress_timeout,
+                    echo=echo,
+                    steering=steering,
+                    bridges=bridges,
                 )
-                runs.append(await driver.run(like=first))
+                run = await driver.run(like=first)
+                runs.append(run)
                 first = first or driver
+                if echo is not None and isinstance(scenario, FullDate):
+                    echo(render_full_date(run))
     return runs
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--set", choices=tuple(SETS), default="development")
-    parser.add_argument("--seeds", type=int, default=3)
+    parser.add_argument("--seeds", type=int, help="runs of each scenario (3; --full: 1)")
     parser.add_argument("--variant", choices=(*VARIANTS, "both"), default="both")
     parser.add_argument("--scenario", action="append", help="run only these (repeatable)")
     parser.add_argument("--out", type=Path, help="write the results (numbers and ids only)")
     parser.add_argument("--transcripts", action="store_true", help="print each run's dialogue")
     parser.add_argument("--packet", type=Path, help="write a blind packet to rate, here")
     parser.add_argument("--compare", nargs=2, type=Path, metavar=("BEFORE", "AFTER"))
+    parser.add_argument("--full", action="store_true", help="whole dates, doors to result")
+    parser.add_argument("--live", action="store_true", help="print each line as it's said")
+    parser.add_argument(
+        "--no-steering", action="store_true", help="today's Nova never steps in (decision 0013)"
+    )
+    parser.add_argument(
+        "--bridges",
+        action="store_true",
+        help="today's Nova adds its optional live bridges (NOVA_LIVE_BRIDGES, decision 0012)",
+    )
+    parser.add_argument(
+        "--dates",
+        choices=tuple(FULL_SETS),
+        help="with --full: the original hard-to-host dates (the default), the Gen Z dates, or all",
+    )
     args = parser.parse_args(argv)
+    if args.dates is not None and not args.full:
+        parser.error("--dates chooses full dates: use it with --full")
+    dates = args.dates or "original"
 
     if args.compare:
         before, after = (json.loads(path.read_text(encoding="utf-8")) for path in args.compare)
         print(render_compare(before, after))
         return 0
-    chosen = [s for s in SETS[args.set] if not args.scenario or s.name in args.scenario]
-    variants = VARIANTS if args.variant == "both" else (args.variant,)
+    pool: Sequence[Scenario | FullDate] = FULL_SETS[dates] if args.full else SETS[args.set]
+    chosen = [s for s in pool if not args.scenario or s.name in args.scenario]
+    both = (CANDIDATE, BASELINE) if args.full else VARIANTS  # full dates: today's Nova first
+    variants = both if args.variant == "both" else (args.variant,)
+    seeds = args.seeds or (1 if args.full else 3)
+    echo = (lambda text: print(text, flush=True)) if args.live else None
     settings = load_settings()
     model, classifier = build_model(settings), build_classifier(settings)
 
@@ -688,7 +1276,7 @@ def main(argv: list[str] | None = None) -> int:
         return await run_benchmark(
             chosen,
             variants=variants,
-            seeds=args.seeds,
+            seeds=seeds,
             model=model,
             classifier=classifier,
             actor_model=model,
@@ -697,17 +1285,26 @@ def main(argv: list[str] | None = None) -> int:
             prep_budget=settings.prep_budget,
             prep_parallel=settings.prep_parallel,
             distress_timeout=settings.distress_timeout,
+            echo=echo,
+            steering=not args.no_steering,
+            bridges=args.bridges,
         )
 
+    if echo is not None:
+        echo(f"Warming up {model.name}...")
     runs = asyncio.run(benchmark())
     results = {
         "model": model.name,
-        "set": args.set,
-        "seeds": args.seeds,
+        "set": (f"full dates: {dates}" if dates != "original" else "full dates")
+        if args.full
+        else args.set,
+        "seeds": seeds,
         "scenarios": [s.name for s in chosen],
         "runs": [run.numbers() for run in runs],
     }
-    if args.transcripts:
+    if args.full and echo is None:
+        print("\n\n".join(render_full_date(run) for run in runs) + "\n")
+    if args.transcripts and not args.live:
         for run in runs:
             print(f"=== {run.scenario} / {run.variant} / seed {run.seed}")
             print("\n".join(f"  {who}: {text}" for who, text in run.said))

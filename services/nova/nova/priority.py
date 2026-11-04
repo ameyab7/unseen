@@ -17,6 +17,8 @@ the product owner's later choice.
 
 import asyncio
 import contextlib
+import heapq
+import itertools
 from collections.abc import AsyncIterator
 
 
@@ -48,3 +50,49 @@ class SafetyFirst:
     async def line(self) -> None:
         """Before a line's request: waits while any check is waiting or running."""
         await self._clear.wait()
+
+
+class Slots:
+    """At most `size` requests in flight at once (NOVA_PREP_PARALLEL), and the next free
+    slot goes to the waiting request with the lowest priority number, then to the earliest.
+    Set pieces take their place in the running order as their priority, so with one slot
+    the opening and the first questions are written, candidates and meaning check, before
+    anything needed later. In arrival order, the second first question queued behind the
+    first request of every later moment, and the prep budget often ran out on it (rehearsal,
+    2026-10-31; decision 0011)."""
+
+    def __init__(self, size: int) -> None:
+        if size < 1:
+            raise ValueError("at least one slot")
+        self._free = size
+        self._waiting: list[tuple[int, int, asyncio.Future[None]]] = []
+        self._arrivals = itertools.count()
+
+    @contextlib.asynccontextmanager
+    async def slot(self, priority: int = 0) -> AsyncIterator[None]:
+        await self._acquire(priority)
+        try:
+            yield
+        finally:
+            self._release()
+
+    async def _acquire(self, priority: int) -> None:
+        if self._free and not self._waiting:
+            self._free -= 1
+            return
+        granted = asyncio.get_running_loop().create_future()
+        heapq.heappush(self._waiting, (priority, next(self._arrivals), granted))
+        try:
+            await granted
+        except asyncio.CancelledError:
+            if granted.done() and not granted.cancelled():
+                self._release()  # handed the slot just as it was cancelled: pass it on
+            raise
+
+    def _release(self) -> None:
+        while self._waiting:
+            *_, granted = heapq.heappop(self._waiting)
+            if not granted.done():  # one cancelled while it waited is skipped
+                granted.set_result(None)
+                return
+        self._free += 1

@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 from nova.cards import Seat
 from nova.conduct import personal_detail
+from nova.steering import passes
 from nova.text import WORD, plain
 from nova.tonight import similarity
 
@@ -127,6 +128,11 @@ class DateContext:
         if text and not self.closed:
             self._nova.append(_cut(text))
 
+    def nova_last(self) -> str | None:
+        """Nova's latest line the room heard, if any: what a dater may be answering, for the
+        second conduct check (nova/conduct_judge.py)."""
+        return self._nova[-1] if self._nova else None
+
     def spoken(self) -> list[str]:
         """Every dater turn kept: the guardrails block any proper noun from them."""
         return [turn.text for turn in self._turns if turn.text]
@@ -173,6 +179,7 @@ class DateContext:
         def shown(text: str) -> bool:
             return absent is None or absent.lower() not in {w.lower() for w in WORD.findall(text)}
 
+        declined = self._declined_turns()
         turns = [
             turn
             for turn in self._turns
@@ -180,7 +187,7 @@ class DateContext:
             and turn.seat is not away
             and shown(turn.text)
             and turn.text != _cut(answered)
-            and turn not in self._declined()
+            and turn not in declined
         ]
         recent = turns[-SHOWN_TURNS:]
         questions = [turn for turn in self.unanswered(away=away) if turn not in recent]
@@ -210,17 +217,24 @@ class DateContext:
             summary["you_said"] = nova
         return summary
 
-    def _declined(self) -> list[Turn]:
+    def declined(self) -> list[str]:
+        """The questions a dater declined, still kept: never shown to a prompt, but the
+        line writer rejects a line of Nova's own that takes one up, even from a card
+        (nova/lines.py). For the check only."""
+        return [turn.text for turn in self._declined_turns()]
+
+    def _declined_turns(self) -> list[Turn]:
         """Questions the other dater answered only with a turn the checks held back (a calm
-        boundary, say): never shown, so Nova can't steer back to what was declined. Before,
-        one run wrote "let's move away from the office talk" after a question about work."""
+        boundary, say), or with a pass ("I'd rather not say"): never shown, so Nova can't
+        steer back to what was declined. Before, one run wrote "let's move away from the
+        office talk" after a question about work."""
         turns = list(self._turns)
         declined = []
         for k, turn in enumerate(turns):
             if not turn.text.endswith("?") or turn.to_nova:
                 continue
             reply = next((later for later in turns[k + 1 :] if later.seat is turn.seat.other), None)
-            if reply is not None and reply.held:
+            if reply is not None and (reply.held or passes(reply.text)):
                 declined.append(turn)
         return declined
 

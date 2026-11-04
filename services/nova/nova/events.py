@@ -17,6 +17,9 @@ class Event(StrEnum):
     SPOKEN = "spoken"  # one line played: the delay to Nova's first word (rehearsals)
     VOICE_ERROR = "voice_error"  # Nova's voice failed on a line, which never played
     DISTRESS_CHECK = "distress_check"  # the meaning layer's verdict and time, never the words
+    # The second conduct check on a remark labelled unkind (nova/conduct_judge.py): its
+    # outcome, answers and time, never the words.
+    CONDUCT_JUDGE = "conduct_judge"
     ALERT = "alert"  # an alert for the moderator console
     QUESTION_SKIPPED = "question_skipped"  # an approved question the screen caught: its code
     COMMAND = "command"  # a rehearsal chat command (the command only, never its text)

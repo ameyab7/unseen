@@ -34,6 +34,7 @@ class Moment(StrEnum):
     SILENCE = "silence"
     FROM_THE_ROOM = "from_the_room"
     LIGHTNING_UNLOCKED = "lightning_unlocked"
+    LIGHTNING_INTRO = "lightning_intro"  # the round's approved intro, as it starts
     LIGHTNING_QUESTION = "lightning_question"
     LAST_WORD = "last_word"
     TIME = "time"
@@ -50,7 +51,11 @@ class Moment(StrEnum):
     MODERATOR_END = "moderator_end"
     KEEP_STREETS_OFF_AIR = "keep_streets_off_air"  # a street or address slipped
     KEEP_IT_KIND = "keep_it_kind"  # a dater's first unkind remark
-    SHOW_PAUSE = "show_pause"  # a dater's second unkind remark: the date pauses
+    SHOW_PAUSE = "show_pause"  # the moderator paused the whole date
+    # Nova steps in although nobody went quiet (decision 0013): a model line, and the brand
+    # book's line for daters talking over each other.
+    STEER = "steer"
+    ONE_AT_A_TIME = "one_at_a_time"
 
 
 class Sound(StrEnum):
@@ -140,6 +145,10 @@ class Say:
     away: Seat | None = None
     bridge: bool = False  # optional live prefix; the prepared question remains intact
     return_floor: bool = False  # a reply preserves this dater's pending question
+    # A reply to a dater who asked Nova to leave them to it ("Nova, let us talk"): a few
+    # words, no question, nothing new; or nothing at all (nova/steering.py).
+    step_back: bool = False
+    steer: str | None = None  # a step-in's kind (nova/steering.py, Steer), as a code
     due: float | None = field(default=None, compare=False, repr=False)
 
 
